@@ -1,0 +1,7 @@
+[workspace]
+members = ["examples", "rustkvm"]
+exclude = ["rust"]
+resolver = "2"
+
+[profile.dev]
+opt-level = 0
