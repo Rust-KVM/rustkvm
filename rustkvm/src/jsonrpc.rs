@@ -1133,9 +1133,13 @@ pub mod handlers {
         let percentage = (params.factor * 100.0) as i32;
         STREAM_QUALITY_FACTOR.store(percentage, Ordering::Relaxed);
 
-        if let Err(e) = crate::video::update_video_quality(params.factor as f32) {
-            warn!("Failed to update video quality: {}", e);
-        }
+        // Spawn async task to update video quality
+        let factor = params.factor as f32;
+        tokio::spawn(async move {
+            if let Err(e) = crate::video::update_video_quality(factor).await {
+                warn!("Failed to update video quality: {}", e);
+            }
+        });
 
         info!("Stream quality factor set to: {}", params.factor);
         Ok(Value::Null)

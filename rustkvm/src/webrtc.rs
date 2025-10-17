@@ -6,7 +6,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use webrtc::api::APIBuilder;
 use webrtc::api::interceptor_registry::register_default_interceptors;
-use webrtc::api::media_engine::{MIME_TYPE_H264, MediaEngine};
+use webrtc::api::media_engine::{MIME_TYPE_H264, MIME_TYPE_OPUS, MediaEngine};
 use webrtc::api::setting_engine::SettingEngine;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
@@ -114,14 +114,32 @@ impl WebRTCApi {
             "rustkvm".to_owned(),
         ));
 
-        info!("Created video track: kind={}", video_track.kind());
+        // Create audio track (Opus)
+        let audio_track = Arc::new(TrackLocalStaticSample::new(
+            RTCRtpCodecCapability {
+                mime_type: MIME_TYPE_OPUS.to_owned(),
+                clock_rate: 48000,
+                channels: 2,
+                sdp_fmtp_line: "minptime=10;useinbandfec=1".to_string(),
+                ..Default::default()
+            },
+            "audio".to_owned(),
+            "rustkvm".to_owned(),
+        ));
+
+        info!("Created video and audio tracks");
 
         // Add video track to peer connection
-        let rtp_sender = peer_connection
+        let video_sender = peer_connection
             .add_track(Arc::clone(&video_track) as Arc<dyn TrackLocal + Send + Sync>)
             .await?;
 
-        info!("Added video track to peer connection");
+        // Add audio track to peer connection
+        let audio_sender = peer_connection
+            .add_track(Arc::clone(&audio_track) as Arc<dyn TrackLocal + Send + Sync>)
+            .await?;
+
+        info!("Added video and audio tracks to peer connection");
 
         // Verify track was added by checking senders immediately
         let senders = peer_connection.get_senders().await;
@@ -134,24 +152,32 @@ impl WebRTCApi {
             }
         }
 
-        // Start RTCP reading task
-        let rtp_sender_clone = Arc::clone(&rtp_sender);
+        // Start RTCP reading tasks
         tokio::spawn(async move {
             let mut rtcp_buf = vec![0u8; 1500];
-            while let Ok((packet, attributes)) = rtp_sender_clone.read(&mut rtcp_buf).await {
-                debug!("Received RTCP packet: {:?}, attributes: {:?}", packet, attributes);
+            while let Ok((packet, attributes)) = video_sender.read(&mut rtcp_buf).await {
+                debug!("Video RTCP: {:?}, attributes: {:?}", packet, attributes);
+            }
+        });
+
+        tokio::spawn(async move {
+            let mut rtcp_buf = vec![0u8; 1500];
+            while let Ok((packet, attributes)) = audio_sender.read(&mut rtcp_buf).await {
+                debug!("Audio RTCP: {:?}, attributes: {:?}", packet, attributes);
             }
         });
 
         let mut session = Session::new(session_id);
         session.peer_connection = Some(Arc::clone(&peer_connection));
         session.video_track = Some(video_track);
+        session.audio_track = Some(audio_track);
 
         let app_state_for_close = config.app_state.clone();
 
         // Set up connection state change handler
         let session_id_clone = session.id.clone();
         let video_track_clone = session.video_track.clone();
+        let audio_track_clone = session.audio_track.clone();
         // Add isConnected tracking per session
         let is_connected = Arc::new(RwLock::new(false));
         let is_connected_clone = is_connected.clone();
@@ -160,6 +186,7 @@ impl WebRTCApi {
             move |connection_state: RTCIceConnectionState| {
                 let session_id = session_id_clone.clone();
                 let video_track = video_track_clone.clone();
+                let audio_track = audio_track_clone.clone();
                 let is_connected = is_connected_clone.clone();
                 let app_state = app_state_for_close.clone();
                 Box::pin(async move {
@@ -177,10 +204,15 @@ impl WebRTCApi {
                                 info!("WebRTC session {} connected", session_id);
                                 // actionSessions++ and session management
                                 increment_session_counter().await;
-                                // Bridge native video -> track (FFI ingress -> channel -> WebRTC)
+                                // Bridge video -> track (GStreamer -> channel -> WebRTC)
                                 if let Some(track) = video_track.clone() {
                                     video::attach_webrtc_sink(track).await;
                                     info!("Video track attached to WebRTC session {}", session_id);
+                                }
+                                // Bridge audio -> track (GStreamer -> channel -> WebRTC)
+                                if let Some(track) = audio_track.clone() {
+                                    video::attach_audio_sink(track).await;
+                                    info!("Audio track attached to WebRTC session {}", session_id);
                                 }
                                 // Set as current session
                                 set_current_session(Some(session_id)).await;

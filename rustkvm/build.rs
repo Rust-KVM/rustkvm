@@ -4,7 +4,6 @@ use std::process::Command;
 
 fn main() {
     cross_compile::build_c_shims();
-    native_video_bridge::build_native_video_bridge();
     edid_bridge::build_edid_bridge();
 }
 
@@ -62,71 +61,6 @@ mod cross_compile {
         println!("cargo::rustc-link-arg=-L{}", out_dir.display());
         println!("cargo::rustc-link-arg=-lgetauxval");
         println!("cargo::rustc-link-arg=--sysroot={}", sysroot);
-    }
-}
-
-/// Build the native video bridge (get_video_track.c) as a separate unit
-mod native_video_bridge {
-    use super::*;
-
-    pub fn build_native_video_bridge() {
-        println!("cargo:rerun-if-changed=cshim/get_video_track.c");
-
-        // Use /opt paths directly like Makefile - no fallbacks
-        let rk_sdk_base = "/opt/rk3588-buildkit";
-        let rk_media_output = format!("{}/aarch64-buildroot-linux-gnu", rk_sdk_base);
-        let rk_media_include = format!("{}/sysroot/usr/include", rk_media_output);
-        let rk_media_include_drm = format!("{}/libdrm", rk_media_include);
-        let rk_media_libs = format!("{}/sysroot/usr/lib", rk_media_output);
-
-        let cc = format!("{}/bin/aarch64-buildroot-linux-gnu-gcc", rk_sdk_base);
-        let ar = format!("{}/bin/aarch64-buildroot-linux-gnu-ar", rk_sdk_base);
-
-        println!(
-            "cargo:warning=Using RK includes: {} and {}",
-            rk_media_include, rk_media_include_drm
-        );
-        println!("cargo:warning=Using RK libs: {}", rk_media_libs);
-
-        let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
-        let obj_v = out_dir.join("get_video_track.o");
-        let lib_v = out_dir.join("libget_video_track.a");
-
-        let status = Command::new(&cc)
-            .args([
-                "-c",
-                "-fPIC",
-                "-DRUSTKVM_AS_LIB=1",
-                "-DUSE_ROCKCHIP_MPP",
-                &format!("-I{}", rk_media_include),
-                &format!("-I{}", rk_media_include_drm),
-                "cshim/get_video_track.c",
-                "-o",
-                obj_v.to_str().expect("Invalid UTF-8 in obj path"),
-                "-O2",
-            ])
-            .status()
-            .expect("Failed to spawn cross-compiler");
-        assert!(status.success(), "Cross-compile get_video_track.c failed");
-
-        let status = Command::new(&ar)
-            .args([
-                "rcs",
-                lib_v.to_str().expect("Invalid UTF-8 in lib path"),
-                obj_v.to_str().expect("Invalid UTF-8 in obj path"),
-            ])
-            .status()
-            .expect("Failed to spawn archiver");
-        assert!(status.success(), "Archive creation failed");
-
-        println!("cargo:rustc-link-search=native={}", out_dir.display());
-        println!("cargo:rustc-link-lib=static=get_video_track");
-        println!("cargo:rustc-link-search=native={}", rk_media_libs);
-        println!("cargo:rustc-link-lib=pthread");
-        println!("cargo:rustc-link-lib=rockit");
-        println!("cargo:rustc-link-lib=rockchip_mpp");
-        println!("cargo:rustc-link-lib=rga");
-        println!("cargo:rustc-link-lib=m");
     }
 }
 

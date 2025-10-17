@@ -22,7 +22,7 @@
 ## 2. Using buildroot-rk3588
 
 ```bash
-mkdir -p buildroot-rk3588 && unzip -q buildroot-rk3588-20250527.tar -d buildroot-rk3588
+mkdir -p buildroot-rk3588-20250527 && tar -xf buildroot-rk3588-20250527.tar -C buildroot-rk3588-20250527
 cd buildroot-rk3588
 ```
 

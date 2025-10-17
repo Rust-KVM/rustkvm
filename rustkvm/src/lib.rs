@@ -10,6 +10,7 @@ pub mod config;
 pub mod hardware;
 pub mod jsonrpc;
 pub mod mdns;
+pub mod pipeline;
 pub mod remote_mount;
 pub mod state;
 pub mod terminal;

@@ -28,6 +28,12 @@ async fn init_mdns() -> anyhow::Result<()> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Set GStreamer environment variables early
+    unsafe {
+        std::env::set_var("GST_VIDEO_CONVERT_USE_RGA", "1");
+        std::env::set_var("GST_VIDEO_FLIP_USE_RGA", "1");
+    }
+
     dotenvy::dotenv().ok();
 
     tracing_subscriber::fmt()

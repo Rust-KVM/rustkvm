@@ -10,6 +10,7 @@ pub struct Session {
     pub id: String,
     pub peer_connection: Option<Arc<RTCPeerConnection>>,
     pub video_track: Option<Arc<TrackLocalStaticSample>>,
+    pub audio_track: Option<Arc<TrackLocalStaticSample>>,
     pub control_channel: Option<Arc<RTCDataChannel>>,
     pub rpc_channel: Option<Arc<RTCDataChannel>>,
     pub hid_channel: Option<Arc<RTCDataChannel>>,
@@ -23,6 +24,7 @@ impl fmt::Debug for Session {
             .field("id", &self.id)
             .field("has_peer_connection", &self.peer_connection.is_some())
             .field("has_video_track", &self.video_track.is_some())
+            .field("has_audio_track", &self.audio_track.is_some())
             .field("has_control_channel", &self.control_channel.is_some())
             .field("has_rpc_channel", &self.rpc_channel.is_some())
             .field("has_hid_channel", &self.hid_channel.is_some())
@@ -38,6 +40,7 @@ impl Clone for Session {
             id: self.id.clone(),
             peer_connection: self.peer_connection.clone(),
             video_track: self.video_track.clone(),
+            audio_track: self.audio_track.clone(),
             control_channel: self.control_channel.clone(),
             rpc_channel: self.rpc_channel.clone(),
             hid_channel: self.hid_channel.clone(),
@@ -59,6 +62,7 @@ impl Session {
             id,
             peer_connection: None,
             video_track: None,
+            audio_track: None,
             control_channel: None,
             rpc_channel: None,
             hid_channel: None,
