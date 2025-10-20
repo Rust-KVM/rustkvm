@@ -169,6 +169,32 @@ fn read_trimmed(path: &str) -> anyhow::Result<String> {
     Ok(content.trim().to_string())
 }
 
+fn usb_serial() -> String {
+    let mut hex = String::with_capacity(16);
+
+    if let Ok(s) = crate::hardware::hw::extract_serial_number() {
+        for &byte in s.as_bytes() {
+            if byte.is_ascii_hexdigit() {
+                hex.push(byte.to_ascii_uppercase() as char);
+                if hex.len() == 16 {
+                    break;
+                }
+            }
+        }
+    }
+
+    if hex.is_empty() {
+        let mut buf = uuid::Uuid::encode_buffer();
+        let u = uuid::Uuid::new_v4().as_simple().encode_upper(&mut buf);
+        hex.push_str(&u[..u.len().min(16)]);
+    }
+
+    let mut out = String::with_capacity(8 + hex.len());
+    out.push_str("RUSTKVM-");
+    out.push_str(&hex);
+    out
+}
+
 static USB_MANAGER: OnceCell<Arc<RwLock<UsbManager>>> = OnceCell::new();
 
 /// Initialize global USB manager, start polling, and wire keyboard LED to RPC
@@ -191,7 +217,7 @@ pub fn init_usb() -> Option<&'static Arc<RwLock<UsbManager>>> {
 
             // Initialize USB gadget with default configuration. Do not fail overall if this errors.
             let devices = DeviceConfig::default();
-            let config = GadgetConfig::default();
+            let config = GadgetConfig { serial_number: usb_serial(), ..Default::default() };
             if let Err(err) = mgr.init_gadget("rustkvm".to_string(), devices, config) {
                 tracing::warn!("failed to initialize USB gadget: {}", err);
             }
