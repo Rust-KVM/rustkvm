@@ -242,7 +242,7 @@ impl UsbGadget {
                 order: 0,
                 path: Vec::new(),
                 attrs: HashMap::from([
-                    ("bcdUSB".to_string(), "0x0200".to_string()), // USB 2.0
+                    ("bcdUSB".to_string(), "0x0320".to_string()), // USB 3.x
                     ("idVendor".to_string(), "0x1d6b".to_string()), // The Linux Foundation
                     ("idProduct".to_string(), "0x0104".to_string()), // Multifunction Composite Gadget
                     ("bcdDevice".to_string(), "0x0100".to_string()), // USB2
@@ -280,7 +280,7 @@ impl UsbGadget {
                 order: 2,
                 path: Vec::new(),
                 attrs: HashMap::new(),
-                config_attrs: HashMap::from([("MaxPower".to_string(), "250".to_string())]),
+                config_attrs: HashMap::from([("MaxPower".to_string(), "900".to_string())]), // USB 3.x supports up to 900mA
                 config_path: Some(Vec::new()),
                 report_desc: None,
             },
