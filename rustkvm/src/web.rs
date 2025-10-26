@@ -15,7 +15,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::assets::FrontendAssets;
+use crate::assets::ClientAssets;
 use crate::cloud::types::CloudRegisterRequest;
 use crate::config::get_config_manager;
 use crate::middleware::{auth_middleware, developer_auth_middleware, public_middleware};
@@ -230,14 +230,38 @@ async fn init_developer_routes() -> anyhow::Result<Router> {
 ///   - Serve files from a directory specified by RUSTKVM_SERVE_DIR env var
 ///   - Or serve embedded client assets via serve_index and serve_static_file handlers
 pub async fn init_static_routes() -> anyhow::Result<Router> {
+    let compression = Compression::new().enable_gzip(CompressionLevel::Fastest);
+
     let router = if let Some(serve_dir) = option_env!("RUSTKVM_SERVE_DIR") {
-        Router::with_path("{*path}")
-            .hoop(Compression::new().enable_gzip(CompressionLevel::Fastest))
-            .get(StaticDir::new(serve_dir))
+        // Router::with_path("{*path}").hoop(compression).get(StaticDir::new(serve_dir))
+
+        Router::new()
+            .push(
+                Router::with_path("/static/{*path}")
+                    .hoop(compression.clone())
+                    .get(StaticDir::new(serve_dir)),
+            )
+            .push(
+                Router::with_path("{*path}")
+                    .hoop(compression)
+                    .get(StaticDir::new(serve_dir).defaults("index.html")),
+            )
     } else {
-        Router::with_path("{*path}")
-            .hoop(Compression::new().enable_gzip(CompressionLevel::Fastest))
-            .get(static_embed::<FrontendAssets>().fallback("index.html"))
+        // Router::with_path("{*path}")
+        //     .hoop(compression)
+        //     .get(static_embed::<ClientAssets>().fallback("index.html"))
+
+        Router::new()
+            .push(
+                Router::with_path("/static/{*path}")
+                    .hoop(compression.clone())
+                    .get(static_embed::<ClientAssets>()),
+            )
+            .push(
+                Router::with_path("{*path}")
+                    .hoop(compression)
+                    .get(static_embed::<ClientAssets>().fallback("index.html")),
+            )
     };
     Ok(router)
 }
