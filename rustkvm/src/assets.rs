@@ -1,7 +1,7 @@
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
-#[folder = "../frontend/dist"]
+#[folder = "../client/dist"]
 pub struct FrontendAssets;
 
 // Built-in disk images embedded into the binary.

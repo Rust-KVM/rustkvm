@@ -856,7 +856,7 @@ pub mod handlers {
         Ok(Value::Null)
     }
 
-    // Composite display state for frontend convenience
+    // Composite display state for client convenience
     #[derive(Serialize)]
     pub struct DisplayState {
         pub ip: String,

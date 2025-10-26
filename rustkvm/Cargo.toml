@@ -51,6 +51,7 @@ salvo = { version = "0.84.0", features = [
   "serve-static",
   "tower-compat",
   "websocket",
+  "compression",
 ] }
 time = { version = "0.3.41", default-features = false, features = ["macros"] }
 tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }

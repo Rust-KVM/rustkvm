@@ -228,12 +228,16 @@ async fn init_developer_routes() -> anyhow::Result<Router> {
 /// # Returns
 /// * Returns a Router configured to either:
 ///   - Serve files from a directory specified by RUSTKVM_SERVE_DIR env var
-///   - Or serve embedded frontend assets via serve_index and serve_static_file handlers
+///   - Or serve embedded client assets via serve_index and serve_static_file handlers
 pub async fn init_static_routes() -> anyhow::Result<Router> {
     let router = if let Some(serve_dir) = option_env!("RUSTKVM_SERVE_DIR") {
-        Router::with_path("{*path}").get(StaticDir::new(serve_dir))
+        Router::with_path("{*path}")
+            .hoop(Compression::new().enable_gzip(CompressionLevel::Fastest))
+            .get(StaticDir::new(serve_dir))
     } else {
-        Router::with_path("{*path}").get(static_embed::<FrontendAssets>().fallback("index.html"))
+        Router::with_path("{*path}")
+            .hoop(Compression::new().enable_gzip(CompressionLevel::Fastest))
+            .get(static_embed::<FrontendAssets>().fallback("index.html"))
     };
     Ok(router)
 }
