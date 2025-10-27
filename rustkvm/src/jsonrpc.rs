@@ -162,11 +162,10 @@ where
 {
     fn call(&self, params: Option<Value>) -> Result<Value> {
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            let params = match params {
-                Some(p) => convert_parameters::<P>(p)
-                    .map_err(|e| anyhow!("Parameter conversion failed: {}", e))?,
-                None => return Err(anyhow!("Missing required parameters")),
-            };
+            let params_value = params.unwrap_or(Value::Object(serde_json::Map::new()));
+
+            let params = convert_parameters::<P>(params_value)
+                .map_err(|e| anyhow!("Parameter conversion failed: {}", e))?;
 
             let result = (self.func)(params)?;
             serde_json::to_value(result).map_err(|e| anyhow!("Serialization failed: {}", e))
@@ -271,12 +270,22 @@ where
 
 /// Provides flexible parameter type conversion with fallback strategies
 fn convert_parameters<P: DeserializeOwned>(params: Value) -> Result<P> {
+    let params_to_use = if let Value::Object(ref map) = params {
+        if map.len() == 1 {
+            map.get("params").cloned().unwrap_or_else(|| params.clone())
+        } else {
+            params.clone()
+        }
+    } else {
+        params.clone()
+    };
+
     // First try direct deserialization
-    match serde_json::from_value::<P>(params.clone()) {
+    match serde_json::from_value::<P>(params_to_use.clone()) {
         Ok(result) => Ok(result),
         Err(primary_error) => {
             // Try enhanced conversion strategies
-            match enhanced_parameter_conversion::<P>(&params) {
+            match enhanced_parameter_conversion::<P>(&params_to_use) {
                 Ok(result) => Ok(result),
                 Err(_) => {
                     // Return the original error for better debugging
@@ -607,8 +616,7 @@ impl JsonRpcProcessor {
         debug!("Sending JSON-RPC response: {}", response_json);
 
         if let Some(rpc_channel) = &session.rpc_channel {
-            let message_bytes = response_json.into_bytes();
-            if let Err(e) = rpc_channel.send(&message_bytes.into()).await {
+            if let Err(e) = rpc_channel.send_text(response_json).await {
                 return Err(anyhow!("Failed to send RPC response: {}", e));
             }
         } else {
@@ -625,13 +633,15 @@ impl JsonRpcProcessor {
         params: Option<Value>,
         session: &Session,
     ) -> Result<()> {
-        let event = JsonRpcEvent { jsonrpc: "2.0".to_string(), method: method.to_string(), params };
-        let event_json = serde_json::to_string(&event)?;
+        let event_json = serde_json::to_string(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params
+        }))?;
         info!("Sending JSON-RPC event: method={}, data={}", method, event_json);
 
         if let Some(rpc_channel) = &session.rpc_channel {
-            let message_bytes = event_json.into_bytes();
-            if let Err(e) = rpc_channel.send(&message_bytes.into()).await {
+            if let Err(e) = rpc_channel.send_text(event_json).await {
                 return Err(anyhow!("Failed to send RPC event: {}", e));
             }
         } else {
@@ -1192,10 +1202,6 @@ pub mod handlers {
     }
 
     pub async fn set_keyboard_macros(params: KeyboardMacrosParams) -> Result<serde_json::Value> {
-        if params.macros.is_empty() {
-            anyhow::bail!("missing or invalid macros parameter");
-        }
-
         // Validate macro count limit
         if params.macros.len() > crate::config::types::MAX_MACROS_PER_DEVICE {
             anyhow::bail!("too many macros (max {})", crate::config::types::MAX_MACROS_PER_DEVICE);
@@ -1919,8 +1925,16 @@ pub fn create_default_registry() -> RpcRegistry {
     });
     registry.register_async("setKeyboardMacros", |params| {
         Box::pin(async move {
-            let params: handlers::KeyboardMacrosParams =
-                serde_json::from_value(params.ok_or(anyhow!("Missing required parameters"))?)?;
+            let raw = params.ok_or(anyhow!("Missing required parameters"))?;
+
+            // Handle both { params: { macros } } and { macros } formats
+            let params_val = if let Value::Object(map) = &raw {
+                map.get("params").cloned().unwrap_or_else(|| raw.clone())
+            } else {
+                raw
+            };
+
+            let params: handlers::KeyboardMacrosParams = serde_json::from_value(params_val)?;
             handlers::set_keyboard_macros(params).await
         })
     });
