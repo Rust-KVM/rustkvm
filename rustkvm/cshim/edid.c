@@ -12,7 +12,7 @@
 #include <sys/klog.h>
 
 #define MAX_EDID_SIZE 256
-#define V4L_SUBDEV "/dev/v4l-subdev2"
+#define V4L_NODE "/dev/video0"
 
 /**
  * @brief Read the EDID from the display
@@ -57,7 +57,7 @@ int get_edid(uint8_t *edid, size_t max_size)
     int fd;
     struct v4l2_edid v4l2_edid;
 
-    fd = open(V4L_SUBDEV, O_RDWR);
+    fd = open(V4L_NODE, O_RDWR);
     if (fd < 0) {
         perror("Failed to open device");
         return -1;
@@ -66,7 +66,7 @@ int get_edid(uint8_t *edid, size_t max_size)
     memset(&v4l2_edid, 0, sizeof(v4l2_edid));
     v4l2_edid.pad = 0;
     v4l2_edid.start_block = 0;
-    v4l2_edid.blocks = 2;
+    v4l2_edid.blocks = max_size / 128;
     v4l2_edid.edid = edid;
 
     if (ioctl(fd, VIDIOC_G_EDID, &v4l2_edid) < 0) {
@@ -105,7 +105,7 @@ int set_edid(uint8_t *edid, size_t size)
     int fd;
     struct v4l2_edid v4l2_edid;
 
-    fd = open(V4L_SUBDEV, O_RDWR);
+    fd = open(V4L_NODE, O_RDWR);
     if (fd < 0) {
         perror("Failed to open device");
         return -1;
@@ -136,7 +136,7 @@ const char *videoc_log_status()
     size_t buffer_size = 0;
     ssize_t bytes_read;
 
-    fd = open(V4L_SUBDEV, O_RDWR);
+    fd = open(V4L_NODE, O_RDWR);
     if (fd < 0) {
         perror("Failed to open device");
         return NULL;
