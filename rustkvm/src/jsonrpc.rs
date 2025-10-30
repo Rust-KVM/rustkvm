@@ -1482,7 +1482,7 @@ pub mod handlers {
 
         // Try to start/stop SSH (best-effort)
         tokio::spawn(async {
-            let run = async { Command::new("/oem/usr/bin/dropbear.sh").arg("auto").output().await };
+            let run = async { Command::new("/usr/bin/dropbear.sh").arg("auto").output().await };
             match timeout(Duration::from_secs(2), run).await {
                 Ok(Ok(output)) => {
                     if !output.status.success() {
