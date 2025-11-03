@@ -2,10 +2,11 @@
 
 // use rustkvm::hardware::native::process::NativeSupervisor;
 // use rustkvm::hardware::native::socket as native_socket;
-use rustkvm::hardware::{display, usb};
+use rustkvm::hardware::{display, hw, usb};
 use rustkvm::mdns::{Mdns, MdnsListenOptions, MdnsOptions};
 use rustkvm::{cloud, config, tls, video, web, webrtc};
 use tokio::signal;
+use tokio_util::sync::CancellationToken;
 use tracing::{Level, error, info, warn};
 
 static MDNS: once_cell::sync::OnceCell<Mdns> = once_cell::sync::OnceCell::new();
@@ -55,6 +56,17 @@ async fn main() -> anyhow::Result<()> {
     }
 
     config::init_config().await?;
+
+    let wd_cancel = CancellationToken::new();
+    let wd_task = {
+        let token = wd_cancel.clone();
+        tokio::spawn(async move {
+            if let Err(e) = hw::run_watchdog(token).await {
+                warn!("Watchdog task exited with error: {}", e);
+            }
+        })
+    };
+
     tls::init().await?;
     webrtc::init_webrtc_api().await?;
 
@@ -156,6 +168,14 @@ async fn main() -> anyhow::Result<()> {
 
     // Graceful shutdown
     info!("Starting graceful shutdown...");
+
+    // Disarm watchdog
+    wd_cancel.cancel();
+    let _ = wd_task.await;
+    if let Err(e) = hw::disarm_watchdog() {
+        warn!("Failed to disarm watchdog (extra safety attempt): {}", e);
+    }
+
     video::shutdown_video_pipeline().await;
 
     info!("Shutdown complete");
