@@ -5,6 +5,7 @@ mod session;
 mod signaling;
 mod util;
 
+pub mod cli;
 pub mod cloud;
 pub mod config;
 pub mod hardware;

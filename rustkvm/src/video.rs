@@ -86,7 +86,7 @@ fn video_writer_loop() {
                     let ms = (1000.0 / fps) as u64;
                     let actual_fps = 1000.0 / ms as f64;
 
-                    info!(
+                    debug!(
                         "Frame rate: GStreamer={:.1}fps -> output={:.1}fps (interval={}ms)",
                         fps, actual_fps, ms
                     );
@@ -105,7 +105,7 @@ fn video_writer_loop() {
                                 let interval_us = pts - prev;
                                 if interval_us > 0 {
                                     let calculated_fps = 1_000_000.0 / interval_us as f64;
-                                    info!(
+                                    debug!(
                                         "PTS interval: {}us, calculated FPS: {:.1}",
                                         interval_us, calculated_fps
                                     );
@@ -222,7 +222,57 @@ async fn audio_frame_writer(mut rx: mpsc::Receiver<AudioFrame>) {
     }
 }
 
-// Start GStreamer video pipeline
+/// Start GStreamer video pipeline with CLI configuration
+pub async fn start_native_video_with_cli(cli: &crate::cli::Cli) -> anyhow::Result<()> {
+    ensure_video_pipeline_started().await?;
+
+    // Create video configuration from CLI
+    let video_config = VideoConfig::from_cli(&cli.video, cli.quality);
+
+    // Optional audio configuration
+    let audio_config =
+        if cli.audio_enabled { Some(AudioConfig::from_cli(&cli.audio)) } else { None };
+
+    // Create pipeline manager
+    let manager = PipelineManager::new(video_config, audio_config)?;
+
+    // Set video frame callback
+    manager.set_video_callback(move |data, pts_us| {
+        let mut slot = LATEST_VIDEO.lock();
+        *slot = Some((data, pts_us));
+    });
+
+    // Set audio frame callback
+    if let Some(tx) = AUDIO_FRAME_TX.get() {
+        let tx_clone = tx.clone();
+        manager.set_audio_callback(move |data| {
+            let _ = tx_clone.try_send(data);
+        });
+    }
+
+    // Set video state callback
+    if let Some(state_tx) = VIDEO_STATE_TX.get() {
+        let state_tx_clone = state_tx.clone();
+        manager.set_state_callback(move |state| {
+            let _ = state_tx_clone.send(state);
+        });
+    }
+
+    // Start all pipelines
+    manager.start()?;
+
+    // Store manager
+    *PIPELINE_MANAGER.lock().await = Some(manager);
+
+    info!(
+        "GStreamer pipeline started: {} encoder, quality={:.2}",
+        cli.video.video_encoder.codec_name(),
+        cli.quality
+    );
+    Ok(())
+}
+
+// Start GStreamer video pipeline (backward compatibility)
 pub async fn start_native_video(q: Option<f32>) -> anyhow::Result<()> {
     ensure_video_pipeline_started().await?;
 

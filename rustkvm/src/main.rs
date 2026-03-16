@@ -2,6 +2,7 @@
 
 // use rustkvm::hardware::native::process::NativeSupervisor;
 // use rustkvm::hardware::native::socket as native_socket;
+use rustkvm::cli::Cli;
 use rustkvm::hardware::{display, hw, usb};
 use rustkvm::mdns::{Mdns, MdnsListenOptions, MdnsOptions};
 use rustkvm::{cloud, config, tls, video, web, webrtc};
@@ -12,12 +13,11 @@ use tracing::{Level, error, info, warn};
 static MDNS: once_cell::sync::OnceCell<Mdns> = once_cell::sync::OnceCell::new();
 
 /// Initialize mDNS service
-async fn init_mdns() -> anyhow::Result<()> {
-    let hostname = "rustkvm".to_string(); // Should be retrieved from network configuration
+async fn init_mdns(hostname: &str) -> anyhow::Result<()> {
     let fqdn = format!("{}.local", hostname);
 
     let mdns = Mdns::new(MdnsOptions {
-        local_names: vec![hostname, fqdn],
+        local_names: vec![hostname.to_string(), fqdn],
         listen_options: MdnsListenOptions { ipv4: true, ipv6: true },
     })?;
 
@@ -29,6 +29,9 @@ async fn init_mdns() -> anyhow::Result<()> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Parse CLI arguments FIRST (before any initialization)
+    let cli = Cli::parse_args();
+
     // Set GStreamer environment variables early
     unsafe {
         std::env::set_var("GST_VIDEO_CONVERT_USE_RGA", "1");
@@ -37,19 +40,37 @@ async fn main() -> anyhow::Result<()> {
 
     dotenvy::dotenv().ok();
 
-    tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
-        .with_ansi(true)
+    // Configure logging based on CLI args
+    let log_level = cli.logging.log_level.parse::<Level>().unwrap_or(Level::INFO);
+
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(log_level)
+        .with_ansi(!cli.logging.log_no_color)
         .without_time()
         .with_level(true)
         .with_target(true)
         .with_thread_ids(true)
         .with_thread_names(true)
         .with_file(true)
-        .with_line_number(true)
-        // .compact()
-        .pretty()
-        .init();
+        .with_line_number(true);
+
+    if cli.logging.log_json {
+        subscriber.json().init();
+    } else {
+        subscriber.pretty().init();
+    }
+
+    // Validate configuration
+    cli.validate()?;
+
+    // Print configuration summary
+    cli.print_summary();
+
+    // Dry-run mode: validate and exit
+    if cli.dry_run {
+        info!("Dry-run mode: configuration valid, exiting");
+        return Ok(());
+    }
 
     if let Err(e) = rustkvm::time_sync::sync_time_once().await {
         warn!("Time sync failed (non-fatal if clock already correct): {}", e);
@@ -81,9 +102,9 @@ async fn main() -> anyhow::Result<()> {
 
     video::init_video_state_updater().await?;
 
-    // Initialize native video pipeline (C encoder -> Rust WebRTC)
-    info!("Initializing native video pipeline...");
-    if let Err(e) = video::start_native_video(Some(1.0)).await {
+    // Initialize native video pipeline with CLI configuration
+    info!("Initializing native video pipeline with CLI configuration...");
+    if let Err(e) = video::start_native_video_with_cli(&cli).await {
         warn!("Failed to start native video pipeline: {}", e);
         // Continue without video - system can still function
     } else {
@@ -121,7 +142,10 @@ async fn main() -> anyhow::Result<()> {
     //     });
     // }
 
-    init_mdns().await?;
+    // Initialize mDNS if not disabled
+    if !cli.network.mdns_disable {
+        init_mdns(&cli.network.mdns_hostname).await?;
+    }
 
     // let local_ip = util::local_ip();
     // let http_addr: SocketAddr = "0.0.0.0:8000".parse()?;
@@ -133,13 +157,15 @@ async fn main() -> anyhow::Result<()> {
 
     let web_handle = web::init().await?;
 
-    // Start cloud connection loop
-    tokio::spawn(async {
-        let cloud_manager = cloud::manager::get_cloud_manager();
-        if let Err(e) = cloud_manager.start_connection_loop().await {
-            error!("Cloud connection loop failed: {}", e);
-        }
-    });
+    // Start cloud connection loop if not disabled
+    if !cli.network.cloud_disable {
+        tokio::spawn(async {
+            let cloud_manager = cloud::manager::get_cloud_manager();
+            if let Err(e) = cloud_manager.start_connection_loop().await {
+                error!("Cloud connection loop failed: {}", e);
+            }
+        });
+    }
 
     // Start both HTTP and HTTPS servers concurrently
     // let http_server = axum_server::bind(http_addr).serve(app.clone().into_make_service());

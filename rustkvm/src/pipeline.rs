@@ -5,9 +5,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
+use gstreamer as gst;
 use gstreamer::prelude::*;
+use gstreamer_app as gst_app;
+use gstreamer_video as gst_video;
 use tracing::{debug, error, info, warn};
-use {gstreamer as gst, gstreamer_app as gst_app, gstreamer_video as gst_video};
 
 use crate::video::VideoInputState;
 
@@ -15,18 +17,26 @@ use crate::video::VideoInputState;
 #[derive(Debug, Clone)]
 pub struct VideoConfig {
     pub device: String,
+    pub encoder: crate::cli::VideoEncoder,
     pub bitrate: u32,
     pub max_bitrate: u32,
     pub gop_size: Option<i32>, // None = auto, -1 = FPS, positive = specific GOP
+    pub rc_mode: crate::cli::RateControlMode,
+    pub level: String,
+    pub profile: Option<String>,
 }
 
 impl Default for VideoConfig {
     fn default() -> Self {
         Self {
             device: "/dev/video0".to_string(),
+            encoder: crate::cli::VideoEncoder::default(),
             bitrate: 20_000_000,
             max_bitrate: 60_000_000,
             gop_size: None,
+            rc_mode: crate::cli::RateControlMode::default(),
+            level: "5.2".to_string(),
+            profile: None,
         }
     }
 }
@@ -63,12 +73,55 @@ impl VideoConfig {
         self
     }
 
+    /// Set encoder type (builder pattern)
+    #[inline]
+    pub fn with_encoder(mut self, encoder: crate::cli::VideoEncoder) -> Self {
+        self.encoder = encoder;
+        self
+    }
+
+    /// Set rate control mode (builder pattern)
+    #[inline]
+    pub fn with_rc_mode(mut self, rc_mode: crate::cli::RateControlMode) -> Self {
+        self.rc_mode = rc_mode;
+        self
+    }
+
+    /// Set codec level (builder pattern)
+    #[inline]
+    pub fn with_level(mut self, level: impl Into<String>) -> Self {
+        self.level = level.into();
+        self
+    }
+
+    /// Set codec profile (builder pattern)
+    #[inline]
+    pub fn with_profile(mut self, profile: impl Into<String>) -> Self {
+        self.profile = Some(profile.into());
+        self
+    }
+
     /// Adjust bitrate by quality factor (builder pattern)
     pub fn with_quality(mut self, quality: f32) -> Self {
         let q = quality.clamp(0.1, 2.0);
         self.bitrate = (20_000_000.0 * q) as u32;
         self.max_bitrate = (60_000_000.0 * q) as u32;
         self
+    }
+
+    /// Create from CLI arguments
+    pub fn from_cli(args: &crate::cli::VideoArgs, quality: f32) -> Self {
+        let q = quality.clamp(0.1, 2.0);
+        Self {
+            device: args.video_device.clone(),
+            encoder: args.video_encoder,
+            bitrate: (args.video_bitrate as f32 * q) as u32,
+            max_bitrate: (args.video_max_bitrate as f32 * q) as u32,
+            gop_size: args.video_gop,
+            rc_mode: args.video_rc_mode,
+            level: args.video_level.clone(),
+            profile: args.video_profile.clone(),
+        }
     }
 }
 
@@ -122,6 +175,16 @@ impl AudioConfig {
     pub fn with_bitrate(mut self, bitrate: i32) -> Self {
         self.bitrate = bitrate;
         self
+    }
+
+    /// Create from CLI arguments
+    pub fn from_cli(args: &crate::cli::AudioArgs) -> Self {
+        Self {
+            device: args.audio_device.clone(),
+            sample_rate: args.audio_sample_rate,
+            channels: args.audio_channels,
+            bitrate: args.audio_bitrate,
+        }
     }
 }
 
@@ -179,28 +242,39 @@ impl VideoPipeline {
             .build()
             .context("Failed to create queue")?;
 
-        // H.264 encoder (Rockchip MPP)
+        // H.264/H.265 encoder (Rockchip MPP) - configurable
         // GOP will be set dynamically based on source framerate if not specified
-        let encoder = gst::ElementFactory::make("mpph264enc")
-            .name("mpph264enc") // Named for dynamic access
-            .property_from_str("rc-mode", "vbr")
-            .property_from_str("level", "5.2")
+        let encoder_name = config.encoder.gst_element_name();
+        info!("Creating {} encoder for {}", encoder_name, config.encoder.codec_name());
+
+        let mut encoder_builder = gst::ElementFactory::make(encoder_name)
+            .name(encoder_name)
+            .property_from_str("rc-mode", config.rc_mode.as_gst_str())
+            .property_from_str("level", &config.level)
             .property("bps", config.bitrate)
-            .property("bps-max", config.max_bitrate)
+            .property("bps-max", config.max_bitrate);
+
+        // Set profile if specified
+        if let Some(ref profile) = config.profile {
+            encoder_builder = encoder_builder.property_from_str("profile", profile);
+        }
+
+        let encoder = encoder_builder
             .build()
-            .context("Failed to create mpph264enc")?;
+            .with_context(|| format!("Failed to create {}", encoder_name))?;
 
         // Set GOP if specified, otherwise it will use encoder default or be set dynamically
         if let Some(gop) = config.gop_size {
             encoder.set_property("gop", gop);
         }
 
-        // H.264 parser
-        let h264parse = gst::ElementFactory::make("h264parse")
+        // Parser (h264parse or h265parse)
+        let parser_name = config.encoder.parser_element_name();
+        let parser = gst::ElementFactory::make(parser_name)
             .property("config-interval", -1i32)
             .property("disable-passthrough", true)
             .build()
-            .context("Failed to create h264parse")?;
+            .with_context(|| format!("Failed to create {}", parser_name))?;
 
         // AppSink to receive encoded data
         let appsink = gst_app::AppSink::builder()
@@ -219,7 +293,7 @@ impl VideoPipeline {
                 &nv12_caps,
                 &queue,
                 &encoder,
-                &h264parse,
+                &parser,
                 appsink.upcast_ref(),
             ])
             .context("Failed to add elements to pipeline")?;
@@ -231,7 +305,7 @@ impl VideoPipeline {
             &nv12_caps,
             &queue,
             &encoder,
-            &h264parse,
+            &parser,
             appsink.upcast_ref(),
         ])
         .context("Failed to link video pipeline elements")?;
@@ -784,7 +858,13 @@ impl PipelineManager {
 
     /// Dynamically update video bitrate
     pub fn set_video_bitrate(&self, bitrate: u32, max_bitrate: u32) -> Result<()> {
-        if let Some(encoder) = self.video.pipeline.by_name("mpph264enc") {
+        // Try both encoder types
+        if let Some(encoder) = self
+            .video
+            .pipeline
+            .by_name("mpph264enc")
+            .or_else(|| self.video.pipeline.by_name("mpph265enc"))
+        {
             encoder.set_property("bps", bitrate);
             encoder.set_property("bps-max", max_bitrate);
             Ok(())
