@@ -65,7 +65,7 @@ rustkvm
 ## 5. Clone the project
 
 ```bash
-git clone xxx
+git clone https://github.com/Rust-KVM/rustkvm.git
 cd rustkvm
 ```
 
