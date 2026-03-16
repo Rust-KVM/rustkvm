@@ -1,10 +1,16 @@
 # RustKVM
 
+If you find this project useful, please consider supporting its development.
+BTC：`bc1q3pgq8mc7dm9vvygd7aatq4hnt7j596jcjughm3`
+
+---
+
+
 ## 1. Requirements
 
-- Recommended: Ubuntu-24.04 (WSL2 is supported), use an amd64/x86 architecture device.  
+- Recommended: Ubuntu-24.04 (WSL2 is supported), use an amd64/x86 architecture device.
 
-- Install rustup nightly  
+- Install rustup nightly
 
 - File `buildroot-rk3588-20250527.tar`
 
@@ -96,4 +102,3 @@ See the [platform-support documentation](https://doc.rust-lang.org/nightly/rustc
 ```bash
 cargo build -Z build-std --target aarch64-unknown-linux-gnu -p rustkvm
 ```
-
