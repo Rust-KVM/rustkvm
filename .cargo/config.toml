@@ -3,6 +3,6 @@ linker = "/opt/rk3588-buildkit/bin/aarch64-buildroot-linux-gnu-gcc"
 
 [env]
 PKG_CONFIG_ALLOW_CROSS = "1"
-PKG_CONFIG_SYSROOT_DIR = "/home/foxx/obj/RK3588/systemkit/buildroot-rk3588-20250527/buildroot-rk3588/buildroot/output/rockchip_rk3588/staging"
-PKG_CONFIG_PATH = "/home/foxx/obj/RK3588/systemkit/buildroot-rk3588-20250527/buildroot-rk3588/buildroot/output/rockchip_rk3588/staging/usr/lib/pkgconfig"
-PKG_CONFIG_LIBDIR = "/home/foxx/obj/RK3588/systemkit/buildroot-rk3588-20250527/buildroot-rk3588/buildroot/output/rockchip_rk3588/staging/usr/lib/pkgconfig"
+PKG_CONFIG_SYSROOT_DIR = "/opt/rk3588-buildkit/aarch64-buildroot-linux-gnu/sysroot"
+PKG_CONFIG_PATH = "/opt/rk3588-buildkit/aarch64-buildroot-linux-gnu/sysroot/usr/lib/pkgconfig"
+PKG_CONFIG_LIBDIR = "/opt/rk3588-buildkit/aarch64-buildroot-linux-gnu/sysroot/usr/lib/pkgconfig"

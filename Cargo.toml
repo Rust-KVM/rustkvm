@@ -1,5 +1,5 @@
 [workspace]
-members = ["examples", "rustkvm"]
+members = ["rustkvm"]
 exclude = ["rust"]
 resolver = "2"
 
