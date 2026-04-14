@@ -19,7 +19,7 @@ RustKVM is a high-performance, specialized KVM-over-IP solution designed for the
 
 ```text
 rustkvm
-  ├── rustkvm           # Core application source code
+  ├── app               # Core application source code
   ├── rust              # Tailored Rust toolchain for cross-compilation
   └── assets            # Static assets and images
 ```
