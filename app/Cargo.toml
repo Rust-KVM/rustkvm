@@ -1,88 +1,99 @@
 [package]
-name = "rustkvm"
-version = "0.1.0"
-edition = "2024"
+name              = "rustkvm"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
 
 [lib]
-name = "rustkvm"
-crate-type = ["staticlib", "rlib"]
+name        = "rustkvm"
+crate-type  = ["staticlib", "rlib"]
 
 [[bin]]
 name = "rustkvm_app"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
-anyhow = "1.0.98"
-base64 = { version = "0.22.1", default-features = false }
-bcrypt = { version = "0.17.0", default-features = false, features = ["std"] }
-chrono = { version = "0.4.42", default-features = false, features = ["alloc"] }
-clap = { version = "4.5.53", default-features = false, features = [
-    "derive",
-    "env",
-    "cargo",
-    "std",
-    "help",
-    "usage",
-    "error-context",
-    "string",
-] }
-dotenvy = "0.15"
-futures = { version = "0.3.31", default-features = false }
-futures-util = { version = "0.3.31", default-features = false }
-gstreamer = { version = "0.24.2", features = ["v1_22"] }
-gstreamer-app = { version = "0.24.2", features = ["v1_22"] }
-gstreamer-video = { version = "0.24.2", features = ["v1_22"] }
-hex = { version = "0.4.3", default-features = false }
-httpdate = "1.0.3"
-id_token_verifier = { git = "https://github.com/foxxcn/id_token_verifier.git", tag = "rustkvm", features = [
-    "tracing",
-] }
-if-addrs = "0.14.0"
-libc = { version = "0.2.175", default-features = false }
-macaddr = { version = "1.0.1", default-features = false }
-mdns-sd = { version = "0.15.1", default-features = false }
-nbd = "0.3.1"
-once_cell = "1.21.3"
-parking_lot = "0.12.4"
-prometheus = { version = "0.14.0", default-features = false }
-rcgen = { version = "0.14.3", features = ["pem"] }
-regex = { version = "1.11.1", default-features = false }
-reqwest = { version = "0.12.23", default-features = false, features = [
-    "blocking",
-    "rustls-tls-webpki-roots",
-    "json",
-] }
-rust-embed = "8.7.2"
-rustix = { version = "1.0.8", default-features = false, features = [
-    "pty",
-    "fs",
-    "termios",
-    "net",
-] }
-rustls = { version = "0.23.29", default-features = false, features = [
-    "ring",
-] } # or "aws_lc_rs"
-salvo = { version = "0.84.0", features = [
-    "oapi",
-    "serve-static",
-    "tower-compat",
-    "websocket",
-    "compression",
-] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-socketioxide = { version = "0.17.2", features = ["extensions", "state"] }
-time = { version = "0.3.41", default-features = false, features = ["macros"] }
-tokio = { version = "1.46.1", features = ["full", "macros"] }
-tokio-tungstenite = { version = "0.28.0", default-features = false, features = [
-    "connect",
-    "rustls-tls-webpki-roots",
-] }
-tokio-util = { version = "0.7.16", default-features = false }
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.20", features = ["json"] }
-uuid = { version = "1.17.0", default-features = false, features = ["v4"] }
-webrtc = { version = "0.14.0", features = [] }
+# Error
+anyhow.workspace             = true
+
+# Async
+tokio.workspace              = true
+tokio-tungstenite.workspace  = true
+tokio-util.workspace         = true
+futures.workspace            = true
+futures-util.workspace       = true
+
+# Serde
+serde.workspace              = true
+serde_json.workspace         = true
+toml.workspace               = true
+
+# Tracing
+tracing.workspace            = true
+tracing-subscriber.workspace = true
+
+# Sync
+parking_lot.workspace        = true
+once_cell.workspace          = true
+
+# Time
+chrono.workspace             = true
+time.workspace               = true
+
+# Crypto / Auth
+sha2.workspace               = true
+bcrypt.workspace             = true
+rustls.workspace             = true
+rcgen.workspace              = true
+
+# HTTP
+reqwest.workspace            = true
+httpdate.workspace           = true
+
+# Web frameworks
+salvo.workspace              = true
+socketioxide.workspace       = true
+
+# System / IO
+libc.workspace               = true
+rustix.workspace             = true
+if-addrs.workspace           = true
+mdns-sd.workspace            = true
+macaddr.workspace            = true
+nbd.workspace                = true
+
+# Encoding / Misc
+base64.workspace             = true
+hex.workspace                = true
+bytes.workspace              = true
+uuid.workspace               = true
+regex.workspace              = true
+clap.workspace               = true
+dotenvy.workspace            = true
+prometheus.workspace         = true
+rust-embed.workspace         = true
+zip.workspace                = true
+
+# Protocols
+rumqttc.workspace            = true
+webrtc.workspace             = true
+
+# GStreamer
+gstreamer.workspace          = true
+gstreamer-app.workspace      = true
+gstreamer-video.workspace    = true
+
+# Git deps
+id_token_verifier.workspace  = true
+
+# Internal crates
+rkvm-core.workspace          = true
+rkvm-net.workspace           = true
 
 [dev-dependencies]
-tempfile = "3.20.0"
+tempfile.workspace           = true

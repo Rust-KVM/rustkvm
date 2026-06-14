@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+# Cancel in-progress runs for the same ref when a new push arrives
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Minimum permissions required by all jobs
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: nightly
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # fmt — formatting only; rustfmt parses source, never compiles or links.
+  # ---------------------------------------------------------------------------
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  # ---------------------------------------------------------------------------
+  # deny — license + bans + sources + advisories.
+  # ---------------------------------------------------------------------------
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: cargo deny check
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+
+  # ---------------------------------------------------------------------------
+  # Summary gate — required status check for branch protection
+  # ---------------------------------------------------------------------------
+  ci-success:
+    name: CI Success
+    runs-on: ubuntu-latest
+    needs: [fmt, deny]
+    if: always()
+    steps:
+      - name: Verify all jobs succeeded
+        run: |
+          if [[ "${{ needs.fmt.result }}" != "success" || \
+                "${{ needs.deny.result }}" != "success" ]]; then
+            echo "::error::One or more CI jobs failed"
+            exit 1
+          fi
+          echo "All CI jobs passed."

@@ -1,5 +1,9 @@
 # RustKVM
 
+[![CI](https://github.com/Rust-KVM/rustkvm/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/Rust-KVM/rustkvm/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](#license)
+[![Rust](https://img.shields.io/badge/rust-edition%202024-orange.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/index.html)
+
 RustKVM is a high-performance, specialized KVM-over-IP solution designed for the RK3588 platform. It deeply integrates Rockchip MPP hardware acceleration technology and leverages WebRTC to deliver a low-latency, high-definition remote control experience.
 
 ---
@@ -20,6 +24,8 @@ RustKVM is a high-performance, specialized KVM-over-IP solution designed for the
 ```text
 rustkvm
   ├── app               # Core application source code
+  ├── crates            # Shared workspace crates (rkvm-core, rkvm-net)
+  ├── client            # Frontend client assets
   ├── rust              # Tailored Rust toolchain for cross-compilation
   └── assets            # Static assets and images
 ```
@@ -90,19 +96,21 @@ target = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 cc = "/opt/rk3588-buildkit/bin/aarch64-buildroot-linux-gnu-gcc"
 ```
 
-Build and link the toolchain:
+Build and link the toolchain (uses self-built Rust from `rust/` source):
 
 ```bash
-./x.py build --stage 2 --host x86_64-unknown-linux-gnu --target aarch64-unknown-linux-gnu
+cd rust
+git checkout main && git pull
+./x build --stage 2
 rustup toolchain link stage2 build/x86_64-unknown-linux-gnu/stage2
 ```
 
 ### 4. Phase 3: Compile the Project
 
-Navigate to the project directory and compile RustKVM using the custom toolchain:
+Navigate to the project directory and compile RustKVM using the **self-built stage2 toolchain**:
 
 ```bash
-cargo build -Z build-std --target aarch64-unknown-linux-gnu -p rustkvm
+cargo +stage2 build -Z build-std --target aarch64-unknown-linux-gnu -p rustkvm --bin rustkvm_app --release
 ```
 
 ---
@@ -112,3 +120,9 @@ cargo build -Z build-std --target aarch64-unknown-linux-gnu -p rustkvm
 If you find this project useful, please consider supporting its development.
 
 BTC Address: `bc1q3pgq8mc7dm9vvygd7aatq4hnt7j596jcjughm3`
+
+---
+
+## License
+
+This project is licensed under the [GNU General Public License v2.0 only](https://spdx.org/licenses/GPL-2.0-only.html).

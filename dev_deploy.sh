@@ -38,15 +38,25 @@ fi
 
 # 1. Build application
 echo "🔨 Building application..."
-cargo build -Z build-std --target aarch64-unknown-linux-gnu -p rustkvm --bin rustkvm_app --release
+cargo +stage2 build -Z build-std=std,panic_abort --target aarch64-unknown-linux-gnu -p rustkvm --bin rustkvm_app --release
 
-# 2. Stop existing processes and cleanup
-echo "📱 Stopping existing processes..."
-ssh "${REMOTE_USER}@${REMOTE_HOST}" 'killall rustkvm_app || true'
-ssh "${REMOTE_USER}@${REMOTE_HOST}" 'fuser -k /dev/video0 || true'
-ssh "${REMOTE_USER}@${REMOTE_HOST}" 'fuser -k 80/tcp || true'
-ssh "${REMOTE_USER}@${REMOTE_HOST}" 'fuser -k 443/tcp || true'
-ssh "${REMOTE_USER}@${REMOTE_HOST}" 'rm -f /userdata/rustkvm/bin/rustkvm_app /userdata/rustkvm/log/rustkvm_app.log'
+# 2. Stop existing process gracefully, then clean up.
+#    rustkvm_app arms the hardware watchdog and only disarms it during graceful
+#    shutdown. A SIGKILL while it still holds /dev/watchdog (e.g. via `fuser -k`
+#    below, which holds video0/80/443) would skip the disarm and REBOOT the device.
+#    So: SIGTERM, wait for the clean ~1s exit, and only then force-clean leftovers.
+echo "📱 Stopping existing process (graceful, watchdog-safe)..."
+ssh "${REMOTE_USER}@${REMOTE_HOST}" '
+  if pid=$(pgrep -x rustkvm_app); then
+    kill -TERM "$pid" 2>/dev/null || true
+    for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
+    kill -0 "$pid" 2>/dev/null && echo "warning: rustkvm_app still running after 10s"
+  fi
+  fuser -k /dev/video0 2>/dev/null || true
+  fuser -k 80/tcp 2>/dev/null || true
+  fuser -k 443/tcp 2>/dev/null || true
+  rm -f /userdata/rustkvm/bin/rustkvm_app /userdata/rustkvm/log/rustkvm_app.log
+'
 
 # 3. Deploy to device
 echo "📦 Deploying to device..."

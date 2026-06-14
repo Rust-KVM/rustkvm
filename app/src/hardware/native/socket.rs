@@ -1,11 +1,3 @@
-//! Unix socket communication with native process.
-//!
-//! AF_UNIX + SOCK_SEQPACKET transport for control and video sockets.
-//!
-//! TODO(native-resources): If we later support auto-extracting/updating the native binary,
-//! keep that logic in process.rs or a dedicated module; this file should remain focused on
-//! socket transport (ctrl/event JSON and raw video frames).
-
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::path::Path;
@@ -30,15 +22,13 @@ use tracing::{debug, info, warn};
 use super::jsonrpc::{CtrlAction, CtrlResponse};
 use crate::video::{VideoInputState, handle_video_state_message};
 
-/// Thread-safe shared socket and pending request map.
 #[derive(Default)]
 struct CtrlShared {
     conn: Option<OwnedFd>,
     next_seq: i32,
-    pending: HashMap<i32, oneshot::Sender<CtrlResponse>>, // seq -> responder
+    pending: HashMap<i32, oneshot::Sender<CtrlResponse>>,
 }
 
-/// Control socket manager.
 pub struct CtrlSocket {
     inner: Arc<Mutex<CtrlShared>>,
 }
@@ -60,13 +50,11 @@ impl CtrlSocket {
         Self::default()
     }
 
-    /// Start server at path. Existing file will be removed.
     pub fn start_server(&self, socket_path: &str, is_ctrl: bool) -> Result<()> {
         let path = Path::new(socket_path);
         if path.exists() {
             std::fs::remove_file(path).context("failed to remove existing socket file")?;
         }
-        // Create AF_UNIX SOCK_SEQPACKET listener
         let sock = socket(AddressFamily::UNIX, SocketType::SEQPACKET, None)
             .context("failed to create seqpacket socket")?;
         let c_path = CString::new(socket_path).context("invalid socket path")?;
@@ -87,9 +75,17 @@ impl CtrlSocket {
                                 if guard.conn.is_some() {
                                     debug!("closing existing ctrl conn");
                                 }
-                                guard.conn = Some(dup(&conn).expect("dup fd"));
+                                match dup(&conn) {
+                                    Ok(fd) => guard.conn = Some(fd),
+                                    Err(e) => {
+                                        warn!(
+                                            "failed to dup ctrl connection fd, dropping client: {}",
+                                            e
+                                        );
+                                        continue;
+                                    }
+                                }
                             }
-                            // On first ctrl connection, restore EDID from config via ctrl action
                             if is_ctrl && let Some(rt) = &rt_handle {
                                 static CTRL_FIRST_CONNECTED: once_cell::sync::OnceCell<()> =
                                     once_cell::sync::OnceCell::new();
@@ -118,11 +114,10 @@ impl CtrlSocket {
                                     });
                                 }
                             }
-                            // Spawn reader loop per connection
                             let reader_fd = conn;
                             let shared_reader = shared.clone();
                             let rt_handle_clone = rt_handle.clone();
-                            std::thread::Builder::new()
+                            if let Err(e) = std::thread::Builder::new()
                                 .name("ctrl-sock-reader".to_string())
                                 .spawn(move || {
                                     if is_ctrl {
@@ -134,7 +129,9 @@ impl CtrlSocket {
                                         warn!("ctrl read loop error: {}", e);
                                     }
                                 })
-                                .expect("spawn reader");
+                            {
+                                warn!("failed to spawn ctrl reader thread: {}", e);
+                            }
                         }
                         Err(e) => {
                             warn!("accept error: {}", e);
@@ -143,13 +140,12 @@ impl CtrlSocket {
                     }
                 }
             })
-            .expect("spawn acceptor");
+            .context("failed to spawn ctrl socket acceptor thread")?;
 
         info!("server listening: {}", socket_path);
         Ok(())
     }
 
-    /// Send a control action and wait for response with timeout.
     pub async fn call_action(
         &self,
         action: &str,
@@ -184,9 +180,7 @@ impl CtrlSocket {
         }
     }
 
-    /// Low-level write of a single SEQPACKET message. Uses spawn_blocking to avoid blocking the Tokio runtime.
     pub async fn write_message(&self, data: &[u8]) -> Result<()> {
-        // Duplicate the fd to avoid holding the mutex or borrowing across threads
         let dup_fd = {
             let guard = self.inner.lock();
             let fd_ref = guard.conn.as_ref().ok_or_else(|| anyhow!("ctrl socket not connected"))?;
@@ -201,52 +195,6 @@ impl CtrlSocket {
         .map_err(|e| anyhow!("join error: {}", e))??;
         Ok(())
     }
-}
-
-/// Start a generic AF_UNIX SEQPACKET server and invoke `on_client` per accepted connection.
-///
-/// This is suitable for binary streams (e.g., H.264 frames) and does not perform any
-/// JSON parsing or request/response routing.
-pub fn start_seqpacket_server<F>(socket_path: &str, on_client: F) -> Result<()>
-where
-    F: Fn(OwnedFd) + Send + Sync + 'static,
-{
-    let path = Path::new(socket_path);
-    if path.exists() {
-        std::fs::remove_file(path).context("failed to remove existing socket file")?;
-    }
-    let sock = socket(AddressFamily::UNIX, SocketType::SEQPACKET, None)
-        .context("failed to create seqpacket socket")?;
-    let c_path = CString::new(socket_path).context("invalid socket path")?;
-    let addr = SocketAddrUnix::new(&c_path).context("failed to build unix addr")?;
-    bind(&sock, &addr).context("failed to bind unix seqpacket socket")?;
-    listen(&sock, 128).context("failed to listen on unix seqpacket socket")?;
-
-    let on_client = Arc::new(on_client);
-    std::thread::Builder::new()
-        .name("seqpacket-acceptor".to_string())
-        .spawn({
-            let on_client = on_client.clone();
-            move || loop {
-                match accept_with(&sock, SocketFlags::CLOEXEC) {
-                    Ok(conn) => {
-                        let handler = on_client.clone();
-                        std::thread::Builder::new()
-                            .name("seqpacket-client".to_string())
-                            .spawn(move || handler(conn))
-                            .expect("spawn seqpacket-client");
-                    }
-                    Err(e) => {
-                        warn!("accept error: {}", e);
-                        std::thread::sleep(Duration::from_millis(200));
-                    }
-                }
-            }
-        })
-        .expect("spawn seqpacket-acceptor");
-
-    info!("seqpacket server listening: {}", socket_path);
-    Ok(())
 }
 
 fn read_loop(conn: OwnedFd, shared: Arc<Mutex<CtrlShared>>, rt: Option<TokioHandle>) -> Result<()> {
@@ -268,7 +216,6 @@ fn read_loop(conn: OwnedFd, shared: Arc<Mutex<CtrlShared>>, rt: Option<TokioHand
 
         debug!("ctrl sock msg: {} bytes", n);
 
-        // Deliver to pending waiter if seq present
         if resp.seq != 0 {
             let tx = {
                 let mut guard = shared.lock();
@@ -280,7 +227,6 @@ fn read_loop(conn: OwnedFd, shared: Arc<Mutex<CtrlShared>>, rt: Option<TokioHand
             }
         }
 
-        // Handle asynchronous events
         if !resp.event.is_empty()
             && resp.event.as_str() == "video_input_state"
             && let Some(data) = resp.data
@@ -301,10 +247,8 @@ fn read_loop(conn: OwnedFd, shared: Arc<Mutex<CtrlShared>>, rt: Option<TokioHand
     }
 }
 
-// ---- Global control socket helpers ----
 static CTRL: OnceCell<CtrlSocket> = OnceCell::new();
 
-/// Initialize global ctrl socket server at /var/run/rustkvm_ctrl.sock
 pub fn init_ctrl_socket() -> Result<()> {
     let sock = CtrlSocket::new();
     let _ = CTRL.set(sock);
@@ -313,7 +257,6 @@ pub fn init_ctrl_socket() -> Result<()> {
     Ok(())
 }
 
-/// Call a ctrl action via global ctrl socket
 pub async fn call_ctrl_action(
     action: &str,
     params: Option<Map<String, Value>>,

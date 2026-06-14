@@ -1,7 +1,118 @@
 [workspace]
-members = ["app"]
+members = ["app", "crates/rkvm-core", "crates/rkvm-net"]
 exclude = ["rust"]
 resolver = "2"
 
+[workspace.package]
+version      = "0.1.0"
+edition      = "2024"
+rust-version = "1.87"
+license      = "GPL-2.0-only"
+repository   = "https://github.com/Rust-KVM/rustkvm"
+
+[workspace.dependencies]
+# -- Async runtime ------------------------------------------------------------
+tokio              = { version = "1.52.3",  features = ["full", "macros"] }
+tokio-tungstenite  = { version = "0.29.0",  default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+tokio-util         = { version = "0.7.18",  default-features = false }
+futures            = { version = "0.3.32",  default-features = false }
+futures-util       = { version = "0.3.32",  default-features = false }
+
+# -- Error handling -----------------------------------------------------------
+anyhow             = "1.0.102"
+thiserror          = "2.0.18"
+
+# -- Serde --------------------------------------------------------------------
+serde              = { version = "1.0.228", features = ["derive"] }
+serde_json         = "1.0.149"
+toml               = "1.1.2"
+
+# -- Tracing ------------------------------------------------------------------
+tracing            = "0.1.44"
+tracing-subscriber = { version = "0.3.23",  features = ["json", "env-filter"] }
+
+# -- Sync ---------------------------------------------------------------------
+parking_lot        = "0.12.5"
+once_cell          = "1.21.4"
+
+# -- Time ---------------------------------------------------------------------
+chrono             = { version = "0.4.44",  default-features = false, features = ["alloc", "serde"] }
+time               = { version = "0.3.47",  default-features = false, features = ["macros"] }
+
+# -- Crypto / Auth ------------------------------------------------------------
+sha2               = { version = "0.11.0",  default-features = false }
+bcrypt             = { version = "0.19.1",  default-features = false, features = ["std"] }
+rustls             = { version = "0.23.40", default-features = false, features = ["ring"] }   # 0.24.0-dev is dev-only
+rcgen              = { version = "0.14.8",  features = ["pem"] }
+
+# -- HTTP ---------------------------------------------------------------------
+reqwest            = { version = "0.12.28", default-features = false, features = ["blocking", "rustls-tls-webpki-roots", "json"] } # held: 0.13 dropped `rustls-tls-webpki-roots`; its `rustls` feature pulls aws-lc-rs (aarch64 cross-compile hazard) and `rustls-no-provider` needs the crypto provider installed before time_sync runs. We standardise on ring.
+httpdate           = "1.0.3"
+
+# -- Web frameworks -----------------------------------------------------------
+salvo              = { version = "0.93.0",  features = ["oapi", "serve-static", "tower-compat", "websocket", "compression", "rustls"] }
+socketioxide       = { version = "0.18.3",  features = ["extensions", "state"] }
+
+# -- System / IO --------------------------------------------------------------
+libc               = { version = "0.2.175", default-features = false }                                     # 1.0.0 is alpha
+rustix             = { version = "1.1.4",   default-features = false, features = ["pty", "fs", "termios", "net", "system"] }
+if-addrs           = "0.15.0"
+mdns-sd            = { version = "0.20.0",  default-features = false }
+macaddr            = { version = "1.0.1",   default-features = false }
+nbd                = "0.3.1"
+
+# -- Encoding / Misc ----------------------------------------------------------
+base64             = { version = "0.22.1",  default-features = false }
+hex                = { version = "0.4.3",   default-features = false }
+bytes              = "1.11.1"
+uuid               = { version = "1.23.1",  default-features = false, features = ["v4"] }
+regex              = { version = "1.12.3",  default-features = false }
+clap               = { version = "4.6.1",   default-features = false, features = ["derive", "env", "cargo", "std", "help", "usage", "error-context", "string"] }
+dotenvy            = "0.15.7"
+prometheus         = { version = "0.14.0",  default-features = false }
+rust-embed         = "8.11.0"
+zip                = { version = "8.0",    default-features = false }
+
+# -- Protocols ----------------------------------------------------------------
+rumqttc            = { version = "0.25.1",  default-features = false, features = ["use-rustls"] }
+webrtc             = "0.17.1" # 0.20.0-alpha is alpha-only
+
+# -- GStreamer ----------------------------------------------------------------
+gstreamer          = { version = "0.25.2",  features = ["v1_22"] }
+gstreamer-app      = { version = "0.25.2",  features = ["v1_22"] }
+gstreamer-video    = { version = "0.25.2",  features = ["v1_22"] }
+
+# -- Git deps -----------------------------------------------------------------
+id_token_verifier  = { git = "https://github.com/foxxcn/id_token_verifier.git", tag = "rustkvm", features = ["tracing"] }
+
+# -- Dev ----------------------------------------------------------------------
+tempfile           = "3.27.0"
+
+# -- Internal crates ----------------------------------------------------------
+rkvm-core          = { path = "crates/rkvm-core" }
+rkvm-net           = { path = "crates/rkvm-net" }
+
+[workspace.lints.rust]
+# Enforce `unsafe` blocks inside `unsafe fn` (Rust 2024 edition behavior)
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+# Built-in `correctness` and `style` lints already warn-by-default — we keep
+# them on and selectively raise the value-adding ones. Pedantic stays off to
+# avoid drowning out real signal across legacy code.
+unnecessary_to_owned  = "warn"
+redundant_clone       = "warn"
+inefficient_to_string = "warn"
+
 [profile.dev]
 opt-level = 0
+
+[profile.release]
+opt-level     = 3
+lto           = "fat"
+codegen-units = 1
+strip         = "symbols"
+panic         = "abort"
+debug         = false
+overflow-checks = false
+incremental   = false

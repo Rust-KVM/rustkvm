@@ -18,7 +18,6 @@ use crate::hardware::block_device::{
     NbdDevice, RemoteImageReader, set_current_remote_image_reader,
 };
 
-/// Virtual media source types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VirtualMediaSource {
     WebRTC,
@@ -26,14 +25,12 @@ pub enum VirtualMediaSource {
     Storage,
 }
 
-/// Virtual media mode: CDROM or Disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VirtualMediaMode {
     CDROM,
     Disk,
 }
 
-/// Virtual media state kept globally.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VirtualMediaState {
     pub source: VirtualMediaSource,
@@ -48,67 +45,20 @@ static NBD_DEVICE: RwLock<Option<NbdDevice>> = RwLock::new(None);
 
 const IMAGES_FOLDER: &str = "/userdata/rustkvm/images";
 
-/// Public API: get current virtual media state.
 pub fn get_virtual_media_state() -> Option<VirtualMediaState> {
     CURRENT_VIRTUAL_MEDIA_STATE.read().clone()
 }
 
-/// Public API: set initial state by reading configfs and current file.
-pub async fn set_initial_virtual_media_state() -> Result<()> {
-    let cdrom_enabled =
-        get_mass_storage_cdrom_enabled().await.context("failed to read mass storage cdrom")?;
-    let disk_path = get_mass_storage_image().await.context("failed to get mass storage image")?;
-
-    let mut initial = VirtualMediaState {
-        source: VirtualMediaSource::Storage,
-        mode: VirtualMediaMode::Disk,
-        filename: None,
-        url: None,
-        size: 0,
-    };
-    if cdrom_enabled {
-        initial.mode = VirtualMediaMode::CDROM;
-    }
-
-    let state_opt = match disk_path.as_deref() {
-        None => None,
-        Some("") => None,
-        Some("/dev/nbd0") => {
-            // Unknown remote; placeholder for legacy state
-            initial.source = VirtualMediaSource::HTTP;
-            initial.url = Some("/".to_string());
-            initial.size = 1;
-            Some(initial)
-        }
-        Some(path) => {
-            let filename =
-                Path::new(path).file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
-            let meta =
-                fs::metadata(path).await.context("failed to stat mass storage image file")?;
-            initial.filename = Some(filename);
-            initial.size = meta.len() as i64;
-            Some(initial)
-        }
-    };
-
-    *CURRENT_VIRTUAL_MEDIA_STATE.write() = state_opt.clone();
-    info!(?state_opt, "initial virtual media state set");
-    Ok(())
-}
-
-/// Mount remote HTTP image via NBD and point mass storage to /dev/nbd0.
 pub async fn mount_with_http(url: &str, mode: VirtualMediaMode) -> Result<()> {
     ensure_images_folder().await?;
     set_mass_storage_mode(mode == VirtualMediaMode::CDROM)
         .await
         .context("failed to set mass storage mode")?;
 
-    // Create HTTP/HTTPS reader and determine size
     let reader = HttpRangeReader::new(url).context("failed to init HTTP reader")?;
     let size = reader.size().context("failed to get HTTP size")?;
     info!(url, size, "using remote HTTP url");
 
-    // Update state, then start NBD
     {
         let mut st = CURRENT_VIRTUAL_MEDIA_STATE.write();
         if st.is_some() {
@@ -126,7 +76,6 @@ pub async fn mount_with_http(url: &str, mode: VirtualMediaMode) -> Result<()> {
     set_current_remote_image_reader(Some(Arc::new(reader)));
     start_nbd()?;
 
-    // TODO: replace with ready polling if needed
     sleep(Duration::from_secs(1)).await;
     set_mass_storage_image("/dev/nbd0")
         .await
@@ -135,7 +84,6 @@ pub async fn mount_with_http(url: &str, mode: VirtualMediaMode) -> Result<()> {
     Ok(())
 }
 
-/// Mount WebRTC provided image via NBD. Requires external read handler to be set.
 pub async fn mount_with_webrtc(filename: &str, size: i64, mode: VirtualMediaMode) -> Result<()> {
     set_mass_storage_mode(mode == VirtualMediaMode::CDROM)
         .await
@@ -167,7 +115,6 @@ pub async fn mount_with_webrtc(filename: &str, size: i64, mode: VirtualMediaMode
     Ok(())
 }
 
-/// Mount a local storage file as mass storage directly (no NBD).
 pub async fn mount_with_storage(filename: &str, mode: VirtualMediaMode) -> Result<()> {
     let filename = sanitize_filename(filename)?;
     ensure_images_folder().await?;
@@ -193,7 +140,6 @@ pub async fn mount_with_storage(filename: &str, mode: VirtualMediaMode) -> Resul
     Ok(())
 }
 
-/// Unmount any mounted image and stop NBD if running.
 pub async fn unmount_image() -> Result<()> {
     set_mass_storage_image("\n")
         .await
@@ -205,12 +151,10 @@ pub async fn unmount_image() -> Result<()> {
     Ok(())
 }
 
-/// Ensure images folder exists.
-async fn ensure_images_folder() -> Result<()> {
+pub async fn ensure_images_folder() -> Result<()> {
     fs::create_dir_all(IMAGES_FOLDER).await.context("failed to create images folder")
 }
 
-/// Sanitize filename to prevent path traversal.
 fn sanitize_filename(filename: &str) -> Result<String> {
     use std::path::Component;
     let p = Path::new(filename);
@@ -227,7 +171,6 @@ fn sanitize_filename(filename: &str) -> Result<String> {
     Ok(base.to_string())
 }
 
-/// Resolve configfs lun.0 directory for mass_storage.usb0.
 async fn resolve_mass_storage_lun0() -> Result<PathBuf> {
     let gadgets_root = Path::new("/sys/kernel/config/usb_gadget");
     let mut entries = fs::read_dir(gadgets_root).await.context("failed to read usb_gadget root")?;
@@ -247,30 +190,15 @@ async fn read_trimmed(path: &Path) -> Result<String> {
     Ok(s.trim().to_string())
 }
 
-/// Get current mass storage image file path.
-pub async fn get_mass_storage_image() -> Result<Option<String>> {
-    let lun = resolve_mass_storage_lun0().await?;
-    let file_path = lun.join("file");
-    let s = read_trimmed(&file_path).await?;
-    let s = s.trim();
-    if s.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(s.to_string()))
-}
-
-/// Set mass storage image file path.
 pub async fn set_mass_storage_image(image_path: &str) -> Result<()> {
     let lun = resolve_mass_storage_lun0().await?;
     let file_path = lun.join("file");
-    // Write empty then the path (twice)
     write_file(&file_path, "\n").await.ok();
     write_file(&file_path, image_path).await?;
     write_file(&file_path, image_path).await?;
     Ok(())
 }
 
-/// Set mass storage mode (cdrom on/off).
 pub async fn set_mass_storage_mode(cdrom: bool) -> Result<()> {
     let lun = resolve_mass_storage_lun0().await?;
     let cdrom_path = lun.join("cdrom");
@@ -278,7 +206,6 @@ pub async fn set_mass_storage_mode(cdrom: bool) -> Result<()> {
     Ok(())
 }
 
-/// Get mass storage cdrom enabled flag.
 pub async fn get_mass_storage_cdrom_enabled() -> Result<bool> {
     let lun = resolve_mass_storage_lun0().await?;
     let cdrom_path = lun.join("cdrom");
@@ -286,13 +213,48 @@ pub async fn get_mass_storage_cdrom_enabled() -> Result<bool> {
     Ok(s == "1")
 }
 
+pub async fn get_mass_storage_image() -> Result<String> {
+    let lun = resolve_mass_storage_lun0().await?;
+    read_trimmed(&lun.join("file")).await
+}
+
+pub async fn set_initial_virtual_media_state() -> Result<()> {
+    let cdrom_enabled = get_mass_storage_cdrom_enabled().await.unwrap_or(false);
+    let disk_path = match get_mass_storage_image().await {
+        Ok(s) => s,
+        Err(_) => return Ok(()),
+    };
+
+    if disk_path.is_empty() {
+        return Ok(());
+    }
+
+    let mode = if cdrom_enabled { VirtualMediaMode::CDROM } else { VirtualMediaMode::Disk };
+
+    let state = if disk_path == "/dev/nbd0" {
+        VirtualMediaState {
+            source: VirtualMediaSource::HTTP,
+            mode,
+            filename: None,
+            url: Some("/".to_string()),
+            size: 1,
+        }
+    } else {
+        let filename =
+            Path::new(&disk_path).file_name().and_then(|s| s.to_str()).map(str::to_string);
+        let size = fs::metadata(&disk_path).await.map(|m| m.len() as i64).unwrap_or(0);
+        VirtualMediaState { source: VirtualMediaSource::Storage, mode, filename, url: None, size }
+    };
+
+    info!(?state, "initial virtual media state set");
+    *CURRENT_VIRTUAL_MEDIA_STATE.write() = Some(state);
+    Ok(())
+}
+
 async fn write_file(path: &Path, data: &str) -> Result<()> {
     let mut f = OpenOptions::new()
         .write(true)
-        // .create(true)
-        // .truncate(true)
         .open(path)
-        // .or_else(|_| OpenOptions::new().write(true).create(true).open(path))
         .await
         .with_context(|| format!("failed to open {}", path.display()))?;
     let mut writer = BufWriter::new(&mut f);
@@ -325,10 +287,6 @@ fn stop_nbd() {
     *guard = None;
 }
 
-// ==========================
-// HTTP/HTTPS Range Reader (reqwest + rustls)
-// ==========================
-
 struct HttpRangeReader {
     client: reqwest::blocking::Client,
     url: String,
@@ -337,7 +295,6 @@ struct HttpRangeReader {
 
 impl HttpRangeReader {
     fn new(url: &str) -> Result<Self> {
-        // Accept http and https
         if !(url.starts_with("http://") || url.starts_with("https://")) {
             return Err(anyhow!("unsupported url scheme"));
         }
@@ -346,7 +303,6 @@ impl HttpRangeReader {
             .build()
             .context("failed to build http client")?;
 
-        // Try HEAD first
         let mut size: Option<i64> = None;
         if let Ok(resp) = client.head(url).send()
             && resp.status().is_success()
@@ -356,7 +312,6 @@ impl HttpRangeReader {
         {
             size = Some(n);
         }
-        // Fallback: GET Range 0-0 and parse Content-Range: bytes 0-0/total
         if size.is_none() {
             let resp = client
                 .get(url)
@@ -369,22 +324,17 @@ impl HttpRangeReader {
             }
             if let Some(cr) = resp.headers().get(reqwest::header::CONTENT_RANGE)
                 && let Ok(s) = cr.to_str()
+                && let Some((_, total)) = s.rsplit_once('/')
+                && let Ok(n) = total.trim().parse::<i64>()
             {
-                // format: bytes 0-0/12345
-                if let Some((_, total)) = s.rsplit_once('/')
-                    && let Ok(n) = total.trim().parse::<i64>()
-                {
-                    size = Some(n);
-                }
+                size = Some(n);
             }
-            if size.is_none() {
-                // As a last resort, use content-length when 200 OK and whole file sent (not ideal)
-                if let Some(len) = resp.headers().get(reqwest::header::CONTENT_LENGTH)
-                    && let Ok(s) = len.to_str()
-                    && let Ok(n) = s.parse::<i64>()
-                {
-                    size = Some(n);
-                }
+            if size.is_none()
+                && let Some(len) = resp.headers().get(reqwest::header::CONTENT_LENGTH)
+                && let Ok(s) = len.to_str()
+                && let Ok(n) = s.parse::<i64>()
+            {
+                size = Some(n);
             }
         }
 
@@ -416,7 +366,6 @@ impl RemoteImageReader for HttpRangeReader {
     }
 }
 
-// Public helper to probe remote HTTP/HTTPS URL usability and size
 #[derive(Debug, Clone, Serialize)]
 pub struct UrlCheckResult {
     #[serde(rename = "Usable")]
@@ -441,7 +390,6 @@ pub fn check_mount_url(url: &str) -> Result<UrlCheckResult> {
         .build()
         .context("build http client")?;
 
-    // Try HEAD first
     if let Ok(resp) = client.head(url).send()
         && resp.status().is_success()
         && let Some(len) = resp.headers().get(reqwest::header::CONTENT_LENGTH)
@@ -451,7 +399,6 @@ pub fn check_mount_url(url: &str) -> Result<UrlCheckResult> {
         return Ok(UrlCheckResult { usable: true, reason: None, size: n });
     }
 
-    // Fallback: GET Range 0-0
     match client.get(url).header(reqwest::header::RANGE, "bytes=0-0").send() {
         Ok(resp) => {
             if !(resp.status().is_success()
@@ -482,18 +429,12 @@ pub fn check_mount_url(url: &str) -> Result<UrlCheckResult> {
     }
 }
 
-// ==========================
-// WebRTC reader bridge
-// ==========================
-
-/// External handler for WebRTC disk reads. Must be installed by the WebRTC module.
 pub trait WebRtcReadHandler: Send + Sync {
     fn read(&self, offset: i64, size: i64) -> Result<Vec<u8>>;
 }
 
 static WEBRTC_READ_HANDLER: RwLock<Option<Arc<dyn WebRtcReadHandler>>> = RwLock::new(None);
 
-/// Install WebRTC read handler. Should be called when the "disk" data channel is available.
 pub fn set_webrtc_read_handler(handler: Option<Arc<dyn WebRtcReadHandler>>) {
     *WEBRTC_READ_HANDLER.write() = handler;
 }
@@ -526,44 +467,6 @@ impl RemoteImageReader for WebRtcDiskReader {
         Ok(self.size)
     }
 }
-
-// ============
-// Path utils
-// ============
-
-trait CleanPath {
-    fn clean(&self) -> PathBuf;
-}
-impl CleanPath for Path {
-    fn clean(&self) -> PathBuf {
-        // Simplified clean: just canonicalize components without following symlinks
-        let s = self.to_string_lossy();
-        let mut parts = Vec::new();
-        for p in s.split('/') {
-            if p.is_empty() || p == "." {
-                continue;
-            }
-            if p == ".." {
-                let _ = parts.pop();
-                continue;
-            }
-            parts.push(p);
-        }
-        let mut out = String::new();
-        for p in parts {
-            out.push('/');
-            out.push_str(p);
-        }
-        if out.is_empty() {
-            out.push('.');
-        }
-        PathBuf::from(out)
-    }
-}
-
-// ==========================
-// Upload management (shared by RPC and HTTP endpoints)
-// ==========================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageFileUpload {
@@ -631,7 +534,6 @@ pub async fn append_upload_data(upload_id: &str, data: &[u8]) -> Result<i64> {
         .write_all(data)
         .await
         .with_context(|| format!("failed to write upload: {}", upload_id))?;
-    // entry.file.flush().with_context(|| format!("failed to flush upload: {}", upload_id))?;
     entry.already_uploaded_bytes += data.len() as i64;
     Ok(entry.already_uploaded_bytes)
 }
@@ -665,10 +567,6 @@ pub async fn get_upload_progress(upload_id: &str) -> Result<(i64, i64)> {
     Ok((entry.size, entry.already_uploaded_bytes))
 }
 
-// ==========================
-// Storage directory utilities
-// ==========================
-
 #[derive(Debug, Clone, Serialize)]
 pub struct StorageFileEntry {
     pub filename: String,
@@ -690,7 +588,7 @@ pub async fn list_storage_files() -> Result<StorageFilesList> {
     let mut pending_totals: HashMap<String, i64> = HashMap::new();
     {
         let map = PENDING_UPLOADS.lock().await;
-        for (_id, pu) in map.iter() {
+        for pu in map.values() {
             if let Some(name) = pu.upload_path.file_name().and_then(|s| s.to_str()) {
                 pending_totals.insert(name.to_string(), pu.size);
             }
@@ -759,7 +657,6 @@ pub async fn delete_storage_file(filename: &str) -> Result<()> {
 }
 
 pub async fn mount_built_in_image(filename: &str) -> Result<()> {
-    // If file exists in images folder, mount it directly
     let name = sanitize_filename(filename)?;
     ensure_images_folder().await?;
     let image_path = Path::new(IMAGES_FOLDER).join(&name);
@@ -767,7 +664,6 @@ pub async fn mount_built_in_image(filename: &str) -> Result<()> {
         return mount_with_storage(&name, VirtualMediaMode::Disk).await;
     }
 
-    // Try to load from embedded assets and write out
     if let Some(data) = BuiltinImages::get(&name) {
         let bytes = data.data.as_ref();
         let mut file = fs::File::create(&image_path)

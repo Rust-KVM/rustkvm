@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use socketioxide::extract::SocketRef;
 use tokio::sync::RwLock;
@@ -9,7 +10,7 @@ use crate::session::Session;
 #[derive(Debug)]
 pub struct AppState {
     pub sessions: RwLock<HashMap<String, Session>>,
-    pub current_session: RwLock<Option<String>>,
+    pub current_session: RwLock<Option<Arc<str>>>,
     pub sockets: RwLock<HashMap<String, SocketRef>>,
     pub websocket_ice_queue: RwLock<HashMap<String, Vec<String>>>,
 }
@@ -24,26 +25,22 @@ impl AppState {
         }
     }
 
-    /// Add a new session to the state
     pub async fn add_session(&self, session: Session) {
         let session_id = session.id.clone();
-        self.sessions.write().await.insert(session_id.clone(), session);
+        self.sessions.write().await.insert(session_id.to_string(), session);
 
-        // Update current session if this is the first one
         let mut current = self.current_session.write().await;
         if current.is_none() {
             *current = Some(session_id);
         }
     }
 
-    /// Remove a session from the state
     pub async fn remove_session(&self, session_id: &str) -> Option<Session> {
         let removed = self.sessions.write().await.remove(session_id);
 
-        // Clear current session if it was the removed one
         let mut current = self.current_session.write().await;
         if let Some(ref current_id) = *current
-            && current_id == session_id
+            && current_id.as_ref() == session_id
         {
             *current = None;
         }
@@ -51,27 +48,18 @@ impl AppState {
         removed
     }
 
-    /// Get the current active session
-    pub async fn get_current_session(&self) -> Option<String> {
+    pub async fn get_current_session(&self) -> Option<Arc<str>> {
         self.current_session.read().await.clone()
     }
 
-    /// Set the current active session
-    pub async fn set_current_session(&self, session_id: Option<String>) {
+    pub async fn set_current_session(&self, session_id: Option<Arc<str>>) {
         *self.current_session.write().await = session_id;
     }
 
-    /// Get a session by ID
     pub async fn get_session(&self, session_id: &str) -> Option<Session> {
         self.sessions.read().await.get(session_id).cloned()
     }
 
-    /// Get count of active sessions
-    pub async fn session_count(&self) -> usize {
-        self.sessions.read().await.len()
-    }
-
-    /// Queue ICE candidate for WebSocket connection
     pub async fn queue_ice_candidate(&self, session_id: &str, candidate: String) {
         const MAX_ICE_CANDIDATES: usize = 20;
 
@@ -86,7 +74,6 @@ impl AppState {
         ice_queue.push(candidate);
     }
 
-    /// Get and clear ICE candidates for WebSocket connection
     pub async fn get_ice_candidates(&self, session_id: &str) -> Vec<String> {
         let candidates =
             self.websocket_ice_queue.write().await.remove(session_id).unwrap_or_default();

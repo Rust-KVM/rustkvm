@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// Cloud connection states
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CloudConnectionState {
@@ -50,7 +49,6 @@ impl std::str::FromStr for CloudConnectionState {
     }
 }
 
-/// Cloud registration request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudRegisterRequest {
     #[serde(alias = "tempToken")]
@@ -63,21 +61,18 @@ pub struct CloudRegisterRequest {
     pub client_id: String,
 }
 
-/// Token exchange request for cloud API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenExchangeRequest {
     #[serde(rename = "tempToken")]
     pub temp_token: String,
 }
 
-/// Token exchange response from cloud API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenExchangeResponse {
     #[serde(rename = "secretToken")]
     pub secret_token: String,
 }
 
-/// Cloud state response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudState {
     pub connected: bool,
@@ -86,7 +81,6 @@ pub struct CloudState {
     pub app_url: Option<String>,
 }
 
-/// WebRTC session request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebRTCSessionRequest {
     pub sd: String,

@@ -1,16 +1,3 @@
-//! USB gadget configuration and management.
-//!
-//! This module provides the core USB gadget functionality including:
-//! - USB gadget creation and configuration
-//! - HID device setup (keyboard, mouse)
-//! - Mass storage device configuration
-//! - ConfigFS management and UDC binding
-//!
-//! Safety:
-//! - All file operations use standard library for simplicity
-//! - Error handling follows Rust best practices
-//! - Resource management is automatic through Rust ownership
-
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,7 +11,6 @@ use super::descriptors::{
     ABSOLUTE_MOUSE_REPORT_DESC, KEYBOARD_REPORT_DESC, RELATIVE_MOUSE_REPORT_DESC,
 };
 
-/// USB gadget configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GadgetConfig {
     pub vendor_id: String,
@@ -38,8 +24,8 @@ pub struct GadgetConfig {
 impl Default for GadgetConfig {
     fn default() -> Self {
         Self {
-            vendor_id: "0x1d6b".to_string(),  // The Linux Foundation
-            product_id: "0x0104".to_string(), // Multifunction Composite Gadget
+            vendor_id: "0x1d6b".to_string(),
+            product_id: "0x0104".to_string(),
             serial_number: String::new(),
             manufacturer: "RustKVM".to_string(),
             product: "RustKVM USB Emulation Device".to_string(),
@@ -48,7 +34,6 @@ impl Default for GadgetConfig {
     }
 }
 
-/// USB device configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceConfig {
     pub absolute_mouse: bool,
@@ -63,7 +48,6 @@ impl Default for DeviceConfig {
     }
 }
 
-/// USB gadget configuration item
 #[derive(Debug, Clone)]
 struct GadgetConfigItem {
     order: u32,
@@ -74,7 +58,6 @@ struct GadgetConfigItem {
     report_desc: Option<Vec<u8>>,
 }
 
-/// USB gadget manager
 pub struct UsbGadget {
     name: String,
     udc: String,
@@ -86,7 +69,6 @@ pub struct UsbGadget {
 }
 
 impl UsbGadget {
-    /// Create a new USB gadget
     pub fn new(name: String, enabled_devices: DeviceConfig, config: GadgetConfig) -> Result<Self> {
         let udc = Self::get_udc()?;
         let kvm_gadget_path = PathBuf::from("/sys/kernel/config/usb_gadget").join(&name);
@@ -106,7 +88,6 @@ impl UsbGadget {
         Ok(gadget)
     }
 
-    /// Initialize the USB gadget
     pub fn init(&self) -> Result<()> {
         let udcs = Self::get_udcs();
         if udcs.is_empty() {
@@ -120,15 +101,6 @@ impl UsbGadget {
         Ok(())
     }
 
-    /// Update gadget configuration
-    pub fn update_gadget_config(&self) -> Result<()> {
-        info!("updating USB gadget configuration");
-        self.configure_usb_gadget(true)?;
-        info!("USB gadget configuration updated");
-        Ok(())
-    }
-
-    /// Get current USB state
     pub fn get_usb_state(&self) -> String {
         let state_file = PathBuf::from("/sys/class/udc").join(&self.udc).join("state");
 
@@ -137,21 +109,6 @@ impl UsbGadget {
             .unwrap_or_else(|_| "unknown".to_string())
     }
 
-    /// Check if UDC is bound
-    pub fn is_udc_bound(&self) -> Result<bool> {
-        let udc_file_path = PathBuf::from("/sys/bus/platform/drivers/dwc3").join(&self.udc);
-        Ok(udc_file_path.exists())
-    }
-
-    /// Bind UDC
-    pub fn bind_udc(&self) -> Result<()> {
-        let bind_path = PathBuf::from("/sys/bus/platform/drivers/dwc3/bind");
-        std::fs::write(&bind_path, &self.udc)
-            .with_context(|| format!("failed to bind UDC: {}", self.udc))?;
-        Ok(())
-    }
-
-    /// Unbind UDC
     pub fn unbind_udc(&self) -> Result<()> {
         let udc_file = self.kvm_gadget_path.join("UDC");
         std::fs::write(&udc_file, "").with_context(|| {
@@ -160,43 +117,9 @@ impl UsbGadget {
         Ok(())
     }
 
-    /// Get UDC name
     pub fn get_udc_name(&self) -> &str {
         &self.udc
     }
-
-    /// Get gadget path
-    pub fn get_gadget_path(&self) -> &Path {
-        &self.kvm_gadget_path
-    }
-
-    /// Get config path
-    pub fn get_config_path(&self) -> &Path {
-        &self.config_c1_path
-    }
-
-    /// Override gadget config for a specific item and attribute
-    pub fn override_gadget_config(
-        &mut self,
-        item_key: &str,
-        item_attr: &str,
-        value: String,
-    ) -> Result<bool> {
-        let item = self
-            .config_map
-            .get_mut(item_key)
-            .ok_or_else(|| anyhow!("config item {} not found", item_key))?;
-
-        if item.attrs.get(item_attr) == Some(&value) {
-            return Ok(false);
-        }
-
-        item.attrs.insert(item_attr.to_string(), value);
-        info!(item_key, item_attr, "overriding gadget config");
-        Ok(true)
-    }
-
-    // Private methods
 
     fn get_udc() -> Result<String> {
         let udcs = Self::get_udcs();
@@ -235,17 +158,16 @@ impl UsbGadget {
     fn create_default_config_map() -> HashMap<String, GadgetConfigItem> {
         let mut config_map = HashMap::new();
 
-        // Base configuration
         config_map.insert(
             "base".to_string(),
             GadgetConfigItem {
                 order: 0,
                 path: Vec::new(),
                 attrs: HashMap::from([
-                    ("bcdUSB".to_string(), "0x0320".to_string()), // USB 3.x
-                    ("idVendor".to_string(), "0x1d6b".to_string()), // The Linux Foundation
-                    ("idProduct".to_string(), "0x0104".to_string()), // Multifunction Composite Gadget
-                    ("bcdDevice".to_string(), "0x0100".to_string()), // USB2
+                    ("bcdUSB".to_string(), "0x0320".to_string()),
+                    ("idVendor".to_string(), "0x1d6b".to_string()),
+                    ("idProduct".to_string(), "0x0104".to_string()),
+                    ("bcdDevice".to_string(), "0x0100".to_string()),
                 ]),
                 config_attrs: HashMap::new(),
                 config_path: None,
@@ -253,7 +175,6 @@ impl UsbGadget {
             },
         );
 
-        // Base info
         config_map.insert(
             "base_info".to_string(),
             GadgetConfigItem {
@@ -273,20 +194,18 @@ impl UsbGadget {
             },
         );
 
-        // Config c.1 root attributes (e.g., MaxPower)
         config_map.insert(
             "config_c1".to_string(),
             GadgetConfigItem {
                 order: 2,
                 path: Vec::new(),
                 attrs: HashMap::new(),
-                config_attrs: HashMap::from([("MaxPower".to_string(), "900".to_string())]), // USB 3.x supports up to 900mA
+                config_attrs: HashMap::from([("MaxPower".to_string(), "900".to_string())]),
                 config_path: Some(Vec::new()),
                 report_desc: None,
             },
         );
 
-        // Keyboard HID
         config_map.insert(
             "keyboard".to_string(),
             GadgetConfigItem {
@@ -304,7 +223,6 @@ impl UsbGadget {
             },
         );
 
-        // Absolute mouse HID
         config_map.insert(
             "absolute_mouse".to_string(),
             GadgetConfigItem {
@@ -322,7 +240,6 @@ impl UsbGadget {
             },
         );
 
-        // Relative mouse HID
         config_map.insert(
             "relative_mouse".to_string(),
             GadgetConfigItem {
@@ -340,7 +257,6 @@ impl UsbGadget {
             },
         );
 
-        // Mass storage base
         config_map.insert(
             "mass_storage_base".to_string(),
             GadgetConfigItem {
@@ -353,7 +269,6 @@ impl UsbGadget {
             },
         );
 
-        // Mass storage lun0
         config_map.insert(
             "mass_storage_lun0".to_string(),
             GadgetConfigItem {
@@ -384,13 +299,11 @@ impl UsbGadget {
             return;
         }
 
-        // Update vendor and product IDs
         if let Some(base) = self.config_map.get_mut("base") {
             base.attrs.insert("idVendor".to_string(), self.custom_config.vendor_id.clone());
             base.attrs.insert("idProduct".to_string(), self.custom_config.product_id.clone());
         }
 
-        // Update strings
         if let Some(base_info) = self.config_map.get_mut("base_info") {
             base_info
                 .attrs
@@ -415,7 +328,6 @@ impl UsbGadget {
 
     fn configure_usb_gadget(&self, reset_usb: bool) -> Result<()> {
         self.mount_configfs()?;
-        // self.create_config_path()?;
         self.write_gadget_config()?;
 
         if reset_usb {
@@ -427,14 +339,12 @@ impl UsbGadget {
 
     fn mount_configfs(&self) -> Result<()> {
         let configfs_path = Path::new("/sys/kernel/config");
-        // Ensure directory exists
         if !configfs_path.exists() {
             std::fs::create_dir_all(configfs_path).with_context(|| {
                 format!("failed to create configfs directory: {}", configfs_path.display())
             })?;
         }
 
-        // Check mount state via /proc/mounts and mount if needed
         let mounted = std::fs::read_to_string("/proc/mounts")
             .ok()
             .map(|s| {
@@ -463,7 +373,6 @@ impl UsbGadget {
     }
 
     fn create_config_path(&self) -> Result<()> {
-        // Create configs/c.1 directory
         std::fs::create_dir_all(&self.config_c1_path).with_context(|| {
             format!("failed to create config path: {}", self.config_c1_path.display())
         })?;
@@ -473,14 +382,12 @@ impl UsbGadget {
     }
 
     fn write_gadget_config(&self) -> Result<()> {
-        // Create gadget base directory
         std::fs::create_dir_all(&self.kvm_gadget_path).with_context(|| {
             format!("failed to create gadget path: {}", self.kvm_gadget_path.display())
         })?;
 
         let _ = std::fs::write(self.kvm_gadget_path.join("UDC"), "");
 
-        // Get ordered config items - optimize by pre-allocating
         let mut ordered_items = Vec::with_capacity(self.config_map.len());
         ordered_items.extend(self.config_map.iter());
         ordered_items.sort_by_key(|(_, item)| item.order);
@@ -493,7 +400,6 @@ impl UsbGadget {
 
         self.create_config_path()?;
 
-        // Process each config item
         for (key, item) in ordered_items {
             if !self.is_gadget_config_item_enabled(key) {
                 self.disable_gadget_item_config(item)?;
@@ -503,10 +409,8 @@ impl UsbGadget {
             self.write_gadget_item_config(item)?;
         }
 
-        // Reorder function symlinks under configs/c.1 to ensure stable order expected by configfs
         self.reorder_config_symlinks()?;
 
-        // Write UDC binding
         self.write_udc()?;
 
         Ok(())
@@ -550,7 +454,6 @@ impl UsbGadget {
             }
         }
 
-        // Create gadget item directory
         let gadget_item_path = self.build_path_from_components(&self.kvm_gadget_path, &item.path);
         if gadget_item_path != self.kvm_gadget_path {
             std::fs::create_dir_all(&gadget_item_path).with_context(|| {
@@ -558,22 +461,17 @@ impl UsbGadget {
             })?;
         }
 
-        // HID: attributes before report_desc (subclass -> protocol -> report_length -> report_desc)
         let is_hid = item.path.last().map(|s| s.starts_with("hid.usb")).unwrap_or(false);
         if is_hid {
-            // 1) subclass
             if let Some(v) = item.attrs.get("subclass") {
                 self.write_file_content(&gadget_item_path.join("subclass"), v)?;
             }
-            // 2) protocol
             if let Some(v) = item.attrs.get("protocol") {
                 self.write_file_content(&gadget_item_path.join("protocol"), v)?;
             }
-            // 3) report_length
             if let Some(v) = item.attrs.get("report_length") {
                 self.write_file_content(&gadget_item_path.join("report_length"), v)?;
             }
-            // 4) report_desc
             if let Some(report_desc) = &item.report_desc {
                 self.write_file_content_bytes(&gadget_item_path.join("report_desc"), report_desc)?;
             }
@@ -585,7 +483,6 @@ impl UsbGadget {
                 self.write_file_content(&attr_path, attr_value)?;
             }
         } else {
-            // non-HID: keep existing flow
             for (attr_name, attr_value) in &item.attrs {
                 let attr_path = gadget_item_path.join(attr_name);
                 self.write_file_content(&attr_path, attr_value)?;
@@ -595,7 +492,6 @@ impl UsbGadget {
             }
         }
 
-        // Config attributes (e.g., strings/0x409, MaxPower at root under configs/c.1)
         if let Some(config_path) = &item.config_path
             && !item.config_attrs.is_empty()
         {
@@ -615,7 +511,6 @@ impl UsbGadget {
             }
         }
 
-        // Create function symlink under configs/c.1 (only when config_attrs empty)
         if let Some(config_path) = &item.config_path
             && item.config_attrs.is_empty()
         {
@@ -638,9 +533,7 @@ impl UsbGadget {
         Ok(())
     }
 
-    /// Ensure symlinks under configs/c.1 are created in a deterministic order
     fn reorder_config_symlinks(&self) -> Result<()> {
-        // Collect expected symlinks in order based on config_map ordering
         let mut ordered_items = Vec::with_capacity(self.config_map.len());
         ordered_items.extend(self.config_map.iter());
         ordered_items.sort_by_key(|(_, item)| item.order);
@@ -650,7 +543,6 @@ impl UsbGadget {
             if !self.is_gadget_config_item_enabled(key) {
                 continue;
             }
-            // Only function links (config_path present, but no config_attrs)
             if let Some(cfg_path) = &item.config_path {
                 if !item.config_attrs.is_empty() {
                     continue;
@@ -661,7 +553,6 @@ impl UsbGadget {
             }
         }
 
-        // Remove existing symlinks (keep other entries like strings/*)
         if self.config_c1_path.exists() {
             for entry in std::fs::read_dir(&self.config_c1_path)
                 .with_context(|| "failed to read configs/c.1 directory")?
@@ -676,7 +567,6 @@ impl UsbGadget {
             }
         }
 
-        // Recreate symlinks in the expected order
         for (link, target) in expected {
             std::os::unix::fs::symlink(&target, &link).with_context(|| {
                 format!(
@@ -690,7 +580,6 @@ impl UsbGadget {
         Ok(())
     }
 
-    /// Helper function to build paths from components - optimized to reduce allocations
     fn build_path_from_components(&self, base: &Path, components: &[String]) -> PathBuf {
         if components.is_empty() {
             return base.to_path_buf();
@@ -713,7 +602,6 @@ impl UsbGadget {
     }
 
     fn rebind_usb(&self, ignore_unbind_error: bool) -> Result<()> {
-        // Unbind from UDC
         let unbind_path = PathBuf::from("/sys/bus/platform/drivers/dwc3/unbind");
         if let Err(e) = std::fs::write(&unbind_path, &self.udc) {
             if !ignore_unbind_error {
@@ -722,7 +610,6 @@ impl UsbGadget {
             warn!("failed to unbind UDC (ignored): {}", e);
         }
 
-        // Bind to UDC
         let bind_path = PathBuf::from("/sys/bus/platform/drivers/dwc3/bind");
         std::fs::write(&bind_path, &self.udc).with_context(|| "failed to bind UDC")?;
 
@@ -756,7 +643,7 @@ impl UsbGadget {
                 if let Ok(s) = fs::read_to_string(&udc_file)
                     && s.trim() == udc
                 {
-                    let _ = fs::write(&udc_file, ""); // best-effort unbind
+                    let _ = fs::write(&udc_file, "");
                     info!("force-unbound conflicting gadget '{}' from UDC {}", name, udc);
                 }
             }
@@ -766,7 +653,6 @@ impl UsbGadget {
 
 impl Drop for UsbGadget {
     fn drop(&mut self) {
-        // Cleanup when gadget is dropped
         if let Err(e) = self.unbind_udc() {
             warn!("failed to unbind UDC during cleanup: {}", e);
         }

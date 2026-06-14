@@ -7,7 +7,6 @@ use tracing::{debug, warn};
 
 use crate::config::{get_config_manager, get_dev_mode_state};
 
-/// Extract Basic Auth credentials from Authorization header
 fn extract_basic_auth(auth_header: &str) -> Option<(String, String)> {
     if !auth_header.starts_with("Basic ") {
         return None;
@@ -23,7 +22,6 @@ fn extract_basic_auth(auth_header: &str) -> Option<(String, String)> {
     None
 }
 
-/// Authentication middleware for protected routes
 #[handler]
 pub async fn auth_middleware(
     req: &mut Request,
@@ -34,31 +32,26 @@ pub async fn auth_middleware(
     let config_manager = get_config_manager();
     let config = config_manager.get().await;
 
-    // If noPassword mode, allow access
     if config.local_auth_mode == "noPassword" {
         debug!("Authentication bypassed: noPassword mode");
         return;
     }
 
-    // Check for auth token in cookies
     if let Some(auth_cookie) = req.cookie("authToken") {
         let auth_token = auth_cookie.value();
 
-        // Validate auth token using config manager
         if config_manager.validate_auth_token(auth_token).await {
             debug!("Authentication successful: valid auth token");
             return;
         }
     }
 
-    // Authentication failed
     warn!("Authentication failed: invalid or missing auth token");
     res.status_code(StatusCode::UNAUTHORIZED);
     res.render(Json(json!({"error": "Unauthorized"})));
     ctrl.skip_rest();
 }
 
-/// Developer mode authentication middleware
 #[handler]
 pub async fn developer_auth_middleware(
     req: &mut Request,
@@ -69,7 +62,6 @@ pub async fn developer_auth_middleware(
     let config_manager = get_config_manager();
     let config = config_manager.get().await;
 
-    // Check if developer mode is enabled
     match get_dev_mode_state().await {
         Ok(dev_state) => {
             if !dev_state.enabled {
@@ -89,7 +81,6 @@ pub async fn developer_auth_middleware(
         }
     }
 
-    // Check if noPassword mode (not allowed for developer routes)
     if config.local_auth_mode == "noPassword" {
         warn!("Developer mode access denied: noPassword mode");
         res.status_code(StatusCode::FORBIDDEN);
@@ -98,19 +89,15 @@ pub async fn developer_auth_middleware(
         return;
     }
 
-    // Check for Basic Auth header
     if let Some(auth_header) = req.headers().get("Authorization")
         && let Ok(auth_str) = auth_header.to_str()
         && let Some((_, password)) = extract_basic_auth(auth_str)
+        && config_manager.validate_password(&password).await
     {
-        // Validate password using config manager
-        if config_manager.validate_password(&password).await {
-            debug!("Developer authentication successful: valid Basic Auth");
-            return;
-        }
+        debug!("Developer authentication successful: valid Basic Auth");
+        return;
     }
 
-    // Authentication failed - request Basic Auth
     warn!("Developer authentication failed: invalid or missing Basic Auth");
     res.headers_mut()
         .insert("WWW-Authenticate", HeaderValue::from_static("Basic realm=\"RustKVM\""));
@@ -119,8 +106,6 @@ pub async fn developer_auth_middleware(
     ctrl.skip_rest();
 }
 
-/// Public route middleware (no authentication required)
-/// Can be used to add logging or other processing for public routes
 #[handler]
 pub async fn public_middleware(
     req: &mut Request,
@@ -129,5 +114,4 @@ pub async fn public_middleware(
     _ctrl: &mut FlowCtrl,
 ) {
     debug!("Public route accessed: {}", req.uri().path());
-    // No authentication required, just continue
 }

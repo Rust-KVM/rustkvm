@@ -1,0 +1,22 @@
+[package]
+name                   = "rkvm-net"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+
+[lints]
+workspace = true
+
+[dependencies]
+if-addrs.workspace    = true
+macaddr.workspace     = true
+mdns-sd.workspace     = true
+once_cell.workspace   = true
+parking_lot.workspace = true
+serde.workspace       = true
+serde_json.workspace  = true
+thiserror.workspace   = true
+tokio.workspace       = true
+tracing.workspace     = true

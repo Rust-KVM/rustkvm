@@ -1,16 +1,12 @@
-use std::collections::HashMap;
-
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-/// Constants for keyboard macro limits
 pub const MAX_MACROS_PER_DEVICE: usize = 25;
 pub const MAX_STEPS_PER_MACRO: usize = 10;
 pub const MAX_KEYS_PER_STEP: usize = 10;
 pub const MIN_STEP_DELAY: u32 = 50;
 pub const MAX_STEP_DELAY: u32 = 2000;
 
-/// Wake-on-LAN device configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WakeOnLanDevice {
     pub name: String,
@@ -18,7 +14,6 @@ pub struct WakeOnLanDevice {
     pub mac_address: String,
 }
 
-/// Keyboard macro step configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct KeyboardMacroStep {
     pub keys: Vec<String>,
@@ -27,7 +22,6 @@ pub struct KeyboardMacroStep {
 }
 
 impl KeyboardMacroStep {
-    /// Validate and normalize the step configuration
     pub fn validate(&mut self) -> Result<(), String> {
         if self.keys.len() > MAX_KEYS_PER_STEP {
             return Err(format!("Too many keys in step (max {})", MAX_KEYS_PER_STEP));
@@ -39,7 +33,6 @@ impl KeyboardMacroStep {
     }
 }
 
-/// Keyboard macro configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct KeyboardMacro {
     pub id: String,
@@ -50,7 +43,6 @@ pub struct KeyboardMacro {
 }
 
 impl KeyboardMacro {
-    /// Validate the macro configuration
     pub fn validate(&mut self) -> anyhow::Result<()> {
         if self.name.trim().is_empty() {
             bail!("Macro name cannot be empty");
@@ -74,8 +66,8 @@ impl KeyboardMacro {
     }
 }
 
-/// USB gadget configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct UsbConfig {
     pub vendor_id: String,
     pub product_id: String,
@@ -87,8 +79,8 @@ pub struct UsbConfig {
 impl Default for UsbConfig {
     fn default() -> Self {
         Self {
-            vendor_id: "0x1d6b".to_string(),  // The Linux Foundation
-            product_id: "0x0104".to_string(), // Multifunction Composite Gadget
+            vendor_id: "0x1d6b".to_string(),
+            product_id: "0x0104".to_string(),
             serial_number: String::new(),
             manufacturer: "RustKVM".to_string(),
             product: "USB Emulation Device".to_string(),
@@ -96,8 +88,8 @@ impl Default for UsbConfig {
     }
 }
 
-/// USB device capabilities
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct UsbDevices {
     pub absolute_mouse: bool,
     pub relative_mouse: bool,
@@ -111,14 +103,14 @@ impl Default for UsbDevices {
     }
 }
 
-/// Network configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct NetworkConfig {
-    #[serde(default, deserialize_with = "deserialize_null_as_none")]
+    #[serde(default)]
     pub hostname: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_null_as_none")]
+    #[serde(default)]
     pub http_proxy: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_null_as_none")]
+    #[serde(default)]
     pub domain: Option<String>,
     #[serde(default = "default_ipv4_mode")]
     pub ipv4_mode: String,
@@ -138,24 +130,6 @@ pub struct NetworkConfig {
     pub time_sync_disable_fallback: bool,
     #[serde(default = "default_time_sync_parallel")]
     pub time_sync_parallel: u32,
-    #[serde(flatten)]
-    pub additional_settings: HashMap<String, serde_json::Value>,
-}
-
-fn deserialize_null_as_none<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(Option::deserialize(deserializer)?.flatten())
-}
-
-fn deserialize_null_default_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: serde::Deserialize<'de>,
-{
-    let opt = Option::<Vec<T>>::deserialize(deserializer)?;
-    Ok(opt.unwrap_or_default())
 }
 
 fn default_ipv4_mode() -> String {
@@ -197,28 +171,43 @@ impl Default for NetworkConfig {
             time_sync_ordering: vec!["ntp".to_string(), "http".to_string()],
             time_sync_disable_fallback: false,
             time_sync_parallel: default_time_sync_parallel(),
-            additional_settings: HashMap::new(),
         }
     }
 }
 
-/// Main application configuration
+fn default_cloud_url() -> String {
+    "https://api.rustkvm.com".to_string()
+}
+fn default_cloud_app_url() -> String {
+    "https://app.rustkvm.com".to_string()
+}
+fn default_log_level() -> String {
+    "INFO".to_string()
+}
+fn default_device_id() -> String {
+    crate::hardware::hw::get_device_id()
+}
+
+/// Accepts a USB vendor/product id as `0x1234` or bare `1234` hex (1-4 digits).
+fn is_valid_usb_id(s: &str) -> bool {
+    let hex = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    !hex.is_empty() && hex.len() <= 4 && u16::from_str_radix(hex, 16).is_ok()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
-    // Cloud settings
+    #[serde(default = "default_cloud_url")]
     pub cloud_url: String,
+    #[serde(default = "default_cloud_app_url")]
     pub cloud_app_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cloud_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub google_identity: Option<String>,
-
-    // Feature flags
     pub jiggler_enabled: bool,
     pub auto_update_enabled: bool,
     pub include_pre_release: bool,
-
-    // Authentication
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hashed_password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -226,46 +215,36 @@ pub struct Config {
     #[serde(alias = "localAuthMode")]
     pub local_auth_mode: String,
     pub local_loopback_only: bool,
-
-    // Device configuration
-    #[serde(default, deserialize_with = "deserialize_null_default_vec")]
-    pub wake_on_lan_devices: Vec<WakeOnLanDevice>,
-    #[serde(default)]
-    pub keyboard_macros: Vec<KeyboardMacro>,
     pub keyboard_layout: String,
     #[serde(skip_serializing_if = "Option::is_none", alias = "hdmi_edid_string")]
     pub edid_string: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_extension: Option<String>,
-
-    // Display settings
     pub display_rotation: String,
-    pub display_max_brightness: u32,
+    pub display_max_brightness: u8,
     pub display_dim_after_sec: u32,
     pub display_off_after_sec: u32,
-
-    // TLS configuration
     pub tls_mode: String,
+    #[serde(default = "default_log_level")]
+    pub default_log_level: String,
+    #[serde(default = "default_device_id")]
+    pub device_id: String,
 
-    // USB configuration
+    #[serde(default)]
+    pub wake_on_lan_devices: Vec<WakeOnLanDevice>,
+    #[serde(default)]
+    pub keyboard_macros: Vec<KeyboardMacro>,
+
     pub usb_config: UsbConfig,
     pub usb_devices: UsbDevices,
-
-    // Network configuration
     pub network_config: NetworkConfig,
-
-    // Logging
-    pub default_log_level: String,
-
-    // Device identity
-    pub device_id: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            cloud_url: "https://api.rustkvm.com".to_string(),
-            cloud_app_url: "https://app.rustkvm.com".to_string(),
+            cloud_url: default_cloud_url(),
+            cloud_app_url: default_cloud_app_url(),
             cloud_token: None,
             google_identity: None,
             jiggler_enabled: false,
@@ -273,33 +252,31 @@ impl Default for Config {
             include_pre_release: false,
             hashed_password: None,
             local_auth_token: None,
-            local_auth_mode: "noPassword".to_string(),
+            local_auth_mode: String::new(),
             local_loopback_only: false,
-            wake_on_lan_devices: Vec::new(),
-            keyboard_macros: Vec::new(),
             keyboard_layout: "en_US".to_string(),
             edid_string: None,
             active_extension: None,
             display_rotation: "270".to_string(),
             display_max_brightness: 64,
-            display_dim_after_sec: 120,  // 2 minutes
-            display_off_after_sec: 1800, // 30 minutes
+            display_dim_after_sec: 120,
+            display_off_after_sec: 1800,
             tls_mode: String::new(),
+            default_log_level: default_log_level(),
+            device_id: default_device_id(),
+            wake_on_lan_devices: Vec::new(),
+            keyboard_macros: Vec::new(),
             usb_config: UsbConfig::default(),
             usb_devices: UsbDevices::default(),
             network_config: NetworkConfig::default(),
-            default_log_level: "INFO".to_string(),
-            device_id: crate::hardware::hw::get_device_id(),
         }
     }
 }
 
 impl Config {
-    /// Validate the entire configuration
     pub fn validate(&mut self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
 
-        // Validate keyboard macros
         if self.keyboard_macros.len() > MAX_MACROS_PER_DEVICE {
             errors.push(format!("Too many macros (max {})", MAX_MACROS_PER_DEVICE));
         }
@@ -310,26 +287,44 @@ impl Config {
             }
         }
 
-        // Validate display settings
-        if self.display_max_brightness > 255 {
-            errors.push("Display max brightness cannot exceed 255".to_string());
+        if !["0", "90", "180", "270"].contains(&self.display_rotation.as_str()) {
+            errors.push(format!(
+                "Invalid display rotation '{}', must be 0/90/180/270",
+                self.display_rotation
+            ));
         }
 
-        // Validate auth mode
-        if !["password", "noPassword"].contains(&self.local_auth_mode.as_str()) {
+        if !["", "self-signed", "custom"].contains(&self.tls_mode.as_str()) {
+            errors.push(format!(
+                "Invalid tls_mode '{}', must be '', 'self-signed' or 'custom'",
+                self.tls_mode
+            ));
+        }
+
+        if !is_valid_usb_id(&self.usb_config.vendor_id) {
+            errors.push(format!("Invalid USB vendor_id '{}'", self.usb_config.vendor_id));
+        }
+        if !is_valid_usb_id(&self.usb_config.product_id) {
+            errors.push(format!("Invalid USB product_id '{}'", self.usb_config.product_id));
+        }
+
+        if !self.local_auth_mode.is_empty()
+            && !["password", "noPassword"].contains(&self.local_auth_mode.as_str())
+        {
             errors.push("Invalid auth mode, must be 'password' or 'noPassword'".to_string());
         }
+
+        self.network_config.time_sync_parallel =
+            self.network_config.time_sync_parallel.clamp(1, 16);
 
         if errors.is_empty() { Ok(()) } else { Err(errors) }
     }
 
-    /// Check if device requires setup
     pub fn is_setup_required(&self) -> bool {
         self.local_auth_mode.is_empty()
     }
 }
 
-/// Developer mode state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DevModeState {
     pub enabled: bool,

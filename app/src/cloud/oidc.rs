@@ -6,9 +6,8 @@ use id_token_verifier::client::*;
 use id_token_verifier::validation::*;
 use id_token_verifier::*;
 use tokio::time::timeout;
-use tracing::{debug, warn};
+use tracing::debug;
 
-/// OIDC verification configuration
 #[derive(Clone, Debug)]
 pub struct OidcConfig {
     pub issuer_metadata_url: String,
@@ -42,7 +41,6 @@ impl Default for OidcConfig {
     }
 }
 
-/// OIDC authenticator backed by `id_token_verifier`
 pub struct OidcAuthenticator {
     client_config: JwksClientConfig,
     cache_config: JwksCacheConfig,
@@ -52,7 +50,6 @@ pub struct OidcAuthenticator {
 }
 
 impl OidcAuthenticator {
-    /// Creates a new OIDC authenticator instance
     pub async fn new_with_config(config: OidcConfig) -> Result<Self> {
         let client_config = JwksClientConfig::builder()
             .jwks_url(JwksUrl::discover(&config.issuer_metadata_url)?)
@@ -92,12 +89,10 @@ impl OidcAuthenticator {
         })
     }
 
-    /// Creates a new OIDC authenticator with defaults
     pub async fn new() -> Result<Self> {
         Self::new_with_config(OidcConfig::default()).await
     }
 
-    /// Verifies an OIDC token with a specific client ID
     pub async fn verify_token_with_client_id(
         &self,
         token: &str,
@@ -107,7 +102,6 @@ impl OidcAuthenticator {
         self.verify_token_internal(token, Some(&[client_id.to_string()])).await
     }
 
-    /// Verifies an OIDC token using default allowed audiences (if configured)
     pub async fn verify_token_skip_client_id(&self, token: &str) -> Result<String> {
         debug!("Verifying OIDC token (using default audiences)");
         let default_aud = self
@@ -115,20 +109,6 @@ impl OidcAuthenticator {
             .as_ref()
             .map(|v| v.iter().map(|a| a.0.clone()).collect::<Vec<_>>());
         self.verify_token_internal(token, default_aud.as_deref()).await
-    }
-
-    /// Verifies that the provided token matches the expected Google identity
-    pub async fn verify_identity_match(&self, token: &str, expected_identity: &str) -> Result<()> {
-        debug!("Verifying OIDC token identity match");
-        let google_identity = self.verify_token_skip_client_id(token).await?;
-        if google_identity != expected_identity {
-            warn!(
-                "Google identity mismatch: expected '{}' , got '{}'",
-                expected_identity, google_identity
-            );
-            return Err(anyhow!("Google identity mismatch"));
-        }
-        Ok(())
     }
 
     async fn verify_token_internal(

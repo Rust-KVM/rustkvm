@@ -82,7 +82,6 @@ impl WebRtcReadHandler for WebRtcBridge {
         let end = start + size as u64;
         let need = (end - start) as usize;
 
-        // Snapshot sender
         let sender =
             TRANSPORT.sender.read().clone().ok_or_else(|| anyhow!("disk channel not ready"))?;
 

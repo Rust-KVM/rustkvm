@@ -1,0 +1,44 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    versioning-strategy: increase-if-necessary
+    groups:
+      patch-updates:
+        update-types: [patch]
+      minor-updates:
+        update-types: [minor]
+    ignore:
+      # Manually-pinned for upstream compat / API stability — see Cargo.toml
+      - dependency-name: socketioxide
+      - dependency-name: socketioxide-core
+      - dependency-name: socketioxide-parser-common
+      - dependency-name: reqwest
+        update-types: [version-update:semver-major]
+      - dependency-name: webrtc
+        update-types: [version-update:semver-major]
+      - dependency-name: rustls
+        update-types: [version-update:semver-major]
+      - dependency-name: libc
+        update-types: [version-update:semver-major]
+    labels:
+      - dependencies
+      - rust
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - github-actions

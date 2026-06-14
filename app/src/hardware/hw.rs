@@ -36,28 +36,6 @@ pub fn extract_serial_number() -> Result<String> {
     bail!("No serial number found in /proc/cpuinfo")
 }
 
-pub fn read_otp_entropy() -> Result<Vec<u8>> {
-    let file = open("/sys/bus/nvmem/devices/rockchip-otp0/nvmem", OFlags::RDONLY, Mode::empty())
-        .context("Failed to open OTP entropy file")?;
-
-    let mut content = Vec::new();
-    let mut buffer = [0u8; 4096];
-
-    loop {
-        match read(&file, &mut buffer) {
-            Ok(0) => break,
-            Ok(n) => content.extend_from_slice(&buffer[..n]),
-            Err(e) => return Err(e).context("Failed to read OTP entropy"),
-        }
-    }
-
-    if content.len() < 28 {
-        bail!("OTP content too short (expected at least 28 bytes, got {})", content.len())
-    }
-
-    Ok(content[0x17..0x1C].to_vec())
-}
-
 pub fn get_device_id() -> String {
     DEVICE_ID
         .get_or_init(|| match extract_serial_number() {
@@ -73,16 +51,6 @@ pub fn get_device_id() -> String {
         .clone()
 }
 
-pub fn get_default_hostname() -> String {
-    let device_id = get_device_id();
-
-    if device_id == "unknown_device_id" {
-        "rustkvm".to_string()
-    } else {
-        format!("rustkvm-{}", device_id.to_lowercase())
-    }
-}
-
 pub async fn run_watchdog(cancel_token: CancellationToken) -> Result<()> {
     let file = match open("/dev/watchdog", OFlags::WRONLY, Mode::empty()) {
         Ok(file) => file,
@@ -93,6 +61,7 @@ pub async fn run_watchdog(cancel_token: CancellationToken) -> Result<()> {
     };
 
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {

@@ -1,6 +1,3 @@
-// GStreamer pipeline implementation for RustKVM
-// Handles video and audio capture with hardware acceleration
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -13,17 +10,17 @@ use tracing::{debug, error, info, warn};
 
 use crate::video::VideoInputState;
 
-/// Video pipeline configuration
 #[derive(Debug, Clone)]
 pub struct VideoConfig {
     pub device: String,
     pub encoder: crate::cli::VideoEncoder,
     pub bitrate: u32,
     pub max_bitrate: u32,
-    pub gop_size: Option<i32>, // None = auto, -1 = FPS, positive = specific GOP
+    pub gop_size: Option<i32>,
     pub rc_mode: crate::cli::RateControlMode,
     pub level: String,
     pub profile: Option<String>,
+    pub fps: u32,
 }
 
 impl Default for VideoConfig {
@@ -37,79 +34,12 @@ impl Default for VideoConfig {
             rc_mode: crate::cli::RateControlMode::default(),
             level: "5.2".to_string(),
             profile: None,
+            fps: 60,
         }
     }
 }
 
 impl VideoConfig {
-    /// Create a new configuration with default values
-    #[inline]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set device path (builder pattern)
-    #[inline]
-    pub fn with_device(mut self, device: impl Into<String>) -> Self {
-        self.device = device.into();
-        self
-    }
-
-    /// Set bitrate (builder pattern)
-    #[inline]
-    pub fn with_bitrate(mut self, bitrate: u32, max_bitrate: u32) -> Self {
-        self.bitrate = bitrate;
-        self.max_bitrate = max_bitrate;
-        self
-    }
-
-    /// Set GOP size (builder pattern)
-    ///
-    /// * `-1` = use FPS as GOP (default behavior)
-    /// * positive value = specific GOP size
-    #[inline]
-    pub fn with_gop_size(mut self, gop: i32) -> Self {
-        self.gop_size = Some(gop);
-        self
-    }
-
-    /// Set encoder type (builder pattern)
-    #[inline]
-    pub fn with_encoder(mut self, encoder: crate::cli::VideoEncoder) -> Self {
-        self.encoder = encoder;
-        self
-    }
-
-    /// Set rate control mode (builder pattern)
-    #[inline]
-    pub fn with_rc_mode(mut self, rc_mode: crate::cli::RateControlMode) -> Self {
-        self.rc_mode = rc_mode;
-        self
-    }
-
-    /// Set codec level (builder pattern)
-    #[inline]
-    pub fn with_level(mut self, level: impl Into<String>) -> Self {
-        self.level = level.into();
-        self
-    }
-
-    /// Set codec profile (builder pattern)
-    #[inline]
-    pub fn with_profile(mut self, profile: impl Into<String>) -> Self {
-        self.profile = Some(profile.into());
-        self
-    }
-
-    /// Adjust bitrate by quality factor (builder pattern)
-    pub fn with_quality(mut self, quality: f32) -> Self {
-        let q = quality.clamp(0.1, 2.0);
-        self.bitrate = (20_000_000.0 * q) as u32;
-        self.max_bitrate = (60_000_000.0 * q) as u32;
-        self
-    }
-
-    /// Create from CLI arguments
     pub fn from_cli(args: &crate::cli::VideoArgs, quality: f32) -> Self {
         let q = quality.clamp(0.1, 2.0);
         Self {
@@ -121,17 +51,17 @@ impl VideoConfig {
             rc_mode: args.video_rc_mode,
             level: args.video_level.clone(),
             profile: args.video_profile.clone(),
+            fps: args.video_fps.max(1),
         }
     }
 }
 
-/// Audio pipeline configuration
 #[derive(Debug, Clone)]
 pub struct AudioConfig {
     pub device: String,
     pub sample_rate: u32,
     pub channels: u32,
-    pub bitrate: i32, // Opus bitrate range: 4000-650000
+    pub bitrate: i32,
 }
 
 impl Default for AudioConfig {
@@ -141,43 +71,6 @@ impl Default for AudioConfig {
 }
 
 impl AudioConfig {
-    /// Create a new configuration with default values
-    #[inline]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set device path (builder pattern)
-    #[inline]
-    pub fn with_device(mut self, device: impl Into<String>) -> Self {
-        self.device = device.into();
-        self
-    }
-
-    /// Set sample rate (builder pattern)
-    #[inline]
-    pub fn with_sample_rate(mut self, sample_rate: u32) -> Self {
-        self.sample_rate = sample_rate;
-        self
-    }
-
-    /// Set channels (builder pattern)
-    #[inline]
-    pub fn with_channels(mut self, channels: u32) -> Self {
-        self.channels = channels;
-        self
-    }
-
-    /// Set bitrate (builder pattern)
-    ///
-    /// Valid range for Opus: 4000-650000 bps
-    #[inline]
-    pub fn with_bitrate(mut self, bitrate: i32) -> Self {
-        self.bitrate = bitrate;
-        self
-    }
-
-    /// Create from CLI arguments
     pub fn from_cli(args: &crate::cli::AudioArgs) -> Self {
         Self {
             device: args.audio_device.clone(),
@@ -188,7 +81,6 @@ impl AudioConfig {
     }
 }
 
-/// Video pipeline with H.264 encoding
 pub struct VideoPipeline {
     pipeline: gst::Pipeline,
     appsink: gst_app::AppSink,
@@ -197,9 +89,7 @@ pub struct VideoPipeline {
 }
 
 impl VideoPipeline {
-    /// Create new video pipeline
     pub fn new(config: VideoConfig) -> Result<Self> {
-        // Validate configuration
         if config.bitrate == 0 || config.max_bitrate == 0 {
             anyhow::bail!("Bitrate must be non-zero");
         }
@@ -213,37 +103,44 @@ impl VideoPipeline {
         }
         let pipeline = gst::Pipeline::new();
 
-        // Create elements
         let v4l2src = gst::ElementFactory::make("v4l2src")
             .property("device", &config.device)
             .build()
             .context("Failed to create v4l2src")?;
 
-        // Video converter (will handle any format -> NV12)
         let videoconvert = gst::ElementFactory::make("videoconvert")
             .build()
             .context("Failed to create videoconvert")?;
 
-        // NV12 caps filter (force NV12 for encoder, but preserve source resolution/fps)
         let nv12_caps = gst::ElementFactory::make("capsfilter")
             .name("nv12_capsfilter")
             .build()
             .context("Failed to create nv12 capsfilter")?;
 
-        // Only specify format, let resolution and framerate pass through from source
         let nv12_caps_spec =
             gst_video::VideoCapsBuilder::new().format(gst_video::VideoFormat::Nv12).build();
         nv12_caps.set_property("caps", &nv12_caps_spec);
 
-        // Queue for buffering (minimal for low latency)
+        let videorate = gst::ElementFactory::make("videorate")
+            .property("drop-only", true)
+            .build()
+            .context("Failed to create videorate")?;
+
+        let rate_caps = gst::ElementFactory::make("capsfilter")
+            .name("rate_capsfilter")
+            .build()
+            .context("Failed to create framerate capsfilter")?;
+        let rate_caps_spec = gst_video::VideoCapsBuilder::new()
+            .framerate(gst::Fraction::new(config.fps as i32, 1))
+            .build();
+        rate_caps.set_property("caps", &rate_caps_spec);
+
         let queue = gst::ElementFactory::make("queue")
             .property("max-size-buffers", 2u32)
-            .property_from_str("leaky", "downstream") // Drop old frames if queue is full
+            .property_from_str("leaky", "downstream")
             .build()
             .context("Failed to create queue")?;
 
-        // H.264/H.265 encoder (Rockchip MPP) - configurable
-        // GOP will be set dynamically based on source framerate if not specified
         let encoder_name = config.encoder.gst_element_name();
         info!("Creating {} encoder for {}", encoder_name, config.encoder.codec_name());
 
@@ -254,7 +151,6 @@ impl VideoPipeline {
             .property("bps", config.bitrate)
             .property("bps-max", config.max_bitrate);
 
-        // Set profile if specified
         if let Some(ref profile) = config.profile {
             encoder_builder = encoder_builder.property_from_str("profile", profile);
         }
@@ -263,12 +159,10 @@ impl VideoPipeline {
             .build()
             .with_context(|| format!("Failed to create {}", encoder_name))?;
 
-        // Set GOP if specified, otherwise it will use encoder default or be set dynamically
         if let Some(gop) = config.gop_size {
             encoder.set_property("gop", gop);
         }
 
-        // Parser (h264parse or h265parse)
         let parser_name = config.encoder.parser_element_name();
         let parser = gst::ElementFactory::make(parser_name)
             .property("config-interval", -1i32)
@@ -276,7 +170,6 @@ impl VideoPipeline {
             .build()
             .with_context(|| format!("Failed to create {}", parser_name))?;
 
-        // AppSink to receive encoded data
         let appsink = gst_app::AppSink::builder()
             .name("video_appsink")
             .sync(false)
@@ -285,12 +178,13 @@ impl VideoPipeline {
             .drop(true)
             .build();
 
-        // Add all elements to pipeline
         pipeline
             .add_many([
                 &v4l2src,
                 &videoconvert,
                 &nv12_caps,
+                &videorate,
+                &rate_caps,
                 &queue,
                 &encoder,
                 &parser,
@@ -298,11 +192,12 @@ impl VideoPipeline {
             ])
             .context("Failed to add elements to pipeline")?;
 
-        // Link elements (no src_caps, direct from v4l2src)
         gst::Element::link_many([
             &v4l2src,
             &videoconvert,
             &nv12_caps,
+            &videorate,
+            &rate_caps,
             &queue,
             &encoder,
             &parser,
@@ -313,16 +208,13 @@ impl VideoPipeline {
         let running = Arc::new(AtomicBool::new(false));
         let encoder_for_state = encoder.clone();
 
-        // Setup dynamic GOP adjustment based on source framerate
         if config.gop_size.is_none() {
-            let encoder_clone = encoder.clone();
+            let encoder_clone = encoder;
             let pipeline_weak = pipeline.downgrade();
 
-            // Monitor state changes to set GOP after caps negotiation
             tokio::spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                // GStreamer operations must run in blocking context
                 tokio::task::spawn_blocking(move || {
                     if let Some(_pipeline) = pipeline_weak.upgrade()
                         && let Some(src_pad) = encoder_clone.static_pad("sink")
@@ -347,7 +239,6 @@ impl VideoPipeline {
         Ok(Self { pipeline, appsink, encoder: encoder_for_state, running })
     }
 
-    /// Start the pipeline
     pub fn start(&self) -> Result<()> {
         info!("Setting video pipeline to PLAYING state...");
 
@@ -365,7 +256,6 @@ impl VideoPipeline {
         Ok(())
     }
 
-    /// Stop the pipeline
     pub fn stop(&self) -> Result<()> {
         self.running.store(false, Ordering::SeqCst);
 
@@ -377,14 +267,12 @@ impl VideoPipeline {
         Ok(())
     }
 
-    /// Set callback to receive encoded H.264 frames
     pub fn set_frame_callback<F>(&self, mut callback: F)
     where
-        F: FnMut(Vec<u8>, u64) + Send + 'static,
+        F: FnMut(bytes::Bytes, u64) + Send + 'static,
     {
         tracing::info!("Setting video frame callback on appsink");
 
-        // Use std::time in GStreamer callback context (not tokio runtime)
         let start_time = std::time::Instant::now();
         let first_frame = Arc::new(AtomicBool::new(false));
 
@@ -393,26 +281,24 @@ impl VideoPipeline {
                 .new_sample(move |appsink| {
                     tracing::debug!("Video appsink new_sample callback triggered");
                     let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
-                    let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
+                    let buffer = sample.buffer_owned().ok_or(gst::FlowError::Error)?;
 
-                    // Log first frame
                     if !first_frame.swap(true, Ordering::Relaxed) {
                         tracing::info!("First video frame received from GStreamer");
                     }
 
-                    // Map buffer for reading
-                    let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
-                    let data = map.as_slice().to_vec();
-
-                    // Calculate PTS in microseconds
                     let pts_us = if let Some(pts) = buffer.pts() {
                         pts.nseconds() / 1000
                     } else {
                         start_time.elapsed().as_micros() as u64
                     };
 
-                    // Call user callback
-                    callback(data, pts_us);
+                    let mapped =
+                        buffer.into_mapped_buffer_readable().map_err(|_| gst::FlowError::Error)?;
+                    let bytes = bytes::Bytes::from_owner(mapped);
+
+                    crate::observability::metrics::VIDEO_FRAMES_TOTAL.inc();
+                    callback(bytes, pts_us);
 
                     Ok(gst::FlowSuccess::Ok)
                 })
@@ -420,9 +306,6 @@ impl VideoPipeline {
         );
     }
 
-    /// Set callback to receive video state updates
-    ///
-    /// Uses active polling strategy similar to GOP adjustment for reliability
     pub fn set_state_callback<F>(&self, callback: F)
     where
         F: FnMut(VideoInputState) + Send + 'static,
@@ -430,15 +313,11 @@ impl VideoPipeline {
         let bus = self.pipeline.bus().expect("Pipeline should have a bus");
         let running = self.running.clone();
         let encoder = self.encoder.clone();
-        let callback = Arc::new(std::sync::Mutex::new(callback));
+        let callback = Arc::new(parking_lot::Mutex::new(callback));
 
-        // Strategy: Use both active polling AND bus monitoring for reliability
-
-        // 1. Active polling task (same as GOP adjustment)
-        let encoder_poll = encoder.clone();
+        let encoder_poll = encoder;
         let callback_poll = callback.clone();
         tokio::spawn(async move {
-            // Wait for caps negotiation (same delay as GOP)
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
             tokio::task::spawn_blocking(move || {
@@ -456,20 +335,18 @@ impl VideoPipeline {
                             fps.numer() as f64 / fps.denom() as f64
                         },
                     };
-                    info!(
+                    debug!(
                         "Video state extracted (active poll): {}x{} @ {:.1}fps",
                         state.width, state.height, state.frame_per_second
                     );
-                    if let Ok(mut cb) = callback_poll.lock() {
-                        cb(state);
-                    }
+                    let mut cb = callback_poll.lock();
+                    cb(state);
                 }
             })
             .await
             .ok();
         });
 
-        // 2. Bus monitoring for errors
         tokio::task::spawn_blocking(move || {
             while running.load(Ordering::SeqCst) {
                 if let Some(msg) = bus.timed_pop(gst::ClockTime::from_mseconds(100)) {
@@ -481,15 +358,15 @@ impl VideoPipeline {
                                 err.error(),
                                 err.debug()
                             );
-                            if let Ok(mut cb) = callback.lock() {
-                                cb(VideoInputState {
-                                    ready: false,
-                                    error: Some(format!("{}", err.error())),
-                                    width: 0,
-                                    height: 0,
-                                    frame_per_second: 0.0,
-                                });
-                            }
+                            let mut cb = callback.lock();
+                            cb(VideoInputState {
+                                ready: false,
+                                error: Some(format!("{}", err.error())),
+                                width: 0,
+                                height: 0,
+                                frame_per_second: 0.0,
+                            });
+                            drop(cb);
                             running.store(false, Ordering::SeqCst);
                             break;
                         }
@@ -519,7 +396,6 @@ impl Drop for VideoPipeline {
     }
 }
 
-/// Audio pipeline with Opus encoding
 pub struct AudioPipeline {
     pipeline: gst::Pipeline,
     appsink: gst_app::AppSink,
@@ -527,9 +403,7 @@ pub struct AudioPipeline {
 }
 
 impl AudioPipeline {
-    /// Create new audio pipeline
     pub fn new(config: AudioConfig) -> Result<Self> {
-        // Validate configuration
         if config.sample_rate == 0 {
             anyhow::bail!("Sample rate must be non-zero");
         }
@@ -541,45 +415,39 @@ impl AudioPipeline {
         }
         let pipeline = gst::Pipeline::new();
 
-        // Create elements
         let alsasrc = gst::ElementFactory::make("alsasrc")
             .property("device", &config.device)
-            .property("buffer-time", 20000i64) // 20ms buffer
-            .property("latency-time", 10000i64) // 10ms latency
+            .property("buffer-time", 20000i64)
+            .property("latency-time", 10000i64)
             .build()
             .context("Failed to create alsasrc")?;
 
-        // Audio converter
         let audioconvert = gst::ElementFactory::make("audioconvert")
             .build()
             .context("Failed to create audioconvert")?;
 
-        // Audio resampler
         let audioresample = gst::ElementFactory::make("audioresample")
             .build()
             .context("Failed to create audioresample")?;
 
-        // Queue for buffering (small for low latency)
         let queue = gst::ElementFactory::make("queue")
             .property("max-size-buffers", 2u32)
             .property("max-size-bytes", 0u32)
             .property("max-size-time", 0u64)
-            .property_from_str("leaky", "downstream") // Drop old buffers under backpressure
+            .property_from_str("leaky", "downstream")
             .build()
             .context("Failed to create audio queue")?;
 
-        // Opus encoder (optimized for low latency)
         let opusenc = gst::ElementFactory::make("opusenc")
-            .property("bitrate", config.bitrate) // i32: 4000-650000
-            .property_from_str("frame-size", "10") // Enum: 10ms frames for low latency
-            .property("complexity", 4i32) // i32: 0-10, balance between quality and CPU
-            .property("inband-fec", true) // Boolean: forward error correction
-            .property("dtx", false) // Boolean: disable DTX for consistent latency
-            .property_from_str("audio-type", "restricted-lowdelay") // Enum: low-latency mode
+            .property("bitrate", config.bitrate)
+            .property_from_str("frame-size", "10")
+            .property("complexity", 4i32)
+            .property("inband-fec", true)
+            .property("dtx", false)
+            .property_from_str("audio-type", "restricted-lowdelay")
             .build()
             .context("Failed to create opusenc")?;
 
-        // AppSink to receive encoded data
         let appsink = gst_app::AppSink::builder()
             .name("audio_appsink")
             .sync(false)
@@ -588,7 +456,6 @@ impl AudioPipeline {
             .drop(true)
             .build();
 
-        // Add all elements to pipeline
         pipeline
             .add_many([
                 &alsasrc,
@@ -600,7 +467,6 @@ impl AudioPipeline {
             ])
             .context("Failed to add elements to audio pipeline")?;
 
-        // Link elements
         gst::Element::link_many([
             &alsasrc,
             &audioconvert,
@@ -616,7 +482,6 @@ impl AudioPipeline {
         Ok(Self { pipeline, appsink, running })
     }
 
-    /// Start the pipeline
     pub fn start(&self) -> Result<()> {
         self.pipeline
             .set_state(gst::State::Playing)
@@ -625,7 +490,6 @@ impl AudioPipeline {
         self.running.store(true, Ordering::SeqCst);
         info!("Audio pipeline started");
 
-        // Monitor bus for errors/hotplug issues to avoid buffer buildup
         let running = self.running.clone();
         let bus = self.pipeline.bus().expect("Audio pipeline should have a bus");
         let pipeline_for_bus = self.pipeline.clone();
@@ -671,7 +535,6 @@ impl AudioPipeline {
                                 w.src().map(|s| s.path_string()),
                                 w.error()
                             );
-                            // Fast path: check if it's alsasrc underrun
                             if let Some(src) = w.src() {
                                 let src_path = src.path_string();
                                 if src_path.contains("GstAlsaSrc") {
@@ -683,7 +546,6 @@ impl AudioPipeline {
                                             .as_millis()
                                             as u64;
 
-                                        // Reset counter every 2 seconds
                                         let last_reset = last_warn_reset.load(Ordering::SeqCst);
                                         if now_ms - last_reset > 2000 {
                                             warn_count.store(0, Ordering::SeqCst);
@@ -746,7 +608,6 @@ impl AudioPipeline {
         Ok(())
     }
 
-    /// Stop the pipeline
     pub fn stop(&self) -> Result<()> {
         self.running.store(false, Ordering::SeqCst);
 
@@ -758,10 +619,9 @@ impl AudioPipeline {
         Ok(())
     }
 
-    /// Set callback to receive encoded Opus audio
     pub fn set_callback<F>(&self, mut callback: F)
     where
-        F: FnMut(Vec<u8>) + Send + 'static,
+        F: FnMut(bytes::Bytes) + Send + 'static,
     {
         let first_frame = Arc::new(AtomicBool::new(false));
 
@@ -769,17 +629,18 @@ impl AudioPipeline {
             gst_app::AppSinkCallbacks::builder()
                 .new_sample(move |appsink| {
                     let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
-                    let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
+                    let buffer = sample.buffer_owned().ok_or(gst::FlowError::Error)?;
 
-                    // Log first frame
                     if !first_frame.swap(true, Ordering::Relaxed) {
                         tracing::info!("First audio frame received from GStreamer");
                     }
 
-                    let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
-                    let data = map.as_slice().to_vec();
+                    let mapped =
+                        buffer.into_mapped_buffer_readable().map_err(|_| gst::FlowError::Error)?;
+                    let bytes = bytes::Bytes::from_owner(mapped);
 
-                    callback(data);
+                    crate::observability::metrics::AUDIO_FRAMES_TOTAL.inc();
+                    callback(bytes);
 
                     Ok(gst::FlowSuccess::Ok)
                 })
@@ -794,16 +655,13 @@ impl Drop for AudioPipeline {
     }
 }
 
-/// Unified pipeline manager for video and audio
 pub struct PipelineManager {
     video: VideoPipeline,
     audio: Option<AudioPipeline>,
 }
 
 impl PipelineManager {
-    /// Create new pipeline manager
     pub fn new(video_config: VideoConfig, audio_config: Option<AudioConfig>) -> Result<Self> {
-        // Initialize GStreamer
         gst::init().context("Failed to initialize GStreamer")?;
 
         let video = VideoPipeline::new(video_config)?;
@@ -812,7 +670,6 @@ impl PipelineManager {
         Ok(Self { video, audio })
     }
 
-    /// Start all pipelines
     pub fn start(&self) -> Result<()> {
         self.video.start()?;
         if let Some(audio) = &self.audio {
@@ -821,7 +678,6 @@ impl PipelineManager {
         Ok(())
     }
 
-    /// Stop all pipelines
     pub fn stop(&self) -> Result<()> {
         self.video.stop()?;
         if let Some(audio) = &self.audio {
@@ -830,15 +686,13 @@ impl PipelineManager {
         Ok(())
     }
 
-    /// Set video frame callback
     pub fn set_video_callback<F>(&self, callback: F)
     where
-        F: FnMut(Vec<u8>, u64) + Send + 'static,
+        F: FnMut(bytes::Bytes, u64) + Send + 'static,
     {
         self.video.set_frame_callback(callback);
     }
 
-    /// Set video state callback
     pub fn set_state_callback<F>(&self, callback: F)
     where
         F: FnMut(VideoInputState) + Send + 'static,
@@ -846,19 +700,16 @@ impl PipelineManager {
         self.video.set_state_callback(callback);
     }
 
-    /// Set audio callback
     pub fn set_audio_callback<F>(&self, callback: F)
     where
-        F: FnMut(Vec<u8>) + Send + 'static,
+        F: FnMut(bytes::Bytes) + Send + 'static,
     {
         if let Some(audio) = &self.audio {
             audio.set_callback(callback);
         }
     }
 
-    /// Dynamically update video bitrate
     pub fn set_video_bitrate(&self, bitrate: u32, max_bitrate: u32) -> Result<()> {
-        // Try both encoder types
         if let Some(encoder) = self
             .video
             .pipeline
@@ -870,6 +721,13 @@ impl PipelineManager {
             Ok(())
         } else {
             anyhow::bail!("Video encoder not found in pipeline")
+        }
+    }
+
+    pub fn force_keyframe(&self) {
+        let event = gst_video::UpstreamForceKeyUnitEvent::builder().all_headers(true).build();
+        if !self.video.encoder.send_event(event) {
+            warn!("force-keyframe event was not handled by encoder");
         }
     }
 }

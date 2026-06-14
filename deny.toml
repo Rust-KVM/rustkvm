@@ -1,6 +1,11 @@
+# cargo-deny configuration
+# Documentation: https://embarkstudios.github.io/cargo-deny/
+
 [graph]
+# Targets we actually ship; CI verifies x86_64 host build too
 targets = [
-    "aarch64-unknown-linux-gnu",
+    { triple = "aarch64-unknown-linux-gnu" },
+    { triple = "x86_64-unknown-linux-gnu" },
 ]
 all-features = false
 no-default-features = false
@@ -8,45 +13,153 @@ no-default-features = false
 [output]
 feature-depth = 1
 
+# ---------------------------------------------------------------------------
+# advisories — RustSec vulnerability database checks
+# ---------------------------------------------------------------------------
 [advisories]
-ignore = []
+version = 2
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+# All entries below come solely from rumqttc 0.25.1 (latest stable), which
+# hard-pins `rustls-webpki = "0.102.8"` and `rustls-pemfile = "2.2.0"` directly
+# (^0.102 forbids the patched 0.103, so `cargo update` cannot fix it). We audited
+# rumqttc/src/tls.rs: it uses rustls-pemfile only for PEM->DER cert parsing, and
+# references rustls-webpki 0.102 ONLY for its `webpki::Error` type — actual server
+# cert verification runs through tokio-rustls -> rustls 0.23 -> rustls-webpki
+# 0.103 (the fixed copy we keep). None of the vulnerable code paths (CRL handling,
+# name constraints) are reachable from rumqttc. Remove each entry once rumqttc
+# bumps rustls-webpki to >=0.103.13 and drops rustls-pemfile.
+ignore = [
+    # rustls-pemfile unmaintained; thin wrapper over rustls-pki-types, used only
+    # to parse CA/client PEMs. No safe upgrade exists; no security impact.
+    { id = "RUSTSEC-2025-0134", reason = "rumqttc-only; PEM parsing, no exploit path" },
+    # rustls-webpki 0.102 — CRL distribution-point matching. rumqttc configures no
+    # CRLs, so revocation checking is never invoked.
+    { id = "RUSTSEC-2026-0049", reason = "rumqttc does not use CRLs; path unreachable" },
+    # rustls-webpki 0.102 — URI name constraints. rumqttc asserts no URI names;
+    # requires CA misissuance after signature verification.
+    { id = "RUSTSEC-2026-0098", reason = "rumqttc asserts no URI names; needs misissuance" },
+    # rustls-webpki 0.102 — wildcard name constraints. Reachable only post-signature
+    # with a misissued certificate; rumqttc uses no permitted-subtree constraints.
+    { id = "RUSTSEC-2026-0099", reason = "needs misissued cert; rumqttc sets no name constraints" },
+    # rustls-webpki 0.102 — panic in CRL parsing. "Applications that do not use CRLs
+    # are not affected." rumqttc never parses CRLs.
+    { id = "RUSTSEC-2026-0104", reason = "rumqttc does not parse CRLs; not affected" },
+]
 
+# ---------------------------------------------------------------------------
+# licenses — SPDX policy
+# ---------------------------------------------------------------------------
 [licenses]
+version = 2
 allow = [
-    "MIT",
-    "ISC",
-    "OpenSSL",
-    "BSL-1.0",
+    "GPL-2.0-only",
     "Apache-2.0",
-    "Unicode-3.0",
-    "BSD-3-Clause",
-    "CDLA-Permissive-2.0",
     "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "0BSD",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
-exceptions = []
+
+[[licenses.exceptions]]
+# ring carries "ISC AND MIT AND OpenSSL"; the OpenSSL component requires explicit acceptance
+allow = ["ISC", "MIT", "OpenSSL"]
+name = "ring"
 
 [licenses.private]
-ignore = false
-registries = []
+ignore = true
 
+# ---------------------------------------------------------------------------
+# bans — duplicate-version + banned-crate detection
+# ---------------------------------------------------------------------------
 [bans]
-multiple-versions = "allow"
+multiple-versions = "warn"
+# Workspace deps use `.workspace = true` which cargo-deny reports as wildcard;
+# we cannot deny this without losing the workspace-inheritance pattern. Allowing
+# external wildcards is also fine since none currently exist.
 wildcards = "allow"
+allow-wildcard-paths = true
 highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
 allow = []
 deny = []
-skip = []
+# Duplicate older versions we cannot collapse: every entry below is dragged in by
+# a third-party crate that is ALREADY at its latest stable release but still pins
+# an older copy of a shared crate. Our own direct deps already use the newest
+# version of each (that is *why* the old copy shows up as a duplicate), so there
+# is no upgrade or code change that removes these — see the grouped comments for
+# the lagging upstream. Re-audit when webrtc leaves 0.20-alpha or salvo/rumqttc
+# bump their crypto stacks. `=` pins keep the skip honest: a new minor would warn.
+skip = [
+    # webrtc 0.17.1 (latest stable; 0.20 is alpha-only — held in Cargo.toml) pins
+    # an old networking/crypto stack via dtls/srtp/stun/turn/webrtc-util(nix 0.26)
+    # and via its bundled rcgen 0.13.
+    { name = "bitflags",   version = "=1.3.2" },
+    { name = "chacha20",   version = "=0.9.1" },
+    { name = "socket2",    version = "=0.5.10" },
+    { name = "rcgen",      version = "=0.13.2" },
+    { name = "yasna",      version = "=0.5.2" },
+
+    # salvo 0.93.0 (latest) pulls the RustCrypto 0.10-era stack through
+    # cookie -> aes-gcm and through rust-embed-utils; webrtc shares most of these.
+    { name = "block-buffer",  version = "=0.10.4" },
+    { name = "cipher",        version = "=0.4.4" },
+    { name = "cpufeatures",   version = "=0.2.17" },
+    { name = "crypto-common", version = "=0.1.7" },
+    { name = "digest",        version = "=0.10.7" },
+    { name = "sha2",          version = "=0.10.9" },
+    { name = "inout",         version = "=0.1.4" },
+
+    # rand ecosystem split: rand 0.8 (salvo), rand 0.9 (rcgen/transitive) vs our
+    # rand 0.10; same fan-out for getrandom / rand_core / rand_chacha.
+    { name = "rand",        version = "=0.8.6" },
+    { name = "rand",        version = "=0.9.4" },
+    { name = "rand_chacha", version = "=0.3.1" },
+    { name = "rand_core",   version = "=0.6.4" },
+    { name = "rand_core",   version = "=0.9.5" },
+    { name = "getrandom",   version = "=0.2.17" },
+    { name = "getrandom",   version = "=0.3.4" },
+
+    # rumqttc 0.25.1 (latest) keeps rustls-webpki 0.102 and spin 0.9; spin 0.9
+    # also arrives via mdns-sd 0.20.
+    { name = "rustls-webpki", version = "=0.102.8" },
+    { name = "spin",          version = "=0.9.8" },
+
+    # webpki-roots 0.26 from tokio-tungstenite/socketioxide vs our 1.x.
+    { name = "webpki-roots", version = "=0.26.11" },
+
+    # thiserror 1.x from webrtc + rcgen 0.13; we and most of the tree are on 2.x.
+    { name = "thiserror",      version = "=1.0.69" },
+    { name = "thiserror-impl", version = "=1.0.69" },
+
+    # id_token_verifier (git dep) pins duration-str 0.17 while its own
+    # backoff-config pulls 0.19, and brings winnow 0.7 vs our 1.x (toml).
+    # Fixable at source — bump duration-str in foxxcn/id_token_verifier.
+    { name = "duration-str", version = "=0.17.0" },
+    { name = "winnow",       version = "=0.7.15" },
+]
 skip-tree = []
 
+# ---------------------------------------------------------------------------
+# sources — only crates.io + explicitly-allowed git deps
+# ---------------------------------------------------------------------------
 [sources]
-unknown-registry = "warn"
-unknown-git = "warn"
+unknown-registry = "deny"
+unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
-    "https://github.com/foxxcn/id_token_verifier.git"
+    "https://github.com/foxxcn/id_token_verifier.git",
 ]
 
 [sources.allow-org]

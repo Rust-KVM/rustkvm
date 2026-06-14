@@ -4,31 +4,23 @@ use anyhow::{Context, Result, anyhow};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 
-/// Pluggable remote image reader.
-/// Implementations should be cheap to clone or wrapped in Arc.
 pub trait RemoteImageReader: Send + Sync + 'static {
-    /// Read `len` bytes starting at `off`.
     fn read_at(&self, off: i64, len: i64) -> Result<Vec<u8>>;
-    /// Total size in bytes.
     fn size(&self) -> Result<i64>;
 }
 
-/// Global handle for current mounted virtual media.
 static CURRENT_READER: Lazy<RwLock<Option<Arc<dyn RemoteImageReader>>>> =
     Lazy::new(|| RwLock::new(None));
 
-/// Set current remote image reader. Passing None clears the reader.
 pub fn set_current_remote_image_reader(reader: Option<Arc<dyn RemoteImageReader>>) {
     let mut guard = CURRENT_READER.write();
     *guard = reader;
 }
 
-/// Get a cloned Arc to current reader if any.
 pub fn get_current_remote_image_reader() -> Option<Arc<dyn RemoteImageReader>> {
     CURRENT_READER.read().clone()
 }
 
-/// NBD device driver wrapper.
 #[derive(Default)]
 pub struct NbdDevice {
     #[cfg(target_os = "linux")]
@@ -40,7 +32,6 @@ impl NbdDevice {
         Self::default()
     }
 
-    /// Start NBD server and connect it to /dev/nbd0 via a local Unix socket.
     pub fn start(&mut self) -> Result<()> {
         #[cfg(target_os = "linux")]
         {
@@ -58,7 +49,6 @@ impl NbdDevice {
         }
     }
 
-    /// Close/teardown NBD resources.
     pub fn close(&mut self) {
         #[cfg(target_os = "linux")]
         {
@@ -80,7 +70,6 @@ mod linux {
 
     use super::*;
 
-    /// NBD paths used by the device.
     const NBD_SOCKET_PATH: &str = "/var/run/nbd.socket";
     const NBD_DEVICE_PATH: &str = "/dev/nbd0";
 
@@ -95,9 +84,7 @@ mod linux {
 
     impl LinuxNbdState {
         pub fn close(&mut self) {
-            // Try to disconnect client first
             if let Some(dev) = self.device.take() {
-                // Best-effort disconnect; ignore errors, avoid raw ioctl here
                 let fd = dev.as_fd();
                 let _ = ioctl_simple(fd, super::linux::NBD_DISCONNECT);
                 let _ = ioctl_simple(fd, super::linux::NBD_CLEAR_SOCK);
@@ -118,25 +105,21 @@ mod linux {
             if let Some(h) = self.client_thread.take() {
                 let _ = h.join();
             }
-            // Remove stale socket path
             let _ = rustix::fs::unlink(NBD_SOCKET_PATH);
         }
     }
 
     pub(super) fn start_linux_nbd() -> Result<LinuxNbdState> {
-        // Ensure device exists
         if !Path::new(NBD_DEVICE_PATH).exists() {
             return Err(anyhow!("NBD device does not exist: {}", NBD_DEVICE_PATH));
         }
 
-        // Open device read-write; ioctl may require write; kernel ignores writes in read-only mode
         let device = OpenOptions::new()
             .read(true)
-            .write(true) // ioctl may require write; kernel ignores writes for RO
+            .write(true)
             .open(NBD_DEVICE_PATH)
             .context("failed to open NBD device")?;
 
-        // Clean stale socket
         if Path::new(NBD_SOCKET_PATH).exists() {
             rustix::fs::unlink(NBD_SOCKET_PATH).with_context(|| {
                 format!("failed to remove existing socket: {}", NBD_SOCKET_PATH)
@@ -146,22 +129,16 @@ mod linux {
         let listener = UnixListener::bind(NBD_SOCKET_PATH)
             .with_context(|| format!("failed to bind unix socket: {}", NBD_SOCKET_PATH))?;
 
-        // Dial to self to create a pair
         let client_conn =
             UnixStream::connect(NBD_SOCKET_PATH).context("failed to connect unix socket")?;
 
-        // Accept the server side
         let (server_conn, _) = listener.accept().context("failed to accept unix socket")?;
 
-        // Spawn server loop: serve NBD protocol, export name rustkvm
-        let server_thread = thread::spawn({
-            let mut sc = server_conn.try_clone().expect("dup server conn");
-            move || {
-                let _ = run_server(&mut sc);
-            }
+        let mut sc = server_conn.try_clone().context("dup server conn")?;
+        let server_thread = thread::spawn(move || {
+            let _ = run_server(&mut sc);
         });
 
-        // Spawn client loop: connect device to the socket
         let device_clone = device.try_clone().context("dup device")?;
         let client_conn_clone = client_conn.try_clone().context("dup client conn")?;
         let client_thread = thread::spawn(move || {
@@ -181,9 +158,7 @@ mod linux {
     fn run_server(conn: &mut UnixStream) -> Result<()> {
         use nbd::server;
 
-        // Prepare export via handshake
         let device = server::handshake(&mut *conn, |export_name| {
-            // Single export named "rustkvm". Kernel oldstyle may send empty name; accept both.
             if !(export_name.is_empty() || export_name == "rustkvm") {
                 return Err(std::io::Error::other("unknown export"));
             }
@@ -266,7 +241,6 @@ mod linux {
         }
     }
 
-    // Minimal ioctl bindings for NBD device
     const NBD_SET_SOCK: libc::c_ulong = 0x0000ab00;
     const NBD_SET_BLKSIZE: libc::c_ulong = 0x0000ab01;
     const NBD_SET_SIZE: libc::c_ulong = 0x0000ab02;
@@ -275,10 +249,9 @@ mod linux {
     const NBD_DISCONNECT: libc::c_ulong = 0x0000ab08;
     const NBD_SET_TIMEOUT: libc::c_ulong = 0x0000ab09;
     const NBD_SET_FLAGS: libc::c_ulong = 0x0000ab0a;
-    const NBD_FLAG_READ_ONLY_IOCTL: u64 = 2; // read-only
+    const NBD_FLAG_READ_ONLY_IOCTL: u64 = 2;
 
     fn ioctl_set_u64(fd: BorrowedFd<'_>, req: libc::c_ulong, val: u64) -> Result<()> {
-        // On 64-bit, third arg is unsigned long; cast directly. On 32-bit, check overflow.
         #[cfg(target_pointer_width = "32")]
         let arg: libc::c_ulong = match <libc::c_ulong as TryFrom<u64>>::try_from(val) {
             Ok(v) => v,
@@ -288,6 +261,9 @@ mod linux {
         #[cfg(target_pointer_width = "64")]
         let arg: libc::c_ulong = val as libc::c_ulong;
 
+        // SAFETY: `fd` is a live, open NBD device fd (a `BorrowedFd` valid for the
+        // call), `req` is an NBD ioctl opcode whose argument is a single `c_ulong`
+        // passed by value — matching the kernel's expectation for these set-* ioctls.
         let rc = unsafe { libc::ioctl(fd.as_raw_fd(), req as _, arg) };
         if rc < 0 {
             return Err(std::io::Error::last_os_error().into());
@@ -296,6 +272,9 @@ mod linux {
     }
 
     fn ioctl_simple(fd: BorrowedFd<'_>, req: libc::c_ulong) -> Result<()> {
+        // SAFETY: `fd` is a live, open NBD device fd; `req` is an NBD ioctl opcode
+        // that takes no argument (e.g. NBD_DO_IT / NBD_CLEAR_QUE), so invoking the
+        // variadic `ioctl` with only the request is correct.
         let rc = unsafe { libc::ioctl(fd.as_raw_fd(), req as _) };
         if rc < 0 {
             return Err(std::io::Error::last_os_error().into());
@@ -317,24 +296,17 @@ mod linux {
         let sock_fd = conn.as_raw_fd();
         let dev_fd = device.as_fd();
 
-        // Configure device parameters before attaching socket
         if let Some(reader) = get_current_remote_image_reader() {
             let size = reader.size().context("get image size")? as u64;
             ioctl_set_u64(dev_fd, NBD_SET_SIZE, size).context("ioctl NBD_SET_SIZE")?;
         }
-        // Read-only flag
         let _ = ioctl_set_u64(dev_fd, NBD_SET_FLAGS, NBD_FLAG_READ_ONLY_IOCTL);
-        // Timeout (seconds)
         let _ = ioctl_set_u64(dev_fd, NBD_SET_TIMEOUT, 5);
-        // Set block size to 4KiB
         ioctl_set_u64(dev_fd, NBD_SET_BLKSIZE, 4096).context("ioctl NBD_SET_BLKSIZE")?;
-        // Associate socket with kernel NBD
         ioctl_set_u64(dev_fd, NBD_SET_SOCK, sock_fd as u64).context("ioctl NBD_SET_SOCK")?;
 
-        // Run. This blocks until disconnect
         let _ = ioctl_simple(dev_fd, NBD_DO_IT);
 
-        // Teardown
         let _ = ioctl_simple(dev_fd, NBD_CLEAR_SOCK);
         Ok(())
     }

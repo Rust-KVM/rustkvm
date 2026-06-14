@@ -1,5 +1,6 @@
 [submodule "rust"]
 	path = rust
 	url = https://github.com/rust-lang/rust.git
-	branch = master
+	branch = main
 	shallow = true
+	ignore = dirty

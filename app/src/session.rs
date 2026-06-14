@@ -7,7 +7,7 @@ use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
 pub struct Session {
-    pub id: String,
+    pub id: Arc<str>,
     pub peer_connection: Option<Arc<RTCPeerConnection>>,
     pub video_track: Option<Arc<TrackLocalStaticSample>>,
     pub audio_track: Option<Arc<TrackLocalStaticSample>>,
@@ -57,9 +57,9 @@ impl fmt::Display for Session {
 }
 
 impl Session {
-    pub fn new(id: String) -> Self {
+    pub fn new(id: impl Into<Arc<str>>) -> Self {
         Self {
-            id,
+            id: id.into(),
             peer_connection: None,
             video_track: None,
             audio_track: None,
@@ -71,27 +71,22 @@ impl Session {
         }
     }
 
-    /// Exchange WebRTC offer and return answer
+    #[tracing::instrument(skip_all, fields(session = %self.id))]
     pub async fn exchange_offer(&self, offer_str: &str) -> anyhow::Result<String> {
         use base64::Engine as _;
         use base64::engine::general_purpose;
 
-        // Decode base64 encoded offer
         let offer_bytes = general_purpose::STANDARD.decode(offer_str)?;
         let offer: webrtc::peer_connection::sdp::session_description::RTCSessionDescription =
             serde_json::from_slice(&offer_bytes)?;
 
         if let Some(peer_conn) = &self.peer_connection {
-            // Set remote description
             peer_conn.set_remote_description(offer).await?;
 
-            // Create answer
             let answer = peer_conn.create_answer(None).await?;
 
-            // Set local description
             peer_conn.set_local_description(answer).await?;
 
-            // Get local description and encode to base64
             if let Some(local_desc) = peer_conn.local_description().await {
                 let local_desc_bytes = serde_json::to_vec(&local_desc)?;
                 let answer_str = general_purpose::STANDARD.encode(local_desc_bytes);
@@ -104,9 +99,7 @@ impl Session {
         }
     }
 
-    /// Add ICE candidate to the peer connection
     pub async fn add_ice_candidate(&self, candidate_str: &str) -> anyhow::Result<()> {
-        // Parse JSON formatted ICE candidate
         let candidate: webrtc::ice_transport::ice_candidate::RTCIceCandidateInit =
             serde_json::from_str(candidate_str)?;
 

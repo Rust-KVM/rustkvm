@@ -14,7 +14,6 @@ use super::oidc::OidcAuthenticator;
 use super::types::WebRTCSessionRequest;
 use crate::config::get_config_manager;
 
-// Global write channel for cloud WS
 static CLOUD_WS_TX: tokio::sync::OnceCell<
     RwLock<Option<tokio::sync::mpsc::UnboundedSender<Message>>>,
 > = tokio::sync::OnceCell::const_new();
@@ -34,7 +33,6 @@ pub async fn cloud_ws_send_json(value: &serde_json::Value) -> anyhow::Result<()>
     }
 }
 
-/// Cloud WebSocket client for handling cloud connections
 pub struct CloudWebSocketClient {
     url: String,
     token: String,
@@ -47,12 +45,10 @@ impl CloudWebSocketClient {
         Self { url, token, device_id, write_tx: None }
     }
 
-    /// Connect to cloud WebSocket and handle messages
     pub async fn connect(&mut self) -> Result<()> {
         let ws_url = self.url.replace("https://", "wss://").replace("http://", "ws://");
         info!("Connecting to cloud WebSocket: {}", ws_url);
 
-        // Build handshake request with headers
         let mut req = ws_url.clone().into_client_request()?;
         {
             let headers = req.headers_mut();
@@ -62,16 +58,13 @@ impl CloudWebSocketClient {
                 .insert("Authorization", HeaderValue::from_str(&format!("Bearer {}", self.token))?);
         }
 
-        // Connect with request (no initial auth message)
         let (ws_stream, _) = connect_async(req).await?;
         let (write, read) = ws_stream.split();
 
-        // Create channel for sending messages
         let (write_tx, mut write_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
         self.write_tx = Some(write_tx.clone());
         cloud_ws_set_tx(Some(write_tx.clone())).await;
 
-        // Spawn task to handle outgoing messages
         let mut w = write;
         let write_task = tokio::spawn(async move {
             while let Some(msg) = write_rx.recv().await {
@@ -82,7 +75,6 @@ impl CloudWebSocketClient {
             }
         });
 
-        // Handle incoming messages
         let mut read_handle = read;
         while let Some(msg) = read_handle.next().await {
             match msg {
@@ -103,35 +95,31 @@ impl CloudWebSocketClient {
                     }
                     _ => {}
                 },
-                Err(e) => {
-                    // Special handling for UnexpectedEof
-                    match &e {
-                        Error::Io(io_err) if io_err.kind() == ErrorKind::UnexpectedEof => {
-                            info!(
-                                "WebSocket connection closed by peer without close_notify (UnexpectedEof)"
-                            );
-                            break;
-                        }
-                        Error::ConnectionClosed => {
-                            info!("WebSocket connection closed by peer");
-                            break;
-                        }
-                        _ => {
-                            error!("WebSocket error: {}", e);
-                            return Err(e.into());
-                        }
+                Err(e) => match &e {
+                    Error::Io(io_err) if io_err.kind() == ErrorKind::UnexpectedEof => {
+                        info!(
+                            "WebSocket connection closed by peer without close_notify (UnexpectedEof)"
+                        );
+                        break;
                     }
-                }
+                    Error::ConnectionClosed => {
+                        info!("WebSocket connection closed by peer");
+                        break;
+                    }
+                    _ => {
+                        error!("WebSocket error: {}", e);
+                        return Err(e.into());
+                    }
+                },
             }
         }
 
-        // Cancel the write task
         write_task.abort();
         cloud_ws_set_tx(None).await;
         Ok(())
     }
 
-    /// Handle incoming WebSocket messages
+    #[tracing::instrument(skip_all, name = "cloud_ws_message")]
     async fn handle_message(&self, message: &str) -> Result<()> {
         let parsed: Value = serde_json::from_str(message).map_err(|e| {
             error!("Failed to parse WebSocket message: {}", e);
@@ -187,14 +175,12 @@ impl CloudWebSocketClient {
         Ok(())
     }
 
-    /// Handle WebRTC session requests from cloud
     async fn handle_session_request(&self, message: &Value) -> Result<()> {
         info!("Handling cloud session request");
 
         if let Some(data) = message.get("data") {
             let request: WebRTCSessionRequest = serde_json::from_value(data.clone())?;
 
-            // Verify OIDC token and match identity against stored config
             if let Some(oidc_token) = &request.oidc_google {
                 let oidc_auth = OidcAuthenticator::new().await?;
                 let google_identity = oidc_auth.verify_token_skip_client_id(oidc_token).await?;
@@ -211,45 +197,37 @@ impl CloudWebSocketClient {
                 debug!("OIDC token verified and identity matched for cloud session");
             }
 
-            // Create WebRTC session
             self.create_cloud_webrtc_session(request).await?;
         }
 
         Ok(())
     }
 
-    /// Create WebRTC session for cloud connection
     async fn create_cloud_webrtc_session(&self, request: WebRTCSessionRequest) -> Result<()> {
         use crate::web::get_global_app_state;
         use crate::webrtc::{SessionConfig, get_webrtc_api};
 
         info!("Creating cloud WebRTC session");
 
-        // Get global app state
         let app_state = get_global_app_state().clone();
 
-        // Get WebRTC API
         let webrtc_api = get_webrtc_api().await;
 
-        // Create session configuration
         let session_config = SessionConfig {
             ice_servers: Some(request.ice_servers),
             local_ip: request.ip.and_then(|ip| ip.parse().ok()),
-            is_cloud: true, // Mark as cloud session
+            is_cloud: true,
             app_state: app_state.clone(),
         };
 
-        // Generate session ID
         let session_id = uuid::Uuid::new_v4().to_string();
 
-        // Create new WebRTC session
         let session =
             webrtc_api.new_session(session_config, session_id.clone()).await.map_err(|e| {
                 error!("Failed to create cloud WebRTC session: {}", e);
                 anyhow::anyhow!("Failed to create WebRTC session: {}", e)
             })?;
 
-        // Exchange SDP offer/answer
         let answer = session.exchange_offer(&request.sd).await.map_err(|e| {
             error!("Failed to exchange SDP offer: {}", e);
             anyhow::anyhow!("Failed to exchange SDP offer: {}", e)
@@ -257,18 +235,15 @@ impl CloudWebSocketClient {
 
         crate::webrtc::handle_session_takeover(app_state.clone(), &session.id).await;
 
-        // Add session to app state
         app_state.add_session(session.clone()).await;
         app_state.set_current_session(Some(session.id.clone())).await;
 
-        // Send response back to cloud
         self.send_session_response(&answer, &session.id).await?;
 
         info!("Cloud WebRTC session created successfully with id: {}", session.id);
         Ok(())
     }
 
-    /// Send session response back to cloud
     async fn send_session_response(&self, answer: &str, _session_id: &str) -> Result<()> {
         let response = json!({
             "type": "answer",
@@ -289,7 +264,6 @@ impl CloudWebSocketClient {
         Ok(())
     }
 
-    /// Send pong response to cloud
     async fn send_pong(&self) -> Result<()> {
         let pong_message = json!({
             "type": "pong",
@@ -305,7 +279,6 @@ impl CloudWebSocketClient {
         Ok(())
     }
 
-    /// Handle session close request from cloud
     async fn handle_session_close(&self, message: &Value) -> Result<()> {
         use crate::web::get_global_app_state;
 
@@ -314,12 +287,10 @@ impl CloudWebSocketClient {
         {
             info!("Closing session: {}", session_id);
 
-            // Get global app state and remove session
             let app_state = get_global_app_state();
             if let Some(_session) = app_state.remove_session(session_id).await {
                 info!("Session {} closed successfully", session_id);
 
-                // Send confirmation back to cloud
                 self.send_session_close_confirmation(session_id).await?;
             } else {
                 warn!("Session {} not found for closing", session_id);
@@ -331,7 +302,6 @@ impl CloudWebSocketClient {
         Ok(())
     }
 
-    /// Send session close confirmation to cloud
     async fn send_session_close_confirmation(&self, session_id: &str) -> Result<()> {
         let response = json!({
             "type": "session_close_confirmation",
@@ -351,7 +321,6 @@ impl CloudWebSocketClient {
         Ok(())
     }
 
-    /// Handle error messages from cloud
     async fn handle_cloud_error(&self, message: &Value) -> Result<()> {
         if let Some(error_data) = message.get("data") {
             let error_msg =
@@ -360,11 +329,9 @@ impl CloudWebSocketClient {
 
             error!("Cloud error [{}]: {}", error_code, error_msg);
 
-            // Handle specific error codes
             match error_code {
                 "auth_failed" => {
                     error!("Authentication failed with cloud");
-                    // Could trigger re-authentication here
                 }
                 "session_not_found" => {
                     warn!("Cloud requested non-existent session");

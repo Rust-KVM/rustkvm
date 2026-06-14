@@ -1,57 +1,57 @@
-use std::env;
-use std::path::PathBuf;
 use std::process::Command;
 
-fn main() {
-    edid_bridge::build_edid_bridge();
+fn git_output(args: &[&str]) -> Option<String> {
+    let out = Command::new("git").args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
 }
 
-/// Build the EDID bridge (edid.c) as a separate unit
-mod edid_bridge {
-    use super::*;
+fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=../.git/HEAD");
+    println!("cargo:rerun-if-env-changed=GIT_REVISION");
+    println!("cargo:rerun-if-env-changed=GIT_BRANCH");
+    println!("cargo:rerun-if-env-changed=BUILD_DATE");
 
-    pub fn build_edid_bridge() {
-        println!("cargo:rerun-if-changed=cshim/edid.c");
+    let rev = std::env::var("GIT_REVISION")
+        .ok()
+        .or_else(|| git_output(&["rev-parse", "--short=12", "HEAD"]))
+        .unwrap_or_else(|| "unknown".into());
+    println!("cargo:rustc-env=GIT_REVISION={rev}");
 
-        // Use /opt paths directly like Makefile - no fallbacks
-        let rk_sdk_base = "/opt/rk3588-buildkit";
-        let rk_media_output = format!("{}/aarch64-buildroot-linux-gnu", rk_sdk_base);
-        let rk_media_libs = format!("{}/sysroot/usr/lib", rk_media_output);
+    let branch = std::env::var("GIT_BRANCH")
+        .ok()
+        .or_else(|| git_output(&["rev-parse", "--abbrev-ref", "HEAD"]))
+        .unwrap_or_else(|| "unknown".into());
+    println!("cargo:rustc-env=GIT_BRANCH={branch}");
 
-        let cc = format!("{}/bin/aarch64-buildroot-linux-gnu-gcc", rk_sdk_base);
-        let ar = format!("{}/bin/aarch64-buildroot-linux-gnu-ar", rk_sdk_base);
+    let date = std::env::var("BUILD_DATE")
+        .ok()
+        .or_else(|| {
+            Command::new("date")
+                .arg("-u")
+                .arg("+%Y-%m-%dT%H:%M:%SZ")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+        })
+        .unwrap_or_else(|| "unknown".into());
+    println!("cargo:rustc-env=BUILD_DATE={date}");
 
-        // println!("cargo:warning=Using RK libs: {}", rk_media_libs);
-
-        let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
-        let obj_e = out_dir.join("edid.o");
-        let lib_e = out_dir.join("libedid.a");
-
-        let status = Command::new(&cc)
-            .args([
-                "-c",
-                "-fPIC",
-                "cshim/edid.c",
-                "-o",
-                obj_e.to_str().expect("Invalid UTF-8 in obj path"),
-                "-O2",
-            ])
-            .status()
-            .expect("Failed to spawn cross-compiler");
-        assert!(status.success(), "Cross-compile edid.c failed");
-
-        let status = Command::new(&ar)
-            .args([
-                "rcs",
-                lib_e.to_str().expect("Invalid UTF-8 in lib path"),
-                obj_e.to_str().expect("Invalid UTF-8 in obj path"),
-            ])
-            .status()
-            .expect("Failed to spawn archiver");
-        assert!(status.success(), "Archive creation failed");
-
-        println!("cargo:rustc-link-search=native={}", out_dir.display());
-        println!("cargo:rustc-link-lib=static=edid");
-        println!("cargo:rustc-link-search=native={}", rk_media_libs);
-    }
+    let rustc = std::env::var("RUSTC_VERSION")
+        .ok()
+        .or_else(|| {
+            Command::new(std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into()))
+                .arg("--version")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+        })
+        .unwrap_or_else(|| "unknown".into());
+    println!("cargo:rustc-env=RUSTC_VERSION={rustc}");
 }

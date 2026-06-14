@@ -19,7 +19,6 @@ pub fn get_cloud_manager() -> &'static CloudManager {
     CLOUD_MANAGER.get_or_init(CloudManager::new)
 }
 
-/// Cloud manager handling cloud connections and device registration
 pub struct CloudManager {
     state: AtomicU8,
 }
@@ -43,7 +42,6 @@ impl CloudManager {
         self.state.store(state as u8, Ordering::Relaxed);
     }
 
-    /// Get current cloud state
     pub async fn get_cloud_state(&self) -> CloudState {
         let config_manager = get_config_manager();
         let config = config_manager.get().await;
@@ -55,7 +53,6 @@ impl CloudManager {
         }
     }
 
-    /// Register device with cloud
     pub async fn register_device(&self, req: CloudRegisterRequest) -> Result<()> {
         info!("Starting cloud device registration");
 
@@ -70,17 +67,14 @@ impl CloudManager {
             anyhow::bail!("Cloud URL is not configured");
         };
 
-        // 1. Exchange temporary token for permanent auth token
         let token_resp = self.exchange_temp_token(&req.token, &cloud_api).await?;
         info!("Token exchange successful");
 
-        // 2. Verify OIDC token
         let oidc_auth = OidcAuthenticator::new().await?;
         let google_identity =
             oidc_auth.verify_token_with_client_id(&req.oidc_google, &req.client_id).await?;
         info!("OIDC token verification successful");
 
-        // 3. Update configuration
         if cfg.cloud_url.is_empty() {
             config_manager.set_cloud_config(Some(cloud_api), Some(token_resp.secret_token)).await?;
         } else {
@@ -89,7 +83,6 @@ impl CloudManager {
                 .await?;
         }
 
-        // 4. Set Google identity
         config_manager
             .update(|config| {
                 config.google_identity = Some(google_identity);
@@ -98,13 +91,11 @@ impl CloudManager {
 
         info!("Cloud device registration completed successfully");
 
-        // trigger cloud connect on the shared manager
-        get_cloud_manager().set_state(CloudConnectionState::Disconnected);
+        self.set_state(CloudConnectionState::Disconnected);
 
         Ok(())
     }
 
-    /// Deregister device from cloud
     pub async fn deregister_device(&self) -> Result<()> {
         let config_manager = get_config_manager();
         let config = config_manager.get().await;
@@ -122,9 +113,7 @@ impl CloudManager {
             .send()
             .await?;
 
-        // Consider both 200 OK and 404 Not Found as successful deregistration
         if response.status().is_success() || response.status().as_u16() == 404 {
-            // Clear cloud configuration
             config_manager.set_cloud_config(None, None).await?;
             config_manager
                 .update(|config| {
@@ -140,19 +129,15 @@ impl CloudManager {
         }
     }
 
-    /// Set cloud URL configuration
     pub async fn set_cloud_url(&self, api_url: &str, app_url: &str) -> Result<()> {
         let config_manager = get_config_manager();
         let current_config = config_manager.get().await;
 
-        // Check if URL is changing
         if current_config.cloud_url != api_url {
             info!("Cloud URL changed from {} to {}", current_config.cloud_url, api_url);
-            // Disconnect from current cloud if connected
             self.set_state(CloudConnectionState::Disconnected);
         }
 
-        // Update configuration
         config_manager
             .update(|config| {
                 config.cloud_url = api_url.to_string();
@@ -164,14 +149,12 @@ impl CloudManager {
         Ok(())
     }
 
-    /// Start cloud connection loop
     pub async fn start_connection_loop(&self) -> Result<()> {
         info!("Starting cloud connection loop");
 
         loop {
             match self.get_state() {
                 CloudConnectionState::NotConfigured => {
-                    // Check if cloud configuration exists
                     let config_manager = get_config_manager();
                     let config = config_manager.get().await;
 
@@ -184,11 +167,8 @@ impl CloudManager {
                 CloudConnectionState::Disconnected => {
                     self.set_state(CloudConnectionState::Connecting);
                     match self.connect_to_cloud().await {
-                        Ok(_) => {
-                            // Connection successful, state will be set to Connected in connect_to_cloud
-                        }
+                        Ok(_) => {}
                         Err(e) => {
-                            // Check if it's UnexpectedEof error
                             let is_unexpected_eof =
                                 if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
                                     io_err.kind() == ErrorKind::UnexpectedEof
@@ -206,7 +186,6 @@ impl CloudManager {
 
                             self.set_state(CloudConnectionState::Disconnected);
 
-                            // Use shorter retry delay for UnexpectedEof
                             let retry_delay = if is_unexpected_eof {
                                 tokio::time::Duration::from_secs(1)
                             } else {
@@ -218,13 +197,12 @@ impl CloudManager {
                     }
                 }
                 CloudConnectionState::Connecting | CloudConnectionState::Connected => {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }
             }
         }
     }
 
-    /// Exchange temporary token for permanent token
     async fn exchange_temp_token(
         &self,
         temp_token: &str,
@@ -248,7 +226,6 @@ impl CloudManager {
         Ok(token_resp)
     }
 
-    /// Connect to cloud WebSocket
     async fn connect_to_cloud(&self) -> Result<()> {
         let config_manager = get_config_manager();
         let config = config_manager.get().await;
@@ -261,26 +238,25 @@ impl CloudManager {
 
         self.set_state(CloudConnectionState::Connected);
 
-        match client.connect().await {
+        let result = match client.connect().await {
             Ok(_) => {
-                info!("Successfully connected to cloud");
+                info!("Cloud WebSocket loop returned (clean disconnect)");
                 Ok(())
             }
             Err(e) => {
-                // Check if it's UnexpectedEof error
                 if let Some(io_err) = e.downcast_ref::<std::io::Error>()
                     && io_err.kind() == ErrorKind::UnexpectedEof
                 {
                     info!(
                         "WebSocket connection closed by peer without close_notify (UnexpectedEof)"
                     );
-                    self.set_state(CloudConnectionState::Disconnected);
-                    return Ok(());
+                    Ok(())
+                } else {
+                    Err(e)
                 }
-
-                self.set_state(CloudConnectionState::Disconnected);
-                Err(e)
             }
-        }
+        };
+        self.set_state(CloudConnectionState::Disconnected);
+        result
     }
 }

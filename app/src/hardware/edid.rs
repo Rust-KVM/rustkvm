@@ -1,53 +1,68 @@
 use anyhow::Result;
-use tracing::{debug, info};
+use rustix::fs::{Mode, OFlags, open};
+use rustix::ioctl::{Opcode, Updater, ioctl, opcode};
+use tracing::info;
 
-unsafe extern "C" {
-    fn get_edid(edid: *mut u8, max_size: usize) -> i32;
-    fn set_edid(edid: *const u8, size: usize) -> i32;
-    fn videoc_log_status() -> *const std::os::raw::c_char;
-    fn free_videoc_status(status: *mut std::os::raw::c_char);
+const V4L_NODE: &str = "/dev/video0";
+
+#[repr(C)]
+struct V4l2Edid {
+    pad: u32,
+    start_block: u32,
+    blocks: u32,
+    reserved: [u32; 5],
+    edid: *mut u8,
 }
 
+const VIDIOC_G_EDID: Opcode = opcode::read_write::<V4l2Edid>(b'V', 40);
+const VIDIOC_S_EDID: Opcode = opcode::read_write::<V4l2Edid>(b'V', 41);
+
 pub fn read_edid() -> Result<Vec<u8>> {
-    let mut buffer = vec![0u8; 256];
-    let result = unsafe { get_edid(buffer.as_mut_ptr(), 256) };
-
-    if result < 0 {
-        anyhow::bail!("Failed to read EDID: {}", std::io::Error::last_os_error());
+    let fd = open(V4L_NODE, OFlags::RDWR, Mode::empty())?;
+    let mut buf = vec![0u8; 256];
+    let mut req =
+        V4l2Edid { pad: 0, start_block: 0, blocks: 2, reserved: [0; 5], edid: buf.as_mut_ptr() };
+    // SAFETY: VIDIOC_G_EDID opcode matches V4l2Edid layout. `req.edid` points
+    // into `buf` (256 bytes, exclusively borrowed for the duration of the call)
+    // and the kernel writes at most `blocks * 128` bytes there, updating
+    // `req.blocks` to the actual count.
+    unsafe {
+        ioctl(&fd, Updater::<VIDIOC_G_EDID, V4l2Edid>::new(&mut req))?;
     }
-
-    let actual_size = result as usize;
-    buffer.truncate(actual_size);
-    buffer.shrink_to_fit();
-    info!("Read EDID: {} bytes", buffer.len());
-    Ok(buffer)
+    let n = req.blocks as usize * 128;
+    buf.truncate(n);
+    info!("Read EDID: {} bytes", buf.len());
+    Ok(buf)
 }
 
 pub fn write_edid(edid: &[u8]) -> Result<()> {
     if edid.len() != 128 && edid.len() != 256 {
         anyhow::bail!("EDID size must be 128 or 256 bytes, got {}", edid.len());
     }
+    let mut data = edid.to_vec();
+    fix_edid_checksum(&mut data);
 
-    let result = unsafe { set_edid(edid.as_ptr(), edid.len()) };
-    if result < 0 {
-        anyhow::bail!("Failed to set EDID: {}", std::io::Error::last_os_error());
+    let fd = open(V4L_NODE, OFlags::RDWR, Mode::empty())?;
+    let mut req = V4l2Edid {
+        pad: 0,
+        start_block: 0,
+        blocks: (data.len() / 128) as u32,
+        reserved: [0; 5],
+        edid: data.as_mut_ptr(),
+    };
+    // SAFETY: VIDIOC_S_EDID opcode matches V4l2Edid layout. `req.edid` points
+    // into `data` (128 or 256 bytes, exclusively borrowed) and the kernel only
+    // reads `blocks * 128` bytes from there.
+    unsafe {
+        ioctl(&fd, Updater::<VIDIOC_S_EDID, V4l2Edid>::new(&mut req))?;
     }
-
-    info!("Set EDID: {} bytes", edid.len());
+    info!("Set EDID: {} bytes", data.len());
     Ok(())
 }
 
-pub fn get_video_controller_status() -> Result<String> {
-    let c_str = unsafe { videoc_log_status() };
-    if c_str.is_null() {
-        anyhow::bail!("Failed to get video controller status");
+fn fix_edid_checksum(edid: &mut [u8]) {
+    for block in edid.chunks_mut(128) {
+        let sum = block[..127].iter().copied().fold(0u8, u8::wrapping_add);
+        block[127] = 0u8.wrapping_sub(sum);
     }
-
-    let c_str = unsafe { std::ffi::CStr::from_ptr(c_str) };
-    let status = c_str.to_str()?.to_string();
-
-    unsafe { free_videoc_status(c_str.as_ptr() as *mut _) };
-
-    debug!("Video controller status retrieved: {} chars", status.len());
-    Ok(status)
 }

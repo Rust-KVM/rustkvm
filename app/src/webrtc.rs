@@ -13,18 +13,21 @@ use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
-use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
+use webrtc::rtp_transceiver::rtp_codec::{
+    RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType,
+};
+use webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection;
+use webrtc::rtp_transceiver::{RTCPFeedback, RTCRtpTransceiverInit};
 use webrtc::track::track_local::TrackLocal;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
+use crate::api::{JsonRpcProcessor, default_registry};
 use crate::data_channel::DataChannelManager;
 use crate::hardware::usb::storage as storage_mod;
-use crate::jsonrpc::{JsonRpcProcessor, create_default_registry};
 use crate::session::Session;
 use crate::state::AppState;
 use crate::video;
 
-/// Session configuration for WebRTC connections
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
     pub ice_servers: Option<Vec<String>>,
@@ -44,16 +47,13 @@ impl Default for SessionConfig {
     }
 }
 
-/// WebRTC API instance shared across sessions
 pub struct WebRTCApi;
 
 impl WebRTCApi {
-    /// Create new WebRTC API instance
     pub fn new() -> anyhow::Result<Self> {
         Ok(Self)
     }
 
-    /// Create new WebRTC session with the given configuration
     pub async fn new_session(
         &self,
         config: SessionConfig,
@@ -89,9 +89,48 @@ impl WebRTCApi {
             }
         }
 
-        // Build API with media engine (codecs) and default interceptors
         let mut media_engine = MediaEngine::default();
-        media_engine.register_default_codecs().context("register_default_codecs failed")?;
+        let video_rtcp_feedback = vec![
+            RTCPFeedback { typ: "nack".into(), parameter: "".into() },
+            RTCPFeedback { typ: "nack".into(), parameter: "pli".into() },
+            RTCPFeedback { typ: "ccm".into(), parameter: "fir".into() },
+            RTCPFeedback { typ: "goog-remb".into(), parameter: "".into() },
+            RTCPFeedback { typ: "transport-cc".into(), parameter: "".into() },
+        ];
+        media_engine
+            .register_codec(
+                RTCRtpCodecParameters {
+                    capability: RTCRtpCodecCapability {
+                        mime_type: MIME_TYPE_H264.to_owned(),
+                        clock_rate: 90_000,
+                        channels: 0,
+                        sdp_fmtp_line:
+                            "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e034"
+                                .to_owned(),
+                        rtcp_feedback: video_rtcp_feedback,
+                    },
+                    payload_type: 102,
+                    ..Default::default()
+                },
+                RTPCodecType::Video,
+            )
+            .context("register H264 codec failed")?;
+        media_engine
+            .register_codec(
+                RTCRtpCodecParameters {
+                    capability: RTCRtpCodecCapability {
+                        mime_type: MIME_TYPE_OPUS.to_owned(),
+                        clock_rate: 48_000,
+                        channels: 2,
+                        sdp_fmtp_line: "minptime=10;useinbandfec=1".to_owned(),
+                        rtcp_feedback: vec![],
+                    },
+                    payload_type: 111,
+                    ..Default::default()
+                },
+                RTPCodecType::Audio,
+            )
+            .context("register Opus codec failed")?;
 
         let mut registry = Registry::new();
         registry = register_default_interceptors(registry, &mut media_engine)
@@ -107,14 +146,12 @@ impl WebRTCApi {
 
         let peer_connection = Arc::new(api.new_peer_connection(configuration).await?);
 
-        // Create video track
         let video_track = Arc::new(TrackLocalStaticSample::new(
             RTCRtpCodecCapability { mime_type: MIME_TYPE_H264.to_owned(), ..Default::default() },
             "video".to_owned(),
             "rustkvm".to_owned(),
         ));
 
-        // Create audio track (Opus)
         let audio_track = Arc::new(TrackLocalStaticSample::new(
             RTCRtpCodecCapability {
                 mime_type: MIME_TYPE_OPUS.to_owned(),
@@ -129,19 +166,28 @@ impl WebRTCApi {
 
         info!("Created video and audio tracks");
 
-        // Add video track to peer connection
-        let video_sender = peer_connection
-            .add_track(Arc::clone(&video_track) as Arc<dyn TrackLocal + Send + Sync>)
+        let send_only = || RTCRtpTransceiverInit {
+            direction: RTCRtpTransceiverDirection::Sendonly,
+            send_encodings: vec![],
+        };
+        let video_transceiver = peer_connection
+            .add_transceiver_from_track(
+                Arc::clone(&video_track) as Arc<dyn TrackLocal + Send + Sync>,
+                Some(send_only()),
+            )
             .await?;
+        let video_sender = video_transceiver.sender().await;
 
-        // Add audio track to peer connection
-        let audio_sender = peer_connection
-            .add_track(Arc::clone(&audio_track) as Arc<dyn TrackLocal + Send + Sync>)
+        let audio_transceiver = peer_connection
+            .add_transceiver_from_track(
+                Arc::clone(&audio_track) as Arc<dyn TrackLocal + Send + Sync>,
+                Some(send_only()),
+            )
             .await?;
+        let audio_sender = audio_transceiver.sender().await;
 
         info!("Added video and audio tracks to peer connection");
 
-        // Verify track was added by checking senders immediately
         let senders = peer_connection.get_senders().await;
         info!("Peer connection senders after adding video track: {}", senders.len());
         for (i, sender) in senders.iter().enumerate() {
@@ -152,11 +198,20 @@ impl WebRTCApi {
             }
         }
 
-        // Start RTCP reading tasks
         tokio::spawn(async move {
             let mut rtcp_buf = vec![0u8; 1500];
-            while let Ok((packet, attributes)) = video_sender.read(&mut rtcp_buf).await {
-                debug!("Video RTCP: {:?}, attributes: {:?}", packet, attributes);
+            while let Ok((packets, _attributes)) = video_sender.read(&mut rtcp_buf).await {
+                for pkt in packets {
+                    use webrtc::rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
+                    use webrtc::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
+                    let any = pkt.as_any();
+                    if any.downcast_ref::<PictureLossIndication>().is_some()
+                        || any.downcast_ref::<FullIntraRequest>().is_some()
+                    {
+                        debug!("Received PLI/FIR — forcing keyframe");
+                        video::force_video_keyframe().await;
+                    }
+                }
             }
         });
 
@@ -174,13 +229,11 @@ impl WebRTCApi {
 
         let app_state_for_close = config.app_state.clone();
 
-        // Set up connection state change handler
         let session_id_clone = session.id.clone();
         let video_track_clone = session.video_track.clone();
         let audio_track_clone = session.audio_track.clone();
-        // Add isConnected tracking per session
         let is_connected = Arc::new(RwLock::new(false));
-        let is_connected_clone = is_connected.clone();
+        let is_connected_clone = is_connected;
 
         peer_connection.on_ice_connection_state_change(Box::new(
             move |connection_state: RTCIceConnectionState| {
@@ -202,51 +255,38 @@ impl WebRTCApi {
                                 *connected = true;
                                 drop(connected);
                                 info!("WebRTC session {} connected", session_id);
-                                // actionSessions++ and session management
                                 increment_session_counter().await;
-                                // Bridge video -> track (GStreamer -> channel -> WebRTC)
                                 if let Some(track) = video_track.clone() {
                                     video::attach_webrtc_sink(track).await;
                                     info!("Video track attached to WebRTC session {}", session_id);
                                 }
-                                // Bridge audio -> track (GStreamer -> channel -> WebRTC)
                                 if let Some(track) = audio_track.clone() {
                                     video::attach_audio_sink(track).await;
                                     info!("Audio track attached to WebRTC session {}", session_id);
                                 }
-                                // Set as current session
                                 set_current_session(Some(session_id)).await;
                             }
                         }
-                        RTCIceConnectionState::Failed => {
-                            warn!("ICE Connection State is failed, closing peerConnection for session {}", session_id);
-                            // Note: Peer connection will be cleaned up when the session is dropped
-                        }
-                        RTCIceConnectionState::Closed => {
-                            info!("ICE Connection State is closed for session {}", session_id);
-                            // Clear current session if this was the current one
+                        RTCIceConnectionState::Failed | RTCIceConnectionState::Closed => {
+                            info!(
+                                "ICE Connection State is {:?} for session {}, tearing down",
+                                connection_state, session_id
+                            );
                             let current = get_current_session().await;
                             if current == Some(session_id.clone()) {
                                 set_current_session(None).await;
                             }
 
-                            // Clean up RPC channel for this session
                             remove_rpc_channel(&session_id).await;
 
-                            // Handle virtual media unmounting if needed
-                            // Virtual media will be automatically unmounted when session ends
-                            // Only decrement if was connected
                             let mut connected = is_connected.write().await;
                             if *connected {
                                 *connected = false;
                                 drop(connected);
-                                // Decrement session counter
                                 decrement_session_counter().await;
-                                // Only detach sink if there is no active current session
                                 if get_current_session().await.is_none() {
                                     video::detach_webrtc_sink().await;
                                 }
-                                // Auto-unmount virtual media if last session closed and source is WebRTC
                                 if get_current_session().await.is_none()
                                     && let Some(st) = storage_mod::get_virtual_media_state()
                                         && matches!(st.source, storage_mod::VirtualMediaSource::WebRTC) {
@@ -260,9 +300,8 @@ impl WebRTCApi {
                                         }
                             }
 
-                            // Remove session from AppState to free resources
                             app_state.remove_session(&session_id).await;
-                            info!("Removed session {} on ICE Closed", session_id);
+                            info!("Removed session {} on ICE {:?}", session_id, connection_state);
                         }
                         _ => {}
                     }
@@ -270,7 +309,6 @@ impl WebRTCApi {
             },
         ));
 
-        // Set up ICE candidate handler
         let session_id_clone = session.id.clone();
         let app_state_clone = config.app_state.clone();
         peer_connection.on_ice_candidate(Box::new(move |candidate: Option<RTCIceCandidate>| {
@@ -280,7 +318,6 @@ impl WebRTCApi {
                 if let Some(candidate) = candidate {
                     info!("WebRTC peerConnection has a new ICE candidate: {:?}", candidate);
 
-                    // Send ICE candidate through Socket.IO signaling channel
                     if let Err(e) = send_ice_candidate(&session_id, &candidate, app_state).await {
                         warn!("Failed to send ICE candidate: {}", e);
                     }
@@ -290,7 +327,6 @@ impl WebRTCApi {
             })
         }));
 
-        // Set up data channel handler with proper routing
         let session_clone = session.clone();
         peer_connection.on_data_channel(Box::new(move |data_channel: Arc<RTCDataChannel>| {
             let session = session_clone.clone();
@@ -311,10 +347,8 @@ impl WebRTCApi {
     }
 }
 
-/// Global WebRTC API instance
 static WEBRTC_API: tokio::sync::OnceCell<WebRTCApi> = tokio::sync::OnceCell::const_new();
 
-/// Initialize global WebRTC API
 pub async fn init_webrtc_api() -> anyhow::Result<()> {
     let api = WebRTCApi::new()?;
     WEBRTC_API.set(api).map_err(|_| anyhow::anyhow!("WebRTC API already initialized"))?;
@@ -322,35 +356,27 @@ pub async fn init_webrtc_api() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Get global WebRTC API instance
 pub async fn get_webrtc_api() -> &'static WebRTCApi {
     WEBRTC_API.get().expect("WebRTC API not initialized")
 }
 
-/// Session counter for managing active sessions
 static SESSION_COUNTER: RwLock<i32> = RwLock::const_new(0);
 
-/// Current active session
-static CURRENT_SESSION: RwLock<Option<String>> = RwLock::const_new(None);
+static CURRENT_SESSION: RwLock<Option<Arc<str>>> = RwLock::const_new(None);
 
-/// Global RPC channel storage for sessions
 use std::collections::HashMap;
 static RPC_CHANNELS: tokio::sync::OnceCell<
-    RwLock<HashMap<String, Arc<webrtc::data_channel::RTCDataChannel>>>,
+    RwLock<HashMap<Arc<str>, Arc<webrtc::data_channel::RTCDataChannel>>>,
 > = tokio::sync::OnceCell::const_new();
 
-/// Create JSON-RPC processor for sending events
 fn create_rpc_processor() -> JsonRpcProcessor {
-    let registry = Arc::new(create_default_registry());
-    JsonRpcProcessor::new(registry)
+    JsonRpcProcessor::new(default_registry())
 }
 
-/// Trigger OTA state update
 pub async fn trigger_ota_state_update() {
     info!("Triggering OTA state update");
 
     if let Some(session_id) = get_current_session().await {
-        // Create a session with RPC channel for sending events
         let mut session = Session::new(session_id.clone());
         if let Some(rpc_channel) = get_rpc_channel(&session_id).await {
             if rpc_channel.ready_state()
@@ -363,10 +389,9 @@ pub async fn trigger_ota_state_update() {
         }
         let processor = create_rpc_processor();
 
-        // Send update status event
         let params = serde_json::json!({
             "updateAvailable": false,
-            "currentVersion": "1.0.0",
+            "currentVersion": crate::version::built_app_version(),
             "error": null
         });
 
@@ -376,19 +401,15 @@ pub async fn trigger_ota_state_update() {
     }
 }
 
-/// Trigger video state update
 pub async fn trigger_video_state_update() {
     info!("Triggering video state update");
-    // Call video module's internal update function
     video::trigger_video_state_update_rpc().await;
 }
 
-/// Trigger USB state update
 pub async fn trigger_usb_state_update() {
     info!("Triggering USB state update");
 
     if let Some(session_id) = get_current_session().await {
-        // Create a session with RPC channel for sending events
         let mut session = Session::new(session_id.clone());
         if let Some(rpc_channel) = get_rpc_channel(&session_id).await {
             if rpc_channel.ready_state()
@@ -401,17 +422,16 @@ pub async fn trigger_usb_state_update() {
         }
         let processor = create_rpc_processor();
 
-        // Get USB device states using our handlers
-        let usb_devices = match crate::jsonrpc::handlers::get_usb_devices() {
+        let usb_devices = match crate::api::handlers::usb::get_usb_devices() {
             Ok(devices) => devices,
-            Err(_) => crate::jsonrpc::handlers::UsbDevicesResponse {
+            Err(_) => crate::api::handlers::usb::UsbDevicesResponse {
                 absolute_mouse: true,
                 relative_mouse: false,
                 keyboard: true,
                 mass_storage: true,
             },
         };
-        let usb_emulation = crate::jsonrpc::handlers::get_usb_emulation_state().unwrap_or(false);
+        let usb_emulation = crate::api::handlers::usb::get_usb_emulation_state().unwrap_or(false);
 
         let params = serde_json::json!({
             "devices": usb_devices,
@@ -424,7 +444,6 @@ pub async fn trigger_usb_state_update() {
     }
 }
 
-/// Handle first session connected
 pub async fn on_first_session_connected() {
     info!("First WebRTC session connected - starting video");
     if let Err(e) = video::write_ctrl_action("start_video").await {
@@ -432,7 +451,6 @@ pub async fn on_first_session_connected() {
     }
 }
 
-/// Handle last session disconnected
 pub async fn on_last_session_disconnected() {
     info!("Last WebRTC session disconnected - stopping video");
     if let Err(e) = video::write_ctrl_action("stop_video").await {
@@ -440,12 +458,10 @@ pub async fn on_last_session_disconnected() {
     }
 }
 
-/// Handle session count change
 pub async fn on_active_sessions_changed() {
     let count = *SESSION_COUNTER.read().await;
     info!("Active sessions count changed to: {}", count);
 
-    // Send session count update to current session if available
     if let Some(session_id) = get_current_session().await {
         let mut session = Session::new(session_id.clone());
         if let Some(rpc_channel) = get_rpc_channel(&session_id).await {
@@ -470,7 +486,10 @@ pub async fn on_active_sessions_changed() {
     }
 }
 
-/// Increment session counter
+pub async fn get_active_session_count() -> i32 {
+    *SESSION_COUNTER.read().await
+}
+
 pub async fn increment_session_counter() {
     let mut counter = SESSION_COUNTER.write().await;
     *counter += 1;
@@ -483,7 +502,6 @@ pub async fn increment_session_counter() {
     on_active_sessions_changed().await;
 }
 
-/// Decrement session counter
 pub async fn decrement_session_counter() {
     let mut counter = SESSION_COUNTER.write().await;
     *counter = (*counter - 1).max(0);
@@ -496,26 +514,22 @@ pub async fn decrement_session_counter() {
     on_active_sessions_changed().await;
 }
 
-/// Get current session ID
-pub async fn get_current_session() -> Option<String> {
+pub async fn get_current_session() -> Option<Arc<str>> {
     CURRENT_SESSION.read().await.clone()
 }
 
-/// Set current session ID
-pub async fn set_current_session(session_id: Option<String>) {
+pub async fn set_current_session(session_id: Option<Arc<str>>) {
     *CURRENT_SESSION.write().await = session_id;
 }
 
-/// Store RPC channel for a session
 pub async fn store_rpc_channel(
-    session_id: String,
+    session_id: Arc<str>,
     channel: Arc<webrtc::data_channel::RTCDataChannel>,
 ) {
     let channels = RPC_CHANNELS.get_or_init(|| async { RwLock::new(HashMap::new()) }).await;
     channels.write().await.insert(session_id, channel);
 }
 
-/// Get RPC channel for a session
 pub async fn get_rpc_channel(
     session_id: &str,
 ) -> Option<Arc<webrtc::data_channel::RTCDataChannel>> {
@@ -523,7 +537,6 @@ pub async fn get_rpc_channel(
     channels.read().await.get(session_id).cloned()
 }
 
-/// Remove RPC channel for a session
 pub async fn remove_rpc_channel(
     session_id: &str,
 ) -> Option<Arc<webrtc::data_channel::RTCDataChannel>> {
@@ -531,7 +544,6 @@ pub async fn remove_rpc_channel(
     channels.write().await.remove(session_id)
 }
 
-/// Send ICE candidate through Socket.IO signaling channel
 async fn send_ice_candidate(
     session_id: &str,
     candidate: &RTCIceCandidate,
@@ -545,32 +557,11 @@ async fn send_ice_candidate(
         "data": candidate_init
     });
 
-    // Emit ICE candidate to the specific session via Socket.IO
     info!("Sending ICE candidate for session: {}", session_id);
 
-    // // Get the socket from AppState and emit the message
-    // if let Some(socket) = app_state.sockets.read().await.get(session_id) {
-    //     if let Err(e) = socket.emit("ice-candidate", &message) {
-    //         warn!("Socket.IO emit failed, queuing for WebSocket: {}", e);
-    //         let message_str = message.to_string();
-    //         app_state.queue_ice_candidate(session_id, message_str).await;
-    //         info!("Queued ICE candidate for WebSocket session: {}", session_id);
-    //     } else {
-    //         info!("Sent ICE candidate via Socket.IO for session: {}", session_id);
-    //     }
-    // } else {
-    //     let message_str = message.to_string();
-    //     app_state.queue_ice_candidate(session_id, message_str).await;
-    //     info!("Queued ICE candidate for WebSocket session: {}", session_id);
-    // }
-
-    // Ok(())
-
-    // 1) Try cloud websocket first
     if let Err(e) = crate::cloud::websocket::cloud_ws_send_json(&message).await {
         debug!("cloud ws send failed: {}", e);
 
-        // 2) Fallback to Socket.IO (browser/local signaling)
         if let Some(socket) = app_state.sockets.read().await.get(session_id) {
             if let Err(e) = socket.emit("ice-candidate", &message) {
                 warn!("Socket.IO emit failed, queue for local WS: {}", e);
@@ -580,7 +571,6 @@ async fn send_ice_candidate(
                 return Ok(());
             }
         } else {
-            // 3) Final fallback: queue to local websocket
             app_state.queue_ice_candidate(session_id, message.to_string()).await;
         }
     }
@@ -588,7 +578,6 @@ async fn send_ice_candidate(
     Ok(())
 }
 
-/// Handle session takeover: send otherSessionConnected to old session and close it after delay
 pub async fn handle_session_takeover(
     app_state: std::sync::Arc<crate::state::AppState>,
     new_session_id: &str,
@@ -596,17 +585,14 @@ pub async fn handle_session_takeover(
     let maybe_old = app_state.get_current_session().await;
 
     if let Some(ref old_id) = maybe_old
-        && *old_id != new_session_id
+        && &**old_id != new_session_id
     {
-        // Send otherSessionConnected event to old session
         if let Some(old_session) = app_state.get_session(old_id).await {
             if let Some(rpc_channel) = get_rpc_channel(old_id).await {
                 let mut session_with_rpc = old_session.clone();
                 session_with_rpc.rpc_channel = Some(rpc_channel);
 
-                let processor = crate::jsonrpc::JsonRpcProcessor::new(std::sync::Arc::new(
-                    crate::jsonrpc::create_default_registry(),
-                ));
+                let processor = crate::api::JsonRpcProcessor::new(crate::api::default_registry());
 
                 if let Err(e) =
                     processor.send_event("otherSessionConnected", None, &session_with_rpc).await
@@ -624,7 +610,6 @@ pub async fn handle_session_takeover(
             }
         }
 
-        // Close old session after 1 second delay
         let app_state_cl = app_state.clone();
         let old_id_cl = old_id.clone();
         tokio::spawn(async move {

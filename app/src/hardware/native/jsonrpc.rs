@@ -1,11 +1,6 @@
-//! Control JSON structures for native <-> KVM IPC.
-//!
-//! Keep field names and shapes stable for cross-language compatibility.
-
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// Control action sent to native.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CtrlAction {
     pub action: String,
@@ -15,7 +10,6 @@ pub struct CtrlAction {
     pub params: Option<Map<String, Value>>,
 }
 
-/// Response or event received from native.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CtrlResponse {
     #[serde(default)]

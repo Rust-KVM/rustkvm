@@ -6,36 +6,29 @@ use tracing::{debug, info, warn};
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 
+use crate::api::{JsonRpcProcessor, default_registry};
 use crate::hardware::usb::storage::{
     append_upload_data, complete_upload, get_upload_progress, set_webrtc_read_handler,
 };
-use crate::jsonrpc::{JsonRpcProcessor, create_default_registry};
 use crate::remote_mount;
 use crate::session::Session;
 use crate::terminal::setup_terminal_channel;
 
-/// Handle incoming RPC messages through WebRTC data channel
+#[tracing::instrument(skip_all, fields(session = %session.id))]
 pub async fn handle_rpc_message(msg: DataChannelMessage, session: &Session) {
     debug!("Received RPC message: {} bytes", msg.data.len());
 
-    // Create JSON-RPC processor with default registry
-    let registry = Arc::new(create_default_registry());
-    let processor = JsonRpcProcessor::new(registry);
-
-    // Process the JSON-RPC message
+    let processor = JsonRpcProcessor::new(default_registry());
     processor.handle_message(msg, session).await;
 }
 
-/// Handle terminal data channel - implements the full terminal functionality
 pub async fn handle_terminal_channel(channel: Arc<RTCDataChannel>) {
     let label = channel.label().to_string();
     let channel_id = channel.id();
     info!("Terminal data channel '{}' (ID: {:?}) established", label, channel_id);
 
-    // Create terminal handler which automatically sets up all event handlers
     match setup_terminal_channel(channel).await {
         Ok(_handler) => {
-            // Handler is now managing the entire terminal lifecycle
             info!("Terminal handler successfully initialized");
         }
         Err(e) => {
@@ -44,19 +37,16 @@ pub async fn handle_terminal_channel(channel: Arc<RTCDataChannel>) {
     }
 }
 
-/// Handle serial data channel
 pub async fn handle_serial_channel(channel: Arc<RTCDataChannel>) {
     let label = channel.label().to_string();
     info!("Serial data channel '{}' established", label);
 
-    // Set up message handler for serial data
     channel.on_message(Box::new(move |msg: DataChannelMessage| {
         Box::pin(async move {
             handle_serial_message(msg).await;
         })
     }));
 
-    // Set up channel state handlers
     channel.on_open(Box::new(move || {
         Box::pin(async move {
             info!("Serial channel opened");
@@ -70,19 +60,75 @@ pub async fn handle_serial_channel(channel: Arc<RTCDataChannel>) {
     }));
 }
 
-/// Handle serial messages
 async fn handle_serial_message(msg: DataChannelMessage) {
     debug!("Received serial data: {} bytes", msg.data.len());
-
-    // TODO: Forward serial data to/from actual serial port
-    // This would include:
-    // - Serial port communication
-    // - Baud rate configuration
-    // - Hardware flow control
-    // - Data format handling
 }
 
-/// Handle upload data channels (dynamic channels with upload_ prefix)
+const CDC_ACM_DEVICE_PATH: &str = "/dev/ttyGS0";
+
+pub async fn handle_cdcacm_channel(channel: Arc<RTCDataChannel>) {
+    use bytes::Bytes;
+    use tokio::fs::OpenOptions;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let label = channel.label().to_string();
+    info!("CDC-ACM data channel '{}' established", label);
+
+    let device = match OpenOptions::new().read(true).write(true).open(CDC_ACM_DEVICE_PATH).await {
+        Ok(f) => f,
+        Err(e) => {
+            warn!(path = CDC_ACM_DEVICE_PATH, "Failed to open CDC-ACM device: {e}");
+            let _ = channel.close().await;
+            return;
+        }
+    };
+
+    let (mut reader, writer) = tokio::io::split(device);
+    let writer = Arc::new(tokio::sync::Mutex::new(writer));
+
+    let channel_send = channel.clone();
+    tokio::spawn(async move {
+        let mut buf = vec![0u8; 1024];
+        loop {
+            match reader.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    if let Err(e) = channel_send.send(&Bytes::copy_from_slice(&buf[..n])).await {
+                        warn!("Failed to send CDC-ACM output: {e}");
+                        break;
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to read from CDC-ACM device: {e}");
+                    break;
+                }
+            }
+        }
+    });
+
+    channel.on_message(Box::new(move |msg: DataChannelMessage| {
+        let writer = writer.clone();
+        Box::pin(async move {
+            let mut w = writer.lock().await;
+            if let Err(e) = w.write_all(&msg.data).await {
+                warn!("Failed to write to CDC-ACM device: {e}");
+            }
+        })
+    }));
+
+    channel.on_open(Box::new(move || {
+        Box::pin(async move {
+            info!("CDC-ACM channel opened");
+        })
+    }));
+
+    channel.on_close(Box::new(move || {
+        Box::pin(async move {
+            info!("CDC-ACM channel closed");
+        })
+    }));
+}
+
 pub async fn handle_upload_channel(channel: Arc<RTCDataChannel>) {
     let label = channel.label().to_string();
     info!("Upload data channel '{}' established", label);
@@ -92,28 +138,24 @@ pub async fn handle_upload_channel(channel: Arc<RTCDataChannel>) {
         return;
     }
 
-    let upload_id = label.clone();
+    let upload_id = label;
     info!("Starting file upload with ID: {}", upload_id);
 
-    // Throttle progress to ~200ms using non-poisoning mutex
     let last_progress = Arc::new(Mutex::new(std::time::Instant::now()));
 
-    // Message handler: write chunk + throttled progress feedback
     let ch_for_msg = channel.clone();
     let upload_id_for_msg = upload_id.clone();
-    let last_for_msg = last_progress.clone();
+    let last_for_msg = last_progress;
     channel.on_message(Box::new(move |msg: DataChannelMessage| {
         let ch = ch_for_msg.clone();
         let upload_id = upload_id_for_msg.clone();
         let last = last_for_msg.clone();
         Box::pin(async move {
-            // Write chunk
             if let Err(e) = append_upload_data(&upload_id, &msg.data).await {
                 warn!("failed to write upload chunk {}: {}", upload_id, e);
                 return;
             }
 
-            // Throttle progress send to ~200ms
             let mut should_send = false;
             {
                 let mut t = last.lock();
@@ -123,10 +165,8 @@ pub async fn handle_upload_channel(channel: Arc<RTCDataChannel>) {
                 }
             }
 
-            // Read current progress
             match get_upload_progress(&upload_id).await {
                 Ok((size, already)) => {
-                    // Force-send final progress when done, even if throttled
                     if already >= size {
                         let progress = serde_json::json!({
                             "Size": size,
@@ -152,15 +192,13 @@ pub async fn handle_upload_channel(channel: Arc<RTCDataChannel>) {
                     }
                 }
                 Err(e) => {
-                    // Not fatal; just log
                     warn!("failed to get upload progress {}: {}", upload_id, e);
                 }
             }
         })
     }));
 
-    // Finalize on close (rename .incomplete -> final if complete)
-    let upload_id_for_close = upload_id.clone();
+    let upload_id_for_close = upload_id;
     channel.on_close(Box::new(move || {
         let upload_id = upload_id_for_close.clone();
         Box::pin(async move {
@@ -173,11 +211,9 @@ pub async fn handle_upload_channel(channel: Arc<RTCDataChannel>) {
                     }
                 }
                 Err(e) => {
-                    // Not found likely means already finalized earlier
                     debug!("Upload {} close: progress not available: {}", upload_id, e);
                 }
             }
-            // Try to finalize if still pending; ignore 'not found'
             if let Err(e) = complete_upload(&upload_id).await {
                 debug!("complete_upload on close ({}): {}", upload_id, e);
             }
@@ -185,7 +221,6 @@ pub async fn handle_upload_channel(channel: Arc<RTCDataChannel>) {
     }));
 }
 
-/// Data channel management utilities
 pub struct DataChannelManager {
     upload_prefix: String,
 }
@@ -195,7 +230,6 @@ impl DataChannelManager {
         Self { upload_prefix: "upload_".to_string() }
     }
 
-    /// Route data channel based on its label
     pub async fn route_data_channel(&self, channel: Arc<RTCDataChannel>, session: &Session) {
         let label = channel.label().to_string();
 
@@ -216,6 +250,18 @@ impl DataChannelManager {
                 info!("Setting up serial data channel");
                 handle_serial_channel(channel).await;
             }
+            "cdcacm" => {
+                info!("Setting up CDC-ACM data channel");
+                handle_cdcacm_channel(channel).await;
+            }
+            "hidrpc" => {
+                info!("Setting up hidrpc data channel (reliable)");
+                setup_hidrpc_channel(channel, true).await;
+            }
+            "hidrpc-unreliable-ordered" | "hidrpc-unreliable-nonordered" => {
+                info!("Setting up {} data channel", label);
+                setup_hidrpc_channel(channel, false).await;
+            }
             _ if label.starts_with(&self.upload_prefix) => {
                 info!("Setting up upload data channel");
                 tokio::spawn(handle_upload_channel(channel));
@@ -230,7 +276,6 @@ impl DataChannelManager {
         let session_id = session.id.clone();
         let rpc_channel = channel.clone();
 
-        // Store the RPC channel globally for this session
         crate::webrtc::store_rpc_channel(session_id.clone(), rpc_channel.clone()).await;
 
         let session_id_for_msg = session_id.clone();
@@ -238,26 +283,23 @@ impl DataChannelManager {
             let session_id = session_id_for_msg.clone();
             let rpc_channel = rpc_channel.clone();
             Box::pin(async move {
-                // Create a session with the RPC channel for the handler
                 let mut session_with_rpc = Session::new(session_id);
                 session_with_rpc.rpc_channel = Some(rpc_channel);
                 handle_rpc_message(msg, &session_with_rpc).await;
             })
         }));
 
-        // When the RPC data channel is opened, trigger state updates so
-        // events are sent only after the channel is ready and stored
         channel.on_open(Box::new(move || {
             Box::pin(async move {
                 info!("RPC channel opened - triggering state updates");
                 crate::webrtc::trigger_ota_state_update().await;
                 crate::webrtc::trigger_video_state_update().await;
                 crate::webrtc::trigger_usb_state_update().await;
+                crate::api::broadcast_failsafe_mode().await;
 
                 let state = crate::hardware::usb::get_current_usb_state();
-                crate::jsonrpc::broadcast_usb_state(state).await;
+                crate::api::broadcast_usb_state(state).await;
 
-                // Also emit session count update now that the channel is open
                 crate::webrtc::on_active_sessions_changed().await;
             })
         }));
@@ -266,10 +308,9 @@ impl DataChannelManager {
     async fn setup_disk_channel(&self, channel: Arc<RTCDataChannel>, session: &Session) {
         let session_id = session.id.clone();
 
-        // On open: install sender and bridge
         let ch_for_open = channel.clone();
         channel.on_open(Box::new(move || {
-            let ch = ch_for_open.clone();
+            let ch = ch_for_open;
             Box::pin(async move {
                 let rt = tokio::runtime::Handle::current();
                 remote_mount::webrtc_disk_set_sender(Arc::new(move |text: &str| {
@@ -284,7 +325,6 @@ impl DataChannelManager {
             })
         }));
 
-        // Forward inbound data to remote_mount
         channel.on_message(Box::new(move |msg: DataChannelMessage| {
             let session_id = session_id.clone();
             Box::pin(async move {
@@ -293,7 +333,6 @@ impl DataChannelManager {
             })
         }));
 
-        // On close: clear sender and handler
         channel.on_close(Box::new(move || {
             Box::pin(async move {
                 info!("Disk data channel closed");
@@ -308,4 +347,34 @@ impl Default for DataChannelManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+async fn setup_hidrpc_channel(channel: Arc<RTCDataChannel>, reliable: bool) {
+    if reliable {
+        crate::hidrpc::install_reliable_channel(channel.clone());
+    }
+
+    let label = channel.label().to_string();
+    channel.on_message(Box::new(move |msg: DataChannelMessage| {
+        Box::pin(async move {
+            crate::hidrpc::dispatch(msg).await;
+        })
+    }));
+
+    if reliable {
+        let label_close = label.clone();
+        channel.on_close(Box::new(move || {
+            let label = label_close.clone();
+            Box::pin(async move {
+                crate::hidrpc::clear_reliable_channel();
+                info!("hidrpc channel '{}' closed", label);
+            })
+        }));
+    }
+
+    channel.on_open(Box::new(move || {
+        Box::pin(async move {
+            info!("hidrpc channel '{}' opened", label);
+        })
+    }));
 }

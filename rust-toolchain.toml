@@ -1,0 +1,4 @@
+# RustKVM: use self-built stage2 toolchain from rust/ source
+# Built via: cd rust && ./x build --stage 2
+[toolchain]
+channel = "stage2"
