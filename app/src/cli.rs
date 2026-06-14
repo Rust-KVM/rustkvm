@@ -51,9 +51,6 @@ pub struct Cli {
     #[command(flatten)]
     pub logging: LoggingArgs,
 
-    #[arg(long, default_value = "true", env = "RUSTKVM_AUDIO_ENABLED")]
-    pub audio_enabled: bool,
-
     #[arg(
         long,
         short = 'q',
@@ -266,7 +263,6 @@ impl Cli {
             video.level = self.video.video_level,
             video.profile = ?self.video.video_profile,
             quality_factor = self.quality,
-            audio.enabled = self.audio_enabled,
             audio.device = %self.audio.audio_device,
             audio.sample_rate_hz = self.audio.audio_sample_rate,
             audio.channels = self.audio.audio_channels,

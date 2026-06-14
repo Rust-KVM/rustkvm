@@ -71,6 +71,34 @@ pub fn create_default_registry() -> RpcRegistry {
     registry.register_no_params("getEDID", media::get_edid);
     registry.register_typed("setEDID", media::set_edid);
 
+    registry.register_async("getAudioConfig", |_params| {
+        Box::pin(async move {
+            let v = media::get_audio_config().await?;
+            Ok(serde_json::to_value(v)?)
+        })
+    });
+    registry.register_async("setAudioConfig", |params| {
+        Box::pin(async move {
+            let p: media::SetAudioConfigParams =
+                serde_json::from_value(params.ok_or(anyhow!("Missing required parameters"))?)?;
+            let v = media::set_audio_config(p).await?;
+            Ok(serde_json::to_value(v)?)
+        })
+    });
+    registry.register_async("getHostDisplayIdleMode", |_params| {
+        Box::pin(async move {
+            let v = media::get_host_display_idle_mode().await?;
+            Ok(serde_json::to_value(v)?)
+        })
+    });
+    registry.register_async("setHostDisplayIdleMode", |params| {
+        Box::pin(async move {
+            let p: media::HostDisplayIdleModeParams =
+                serde_json::from_value(params.ok_or(anyhow!("Missing required parameters"))?)?;
+            media::set_host_display_idle_mode(p).await
+        })
+    });
+
     registry.register_no_params("getUsbDevices", usb::get_usb_devices);
     registry.register_typed("setUsbDevices", usb::set_usb_devices);
     registry.register_typed("setUsbDeviceState", usb::set_usb_device_state);
@@ -87,6 +115,7 @@ pub fn create_default_registry() -> RpcRegistry {
     registry.register_typed("absMouseReport", hid::abs_mouse_report);
     registry.register_typed("relMouseReport", hid::rel_mouse_report);
     registry.register_typed("wheelReport", hid::wheel_report);
+    registry.register_async("wakeHost", |_params| Box::pin(async move { hid::wake_host().await }));
     registry.register_no_params("getKeyboardLayout", hid::get_keyboard_layout);
     registry.register_typed("setKeyboardLayout", hid::set_keyboard_layout);
     registry.register_no_params("getKeyboardLedState", hid::get_keyboard_led_state);

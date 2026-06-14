@@ -469,3 +469,56 @@ pub struct RpcMountBuiltInImageParams {
 pub async fn rpc_mount_built_in_image(params: RpcMountBuiltInImageParams) -> Result<Value> {
     mount_built_in_image(MountBuiltInImageParams { filename: params.filename }).await
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct AudioConfig {
+    pub enabled: bool,
+}
+
+#[derive(Deserialize)]
+pub struct SetAudioConfigParams {
+    pub params: AudioConfig,
+}
+
+pub async fn get_audio_config() -> Result<AudioConfig> {
+    let cfg = crate::config::get_config_manager().get().await;
+    crate::video::set_audio_enabled(cfg.audio_enabled);
+    Ok(AudioConfig { enabled: cfg.audio_enabled })
+}
+
+pub async fn set_audio_config(params: SetAudioConfigParams) -> Result<AudioConfig> {
+    let enabled = params.params.enabled;
+    crate::config::get_config_manager()
+        .update(|cfg| {
+            cfg.audio_enabled = enabled;
+        })
+        .await?;
+    crate::video::set_audio_enabled(enabled);
+    info!("Audio streaming {} (persisted)", if enabled { "enabled" } else { "disabled" });
+    Ok(AudioConfig { enabled })
+}
+
+#[derive(Serialize)]
+pub struct HostDisplayIdleModeResponse {
+    pub enabled: bool,
+}
+
+#[derive(Deserialize)]
+pub struct HostDisplayIdleModeParams {
+    pub enabled: bool,
+}
+
+pub async fn get_host_display_idle_mode() -> Result<HostDisplayIdleModeResponse> {
+    let cfg = crate::config::get_config_manager().get().await;
+    Ok(HostDisplayIdleModeResponse { enabled: cfg.host_display_disable_when_idle })
+}
+
+pub async fn set_host_display_idle_mode(params: HostDisplayIdleModeParams) -> Result<Value> {
+    crate::config::get_config_manager()
+        .update(|cfg| {
+            cfg.host_display_disable_when_idle = params.enabled;
+        })
+        .await?;
+    info!("Host display idle mode set to: {} (persisted)", params.enabled);
+    Ok(Value::Null)
+}

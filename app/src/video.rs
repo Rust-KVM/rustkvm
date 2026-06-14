@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use prometheus::Encoder;
@@ -37,6 +38,16 @@ static AUDIO_SINK: tokio::sync::RwLock<Option<Arc<TrackLocalStaticSample>>> =
 
 static AUDIO_FRAME_TX: tokio::sync::OnceCell<mpsc::Sender<bytes::Bytes>> =
     tokio::sync::OnceCell::const_new();
+
+static AUDIO_ENABLED: AtomicBool = AtomicBool::new(true);
+
+pub fn set_audio_enabled(enabled: bool) {
+    AUDIO_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+pub fn is_audio_enabled() -> bool {
+    AUDIO_ENABLED.load(Ordering::Relaxed)
+}
 
 static VIDEO_PIPELINE_STARTED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 
@@ -157,6 +168,9 @@ async fn audio_frame_writer(mut rx: mpsc::Receiver<AudioFrame>) {
             frame = rx.recv() => {
                 match frame {
                     Some(data) => {
+                        if !is_audio_enabled() {
+                            continue;
+                        }
                         if let Some(track) = &current_track {
                             let sample = Sample {
                                 data,
@@ -188,8 +202,10 @@ pub async fn start_native_video_with_cli(cli: &crate::cli::Cli) -> anyhow::Resul
 
     let video_config = VideoConfig::from_cli(&cli.video, cli.quality);
 
-    let audio_config =
-        if cli.audio_enabled { Some(AudioConfig::from_cli(&cli.audio)) } else { None };
+    let audio_enabled = crate::config::get_config_manager().get().await.audio_enabled;
+    set_audio_enabled(audio_enabled);
+
+    let audio_config = Some(AudioConfig::from_cli(&cli.audio));
 
     let manager = PipelineManager::new(video_config, audio_config)?;
 

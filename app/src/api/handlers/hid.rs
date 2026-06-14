@@ -86,6 +86,32 @@ pub fn wheel_report(params: WheelReportParams) -> Result<Value> {
     Ok(Value::Null)
 }
 
+pub async fn wake_host() -> Result<Value> {
+    let Some(mgr) = usb_mod::get_usb_manager() else {
+        return Ok(Value::Null);
+    };
+    for _ in 0..3 {
+        {
+            let guard = mgr.read();
+            guard
+                .hid()
+                .rel_mouse_report(1, 0, 0)
+                .map_err(|e| anyhow!("wake host (nudge) failed: {}", e))?;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        {
+            let guard = mgr.read();
+            guard
+                .hid()
+                .rel_mouse_report(-1, 0, 0)
+                .map_err(|e| anyhow!("wake host (restore) failed: {}", e))?;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    }
+    info!("Sent HID wake nudge to host");
+    Ok(Value::Null)
+}
+
 #[derive(Serialize)]
 pub struct KeyDownStateResponse {
     pub modifier: u8,

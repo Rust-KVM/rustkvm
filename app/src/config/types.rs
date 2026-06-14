@@ -187,6 +187,9 @@ fn default_log_level() -> String {
 fn default_device_id() -> String {
     crate::hardware::hw::get_device_id()
 }
+fn default_true() -> bool {
+    true
+}
 
 /// Accepts a USB vendor/product id as `0x1234` or bare `1234` hex (1-4 digits).
 fn is_valid_usb_id(s: &str) -> bool {
@@ -238,6 +241,11 @@ pub struct Config {
     pub usb_config: UsbConfig,
     pub usb_devices: UsbDevices,
     pub network_config: NetworkConfig,
+
+    #[serde(default = "default_true")]
+    pub audio_enabled: bool,
+    #[serde(default)]
+    pub host_display_disable_when_idle: bool,
 }
 
 impl Default for Config {
@@ -269,6 +277,8 @@ impl Default for Config {
             usb_config: UsbConfig::default(),
             usb_devices: UsbDevices::default(),
             network_config: NetworkConfig::default(),
+            audio_enabled: true,
+            host_display_disable_when_idle: false,
         }
     }
 }

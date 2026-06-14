@@ -673,7 +673,9 @@ impl PipelineManager {
     pub fn start(&self) -> Result<()> {
         self.video.start()?;
         if let Some(audio) = &self.audio {
-            audio.start()?;
+            if let Err(e) = audio.start() {
+                warn!("Audio pipeline failed to start (continuing without audio): {e:#}");
+            }
         }
         Ok(())
     }
