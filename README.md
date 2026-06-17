@@ -23,12 +23,20 @@ RustKVM is a high-performance, specialized KVM-over-IP solution designed for the
 
 ```text
 rustkvm
-  ├── app               # Core application source code
-  ├── crates            # Shared workspace crates (rkvm-core, rkvm-net)
-  ├── client            # Frontend client assets
-  ├── rust              # Tailored Rust toolchain for cross-compilation
-  └── assets            # Static assets and images
+  ├── app                    # Core device application (server binary)
+  ├── crates
+  │   ├── rkvm-core          # Shared core types and utilities
+  │   ├── rkvm-net           # Shared networking primitives
+  │   ├── rkvm-proto         # Shared wire protocol (JSON-RPC + HID RPC)
+  │   └── rkvm-web           # Leptos/WASM web frontend (built with Trunk)
+  ├── rust                   # Tailored Rust toolchain for cross-compilation
+  └── assets                 # Static assets and images
 ```
+
+> [!NOTE]
+> `crates/rkvm-web` is excluded from the workspace (it targets `wasm32` with its
+> own toolchain and lockfile). The application embeds its built `dist/` output
+> at compile time, so build the frontend before the device binary.
 
 ---
 
@@ -105,7 +113,19 @@ git checkout main && git pull
 rustup toolchain link stage2 build/x86_64-unknown-linux-gnu/stage2
 ```
 
-### 4. Phase 3: Compile the Project
+### 4. Phase 3: Build the Web Frontend
+
+The device binary embeds the frontend's compiled `dist/` output, so build it
+first. This uses a standard stable Rust toolchain targeting `wasm32` — no
+cross-toolchain required.
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install trunk
+cd crates/rkvm-web && trunk build --release
+```
+
+### 5. Phase 4: Compile the Project
 
 Navigate to the project directory and compile RustKVM using the **self-built stage2 toolchain**:
 

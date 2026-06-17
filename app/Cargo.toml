@@ -94,6 +94,7 @@ id_token_verifier.workspace  = true
 # Internal crates
 rkvm-core.workspace          = true
 rkvm-net.workspace           = true
+rkvm-proto.workspace         = true
 
 [dev-dependencies]
 tempfile.workspace           = true

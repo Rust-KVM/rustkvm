@@ -1,0 +1,65 @@
+[graph]
+targets = [{ triple = "wasm32-unknown-unknown" }]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+version = 2
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = [
+    # paste -> via leptos/tachys/reactive_graph/either_of (compile-time only).
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained proc-macro; build-time only, not in shipped wasm; no upgrade" },
+    # proc-macro-error2 -> via leptos_macro/reactive_stores_macro/rstml (compile-time only).
+    { id = "RUSTSEC-2026-0173", reason = "unmaintained proc-macro; build-time only, not in shipped wasm; no upgrade" },
+]
+
+[licenses]
+version = 2
+allow = [
+    "GPL-2.0-only",
+    "Apache-2.0",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    "BSL-1.0",
+    "CC0-1.0",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+allow-wildcard-paths = true
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+skip = [
+    { name = "convert_case",   version = "=0.6.0" },
+    { name = "gloo-net",       version = "=0.6.0" },
+    { name = "gloo-utils",     version = "=0.2.0" },
+    { name = "thiserror",      version = "=1.0.69" },
+    { name = "thiserror-impl", version = "=1.0.69" },
+]
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []

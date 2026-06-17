@@ -8,7 +8,7 @@ updates:
       time: "06:00"
       timezone: Asia/Shanghai
     open-pull-requests-limit: 5
-    versioning-strategy: increase-if-necessary
+    versioning-strategy: auto
     groups:
       patch-updates:
         update-types: [patch]
@@ -30,6 +30,25 @@ updates:
     labels:
       - dependencies
       - rust
+
+  - package-ecosystem: cargo
+    directory: /crates/rkvm-web
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    versioning-strategy: auto
+    groups:
+      patch-updates:
+        update-types: [patch]
+      minor-updates:
+        update-types: [minor]
+    labels:
+      - dependencies
+      - rust
+      - rkvm-web
 
   - package-ecosystem: github-actions
     directory: /
