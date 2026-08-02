@@ -12,7 +12,7 @@ repository   = "https://github.com/Rust-KVM/rustkvm"
 
 [workspace.dependencies]
 anyhow             = "1.0.102"
-base64             = { version = "0.22.1", default-features = false }
+base64             = { version = "0.23.0", default-features = false }
 bcrypt             = { version = "0.19.1", default-features = false, features = ["std"] }
 bytes              = "1.11.1"
 chrono             = { version = "0.4.45", default-features = false, features = ["alloc", "serde"] }
