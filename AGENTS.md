@@ -73,7 +73,7 @@ RustKVM is a KVM-over-IP RK3588 appliance: a Rust backend (device binary) servin
 | Failsafe        | `app::failsafe` (env/file/crash-log boot detection)             |
 | Rate-limit      | `app::web::ratelimit` (login exponential backoff 5→15m/30m/1h/2h) |
 | Power           | `app::power::{atx,dc}` (GPIO + sysfs)                           |
-| Auth            | `app::middleware` + `app::web::auth` (noPassword/password, bcrypt, rate-limited login) |
+| Auth            | `app::middleware` + `app::web::auth` (noPassword/password, bcrypt, rate-limited login; `Authorization: Bearer` API token for agents, sha256-hashed in config via `config::api_token`) |
 | Cloud           | `app::cloud` (OIDC verifier, WebSocket relay)                   |
 | Hardware        | USB gadget, EDID, display (LVGL), watchdog, jiggler, native     |
 | Logging         | `tracing`                                                       |
@@ -89,6 +89,7 @@ main.rs                  # CLI → failsafe → tuning → time_sync (+periodic 
 lib.rs                   # module roots (see below)
 ├── cli.rs               # Clap arguments
 ├── config/              # OnceCell<ConfigManager>, TOML at /userdata/rustkvm/config.toml (auto-migrates legacy JSON)
+│                        # api_token.rs: agent bearer token (create/revoke/getApiTokenState RPCs; only the sha256 is stored)
 ├── failsafe.rs          # Boot crash-log / env-var / .enablefailsafe trigger + RPC + broadcast event
 ├── api/                 # JSON-RPC 2.0
 │   ├── registry.rs      # RpcRegistry; transport-agnostic `JsonRpcProcessor::dispatch`; per-call counter + latency histogram

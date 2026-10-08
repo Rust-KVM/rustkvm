@@ -3,6 +3,7 @@ cancelKeyboardMacro
 checkMountUrl
 checkPublicIPAddresses
 checkUpdateComponents
+createApiToken
 deleteSerialCommandHistory
 deleteStorageFile
 deregisterDevice
@@ -11,6 +12,7 @@ executeKeyboardMacro
 factoryReset
 getATXState
 getActiveExtension
+getApiTokenState
 getAudioConfig
 getAutoUpdateState
 getBacklightSettings
@@ -75,6 +77,7 @@ reboot
 relMouseReport
 renewDHCPLease
 resetConfig
+revokeApiToken
 rpcMountBuiltInImage
 sendCustomCommand
 sendWOLMagicPacket

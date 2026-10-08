@@ -140,6 +140,24 @@ pub fn create_default_registry() -> RpcRegistry {
         })
     });
     registry.register_no_params("isUpdatePending", system::is_update_pending);
+    registry.register_async("getApiTokenState", |_params| {
+        Box::pin(async move {
+            let state = crate::config::get_config_manager().api_token_state().await;
+            Ok(serde_json::to_value(state)?)
+        })
+    });
+    registry.register_async("createApiToken", |_params| {
+        Box::pin(async move {
+            let token = crate::config::get_config_manager().create_api_token().await?;
+            Ok(serde_json::json!({ "token": token }))
+        })
+    });
+    registry.register_async("revokeApiToken", |_params| {
+        Box::pin(async move {
+            crate::config::get_config_manager().revoke_api_token().await?;
+            Ok(Value::Null)
+        })
+    });
     registry.register_async("getDevChannelState", |_params| {
         Box::pin(async move {
             let v = system::get_dev_channel_state().await?;
