@@ -144,6 +144,18 @@ pub(super) async fn handle_screenshot(res: &mut Response) -> Result<(), StatusEr
 }
 
 #[endpoint]
+pub(super) async fn handle_rpc(req: &mut Request, res: &mut Response) -> Result<(), StatusError> {
+    let body = req
+        .payload()
+        .await
+        .map_err(|e| StatusError::bad_request().brief(format!("read body: {e}")))?;
+    let response =
+        crate::api::JsonRpcProcessor::new(crate::api::default_registry()).dispatch(body).await;
+    res.render(Json(response));
+    Ok(())
+}
+
+#[endpoint]
 pub(super) async fn handle_robots_txt(res: &mut Response) {
     res.headers_mut().insert(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
     res.headers_mut()
