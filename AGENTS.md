@@ -67,6 +67,7 @@ RustKVM is a KVM-over-IP RK3588 appliance: a Rust backend (device binary) servin
 | Time sync       | `rkvm-core::time_sync` (best-effort wall-clock sync at startup) |
 | Protocol types  | `rkvm-proto` (hidrpc framing + JSON-RPC request/response/event) |
 | MQTT            | `app::mqtt` over `rumqttc` (HA discovery, commands, publish)    |
+| MCP             | `app::mcp` (Streamable-HTTP JSON responses at `POST /mcp`; tools wrap RPC methods, `rpc_call` reaches any method) |
 | JSON-RPC        | `app::api` (120+ handlers + 5 broadcast events incl. `failsafeMode`/`willReboot`/`networkState`) |
 | HID-RPC         | `app::hidrpc` (binary protocol over WebRTC data channels, zero-copy `KeyboardReport`; codec re-exports `rkvm_proto::hidrpc`) |
 | Observability   | `app::observability` (`rustkvm_app_info` + frame/rpc counters + RPC latency histogram + live log-level reload) |
@@ -131,6 +132,7 @@ lib.rs                   # module roots (see below)
 ├── assets.rs            # rust-embed: ClientAssets (../crates/rkvm-web/dist), BuiltinImages (../assets/images)
 ├── dev_mode.rs          # Dev mode marker file + SSH keys
 ├── network.rs           # NetworkConfig, hostname init, 30s state broadcast
+├── mcp.rs               # MCP server (`POST /mcp`, protected): initialize, tools/list, tools/call → RpcRegistry::call; screenshot returns a JPEG image block
 ├── hidrpc/              # Binary HID-RPC over WebRTC data channels
 │   ├── codec.rs         # `pub use rkvm_proto::hidrpc::*` (framing + zero-copy KeyboardReport)
 │   ├── dispatcher.rs    # In-process routing to USB HID; `play_macro` runs keyboard macros (typeText/pressCombo/executeKeyboardMacro RPCs)

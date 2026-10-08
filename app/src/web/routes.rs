@@ -36,6 +36,7 @@ pub(super) async fn init_protected_routes() -> Result<Router> {
         .push(Router::with_path("/device/screenshot").get(device::handle_screenshot))
         .push(Router::with_path("/device/rpc").post(device::handle_rpc))
         .push(Router::with_path("/device/health").get(device::handle_health))
+        .push(Router::with_path("/mcp").post(device::handle_mcp))
         .push(Router::with_path("/auth/logout").post(auth::handle_logout))
         .push(Router::with_path("/auth/password-local").post(auth::create_password_local))
         .push(Router::with_path("/auth/password-local").put(auth::modify_password_local))

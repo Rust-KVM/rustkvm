@@ -150,6 +150,21 @@ pub(super) async fn handle_screenshot(res: &mut Response) -> Result<(), StatusEr
 }
 
 #[endpoint]
+pub(super) async fn handle_mcp(req: &mut Request, res: &mut Response) -> Result<(), StatusError> {
+    let body = req
+        .payload()
+        .await
+        .map_err(|e| StatusError::bad_request().brief(format!("read body: {e}")))?;
+    match crate::mcp::McpServer::new(crate::api::default_registry()).handle(body).await {
+        Some(response) => res.render(Json(response)),
+        None => {
+            res.status_code(StatusCode::ACCEPTED);
+        }
+    }
+    Ok(())
+}
+
+#[endpoint]
 pub(super) async fn handle_rpc(req: &mut Request, res: &mut Response) -> Result<(), StatusError> {
     let body = req
         .payload()
