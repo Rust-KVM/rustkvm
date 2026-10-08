@@ -122,7 +122,7 @@ pub fn get_network_state() -> InterfaceState {
                     }
                 } else {
                     if state.ipv6_address.is_empty() {
-                        state.ipv6_address = addr.clone();
+                        state.ipv6_address = addr;
                     }
                     state.ipv6_ready = true;
                 }
