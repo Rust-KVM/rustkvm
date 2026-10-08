@@ -331,6 +331,14 @@ impl RpcRegistry {
         names
     }
 
+    pub async fn call(&self, method: &str, params: Option<Value>) -> Result<Value> {
+        let handler =
+            self.get_handler(method).ok_or_else(|| anyhow!("Method not found: {method}"))?;
+        crate::observability::metrics::RPC_CALLS_TOTAL.with_label_values(&[method]).inc();
+        let _rpc_timer = crate::observability::metrics::RPC_LATENCY_SECONDS.start_timer();
+        handler.call_async(params).instrument(tracing::info_span!("rpc", %method)).await
+    }
+
     pub fn register_async<F>(&mut self, method: &str, func: F)
     where
         F: Fn(Option<Value>) -> BoxFuture<'static, Result<Value>> + Send + Sync + 'static,
