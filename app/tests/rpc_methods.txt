@@ -70,7 +70,10 @@ mountBuiltInImage
 mountWithHTTP
 mountWithStorage
 mountWithWebRTC
+mouseClick
+mouseMove
 ping
+pressCombo
 reboot
 relMouseReport
 renewDHCPLease
@@ -121,6 +124,7 @@ startStorageFileUpload
 testMqttConnection
 tryUpdate
 tryUpdateComponents
+typeText
 unmountImage
 wakeHost
 wheelReport

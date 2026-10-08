@@ -114,7 +114,9 @@ pub async fn dispatch(msg: DataChannelMessage) {
             Err(e) => warn!("hidrpc mouse_report parse: {e}"),
         },
         MessageType::KeyboardMacroReport => match message.keyboard_macro_report() {
-            Ok(r) => start_macro(r.is_paste, r.steps).await,
+            Ok(r) => {
+                start_macro(r.is_paste, r.steps).await;
+            }
             Err(e) => warn!("hidrpc keyboard_macro_report parse: {e}"),
         },
         MessageType::CancelKeyboardMacroReport => cancel_macro().await,
@@ -132,7 +134,10 @@ fn usb_hid() -> Option<Arc<crate::hardware::usb::hid::Hid>> {
     crate::hardware::usb::get_usb_manager().map(|m| m.read().hid())
 }
 
-async fn start_macro(is_paste: bool, steps: Vec<KeyboardMacroStep>) {
+async fn start_macro(
+    is_paste: bool,
+    steps: Vec<KeyboardMacroStep>,
+) -> tokio::sync::oneshot::Receiver<()> {
     cancel_macro().await;
 
     let begin = new_keyboard_macro_state_message(true, is_paste).marshal();
@@ -140,36 +145,56 @@ async fn start_macro(is_paste: bool, steps: Vec<KeyboardMacroStep>) {
 
     let token = CancellationToken::new();
     let run_token = token.clone();
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel();
 
     let handle = tokio::spawn(async move {
-        run_macro(run_token, steps).await;
+        let completed = run_macro(run_token, steps).await;
         let end = new_keyboard_macro_state_message(false, is_paste).marshal();
         send_reliable(end).await;
+        if completed {
+            let _ = done_tx.send(());
+        }
     });
 
     DISPATCHER.lock().macro_task = Some((handle, token));
+    done_rx
 }
 
-async fn run_macro(cancel: CancellationToken, steps: Vec<KeyboardMacroStep>) {
-    let Some(hid) = usb_hid() else { return };
+pub async fn play_macro(is_paste: bool, steps: Vec<KeyboardMacroStep>) -> anyhow::Result<()> {
+    if usb_hid().is_none() {
+        anyhow::bail!("USB HID not initialized");
+    }
+    start_macro(is_paste, steps)
+        .await
+        .await
+        .map_err(|_| anyhow::anyhow!("keyboard macro was cancelled or failed"))
+}
+
+pub async fn cancel_running_macro() {
+    cancel_macro().await;
+}
+
+async fn run_macro(cancel: CancellationToken, steps: Vec<KeyboardMacroStep>) -> bool {
+    let Some(hid) = usb_hid() else { return false };
 
     for step in steps {
         if cancel.is_cancelled() {
-            break;
+            return false;
         }
         if let Err(e) = hid.keyboard_report(step.modifier, &step.keys) {
             warn!("hidrpc macro step keyboard_report: {e}");
-            return;
+            return false;
         }
         let delay = tokio::time::Duration::from_millis(step.delay as u64);
         tokio::select! {
             _ = tokio::time::sleep(delay) => {}
             _ = cancel.cancelled() => {
                 let _ = hid.keyboard_report(0, &[0u8; HID_KEY_BUFFER_SIZE]);
-                return;
+                return false;
             }
         }
     }
+    true
 }
 
 async fn cancel_macro() {

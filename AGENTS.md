@@ -132,7 +132,7 @@ lib.rs                   # module roots (see below)
 ├── network.rs           # NetworkConfig, hostname init, 30s state broadcast
 ├── hidrpc/              # Binary HID-RPC over WebRTC data channels
 │   ├── codec.rs         # `pub use rkvm_proto::hidrpc::*` (framing + zero-copy KeyboardReport)
-│   ├── dispatcher.rs    # In-process routing to USB HID
+│   ├── dispatcher.rs    # In-process routing to USB HID; `play_macro` runs keyboard macros (typeText/pressCombo/executeKeyboardMacro RPCs)
 │   └── mod.rs
 ├── mqtt/                # rumqttc client + Home Assistant integration
 │   ├── manager.rs / lifecycle.rs / commands.rs / publish.rs
@@ -180,6 +180,7 @@ Protocol types shared by the backend and the WASM frontend (no I/O, no platform 
 ```
 lib.rs                   # re-exports hidrpc + jsonrpc
 ├── hidrpc.rs            # binary HID-RPC: VERSION, MessageType, framing, KeyboardReport
+├── keymap.rs            # DOM code/alias → HID usage, US-layout text → macro steps, key combos
 └── jsonrpc.rs           # JSON-RPC 2.0 request / response / error / event structs
 ```
 
@@ -190,7 +191,7 @@ main.rs                  # WASM entry: panic hook + tracing-wasm + mount Leptos 
 ├── app.rs               # root component, layout, top-level signals/routing
 ├── rpc.rs               # JSON-RPC over WebRTC data channel
 ├── net/                 # peer.rs (WebRTC PeerConnection), rest.rs (HTTP), upload.rs (virtual media)
-├── hid/                 # keymap.rs + mod.rs (keyboard/mouse → hidrpc via rkvm-proto)
+├── hid/                 # keymap.rs (re-exports rkvm_proto::keymap) + mod.rs (keyboard/mouse → hidrpc via rkvm-proto)
 ├── terminal.rs          # vt100 terminal view
 ├── ocr.rs               # screen OCR via Tesseract.js (JS interop, CDN-loaded)
 ├── settings.rs / settings_advanced.rs  # settings drawer
