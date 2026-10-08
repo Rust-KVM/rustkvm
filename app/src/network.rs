@@ -150,11 +150,6 @@ pub fn get_network_state() -> InterfaceState {
     state
 }
 
-pub fn renew_dhcp_lease() -> Result<()> {
-    debug!("renew_dhcp_lease: noop stub");
-    Ok(())
-}
-
 pub fn spawn_state_monitor(period: std::time::Duration) {
     use tokio::time::{MissedTickBehavior, interval};
     tokio::spawn(async move {

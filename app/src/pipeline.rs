@@ -298,6 +298,10 @@ impl VideoPipeline {
         Ok(())
     }
 
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
     pub fn stop(&self) -> Result<()> {
         self.running.store(false, Ordering::SeqCst);
 
@@ -728,6 +732,10 @@ impl PipelineManager {
             audio.stop()?;
         }
         Ok(())
+    }
+
+    pub fn is_video_running(&self) -> bool {
+        self.video.is_running()
     }
 
     pub fn set_video_callback<F>(&self, callback: F)

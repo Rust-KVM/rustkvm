@@ -19,6 +19,12 @@ pub fn create_default_registry() -> RpcRegistry {
     registry.register_no_params("ping", system::ping);
     registry.register_no_params("getDeviceID", system::get_device_id);
     registry.register_no_params("getFailsafeMode", system::get_failsafe_mode);
+    registry.register_async("restartVideoPipeline", |_params| {
+        Box::pin(async move {
+            crate::video::restart_video_pipeline().await?;
+            Ok(Value::Null)
+        })
+    });
     registry.register_async("getHealth", |_params| {
         Box::pin(async move {
             Ok(serde_json::to_value(crate::observability::health::health_report().await)?)
@@ -247,7 +253,9 @@ pub fn create_default_registry() -> RpcRegistry {
             network::set_network_settings(params).await
         })
     });
-    registry.register_no_params("renewDHCPLease", network::renew_dhcp_lease);
+    registry.register_async("renewDHCPLease", |_params| {
+        Box::pin(async move { network::renew_dhcp_lease().await })
+    });
     registry.register_no_params("getNetworkIpAddress", network::get_network_ip_address);
     registry.register_typed("setNetworkIpAddress", network::set_network_ip_address);
     registry.register_no_params("getDisplayState", media::get_display_state);
