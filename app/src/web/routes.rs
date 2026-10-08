@@ -33,6 +33,7 @@ pub(super) async fn init_protected_routes() -> Result<Router> {
         .push(Router::with_path("/cloud/register").post(device::handle_cloud_register))
         .push(Router::with_path("/cloud/state").get(device::handle_cloud_status))
         .push(Router::with_path("/device").get(device::handle_device))
+        .push(Router::with_path("/device/screenshot").get(device::handle_screenshot))
         .push(Router::with_path("/device/rpc").post(device::handle_rpc))
         .push(Router::with_path("/auth/logout").post(auth::handle_logout))
         .push(Router::with_path("/auth/password-local").post(auth::create_password_local))
