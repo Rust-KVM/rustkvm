@@ -51,17 +51,31 @@ jobs:
         run: |
           pipx run gdown==5.2.0 --fuzzy "$SDK_ID" -O "$RUNNER_TEMP/sdk.tar"
           ls -lh "$RUNNER_TEMP/sdk.tar"
-      - name: Build Buildroot
+      # FriendlyELEC ships the SDK as a top-level directory holding only a
+      # .repo mirror; `repo sync -l` checks the sources out without network.
+      - name: Unpack SDK
         working-directory: ${{ runner.temp }}
         run: |
           mkdir sdk
           tar -xf sdk.tar -C sdk
           rm sdk.tar
-          cd sdk
-          ./build.sh rk3588.mk
+          marker=$(find sdk -maxdepth 2 -name .repo -print -quit)
+          marker=${marker:-$(find sdk -maxdepth 2 -name build.sh -print -quit)}
+          test -n "$marker"
+          root=$(dirname "$marker")
+          cd "$root"
+          ls -la
+          if [ ! -e build.sh ]; then
+            .repo/repo/repo sync -l --no-clone-bundle
+          fi
+          echo "SDK_DIR=$PWD" >> "$GITHUB_ENV"
+          df -h /
+      - name: Build Buildroot
+        working-directory: ${{ env.SDK_DIR }}
+        run: ./build.sh rk3588.mk
       - name: Stage toolchain
         run: |
-          host="$RUNNER_TEMP/sdk/buildroot/output/rockchip_rk3588/host"
+          host="$SDK_DIR/buildroot/output/rockchip_rk3588/host"
           test -x "$host/bin/aarch64-buildroot-linux-gnu-gcc"
           cp -a "$host" ci/buildkit/rk3588-buildkit
       - name: Upload system images
@@ -69,8 +83,8 @@ jobs:
         with:
           name: rk3588-system-images-${{ inputs.sdk_tag }}
           path: |
-            ${{ runner.temp }}/sdk/buildroot/output/rockchip_rk3588/images/
-            ${{ runner.temp }}/sdk/rockdev/
+            ${{ env.SDK_DIR }}/buildroot/output/rockchip_rk3588/images/
+            ${{ env.SDK_DIR }}/rockdev/
           if-no-files-found: warn
           retention-days: 30
       - uses: docker/login-action@v3
