@@ -325,6 +325,12 @@ impl RpcRegistry {
         self.handlers.get(method)
     }
 
+    pub fn method_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.handlers.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        names
+    }
+
     pub fn register_async<F>(&mut self, method: &str, func: F)
     where
         F: Fn(Option<Value>) -> BoxFuture<'static, Result<Value>> + Send + Sync + 'static,
@@ -349,20 +355,23 @@ impl JsonRpcProcessor {
     }
 
     pub async fn handle_message(&self, message: DataChannelMessage, session: &Session) {
-        let request: JsonRpcRequest = match serde_json::from_slice(&message.data) {
+        let response = self.dispatch(&message.data).await;
+        if let Err(e) = self.send_response(&response, session).await {
+            error!("Failed to send RPC response: {}", e);
+        }
+    }
+
+    pub async fn dispatch(&self, data: &[u8]) -> JsonRpcResponse {
+        let request: JsonRpcRequest = match serde_json::from_slice(data) {
             Ok(req) => req,
             Err(e) => {
                 warn!("Failed to parse JSON-RPC request: {}", e);
-                let error_response = JsonRpcResponse {
+                return JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
                     result: None,
                     error: Some(JsonRpcError::parse_error()),
                     id: None,
                 };
-                if let Err(e) = self.send_response(&error_response, session).await {
-                    error!("Failed to send error response: {}", e);
-                }
-                return;
             }
         };
 
@@ -370,47 +379,32 @@ impl JsonRpcProcessor {
 
         crate::observability::metrics::RPC_CALLS_TOTAL.with_label_values(&[&request.method]).inc();
 
-        let handler = match self.registry.get_handler(&request.method) {
-            Some(h) => h,
-            None => {
-                warn!("Method not found: {}", request.method);
-                let error_response = JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
-                    result: None,
-                    error: Some(JsonRpcError::method_not_found()),
-                    id: request.id,
-                };
-                if let Err(e) = self.send_response(&error_response, session).await {
-                    error!("Failed to send error response: {}", e);
-                }
-                return;
-            }
+        let Some(handler) = self.registry.get_handler(&request.method) else {
+            warn!("Method not found: {}", request.method);
+            return JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                result: None,
+                error: Some(JsonRpcError::method_not_found()),
+                id: request.id,
+            };
         };
 
         let _rpc_timer = crate::observability::metrics::RPC_LATENCY_SECONDS.start_timer();
         let span = tracing::info_span!("rpc", method = %request.method, id = ?request.id);
         match handler.call_async(request.params).instrument(span).await {
-            Ok(result) => {
-                let response = JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
-                    result: Some(result),
-                    error: None,
-                    id: request.id,
-                };
-                if let Err(e) = self.send_response(&response, session).await {
-                    error!("Failed to send response: {}", e);
-                }
-            }
+            Ok(result) => JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                result: Some(result),
+                error: None,
+                id: request.id,
+            },
             Err(e) => {
                 error!("RPC handler error: {}", e);
-                let error_response = JsonRpcResponse {
+                JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
                     result: None,
                     error: Some(JsonRpcError::internal_error(Some(e.to_string()))),
                     id: request.id,
-                };
-                if let Err(e) = self.send_response(&error_response, session).await {
-                    error!("Failed to send error response: {}", e);
                 }
             }
         }
