@@ -100,7 +100,7 @@ lib.rs                   # module roots (see below)
 │   ├── routes.rs        # protected / public / developer / static
 │   ├── auth.rs          # login (rate-limited), logout, mode switch
 │   ├── ratelimit.rs     # login exponential backoff
-│   ├── device.rs        # device endpoints (robots.txt, info, cloud state, `POST /device/rpc` JSON-RPC over HTTP, `GET /device/health`)
+│   ├── device.rs        # device endpoints (robots.txt, info, cloud state, JPEG screenshot, `POST /device/rpc` JSON-RPC over HTTP, `GET /device/health`)
 │   ├── storage.rs       # virtual-media upload / list
 │   ├── socket.rs        # Socket.IO signaling namespace (join, signal, ice-candidate)
 │   ├── webrtc_handlers.rs # offer/answer + signaling glue
