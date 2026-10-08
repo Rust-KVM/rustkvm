@@ -86,12 +86,13 @@ pub async fn set_network_settings(params: NetworkSettingsParams) -> Result<Value
     Ok(Value::Null)
 }
 
-pub fn renew_dhcp_lease() -> Result<Value> {
+pub async fn renew_dhcp_lease() -> Result<Value> {
     info!("DHCP lease renewal requested");
     let if_name = crate::network::NET_IF_NAME;
-    let status = std::process::Command::new("/sbin/udhcpc")
+    let status = tokio::process::Command::new("/sbin/udhcpc")
         .args(["-i", if_name, "-q", "-n", "-t", "3"])
-        .status();
+        .status()
+        .await;
     match status {
         Ok(s) if s.success() => Ok(Value::Null),
         Ok(s) => Err(anyhow::anyhow!("udhcpc exited with status {}", s)),

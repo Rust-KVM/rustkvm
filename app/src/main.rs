@@ -191,6 +191,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         });
     }
 
+    video::spawn_video_supervisor();
+
     if let Err(e) = virtual_media::set_initial_virtual_media_state().await {
         warn!("Failed to set initial virtual media state: {}", e);
     }

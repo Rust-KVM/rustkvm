@@ -28,6 +28,18 @@ pub static AUDIO_FRAMES_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
     c
 });
 
+pub static VIDEO_PIPELINE_RESTARTS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    let c = IntCounter::with_opts(Opts::new(
+        "rustkvm_video_pipeline_restarts_total",
+        "Video pipeline restarts performed by the supervisor or the restartVideoPipeline RPC",
+    ))
+    .expect("rustkvm_video_pipeline_restarts_total: invalid metric definition");
+    if let Err(e) = prometheus::default_registry().register(Box::new(c.clone())) {
+        warn!("failed to register rustkvm_video_pipeline_restarts_total: {e}");
+    }
+    c
+});
+
 pub static RPC_CALLS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     let c = IntCounterVec::new(
         Opts::new("rustkvm_rpc_calls_total", "JSON-RPC method invocations by name"),

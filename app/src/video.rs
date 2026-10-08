@@ -54,6 +54,13 @@ static VIDEO_PIPELINE_STARTED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell
 static PIPELINE_MANAGER: tokio::sync::Mutex<Option<PipelineManager>> =
     tokio::sync::Mutex::const_new(None);
 
+static PIPELINE_CONFIG: OnceLock<(VideoConfig, Option<AudioConfig>)> = OnceLock::new();
+static SUPERVISOR_STOPPED: AtomicBool = AtomicBool::new(false);
+
+const SUPERVISOR_PERIOD: Duration = Duration::from_secs(5);
+const RESTART_BACKOFF_BASE: Duration = Duration::from_secs(5);
+const RESTART_BACKOFF_MAX: Duration = Duration::from_secs(300);
+
 static VIDEO_STATE_TX: OnceLock<mpsc::UnboundedSender<VideoInputState>> = OnceLock::new();
 
 type VideoFrame = (bytes::Bytes, u64);
@@ -206,7 +213,22 @@ pub async fn start_native_video_with_cli(cli: &crate::cli::Cli) -> anyhow::Resul
     set_audio_enabled(audio_enabled);
 
     let audio_config = Some(AudioConfig::from_cli(&cli.audio));
+    let _ = PIPELINE_CONFIG.set((video_config.clone(), audio_config.clone()));
 
+    start_pipeline(video_config, audio_config).await?;
+
+    info!(
+        "GStreamer pipeline started: {} encoder, quality={:.2}",
+        cli.video.video_encoder.codec_name(),
+        cli.quality
+    );
+    Ok(())
+}
+
+async fn start_pipeline(
+    video_config: VideoConfig,
+    audio_config: Option<AudioConfig>,
+) -> anyhow::Result<()> {
     let manager = PipelineManager::new(video_config, audio_config)?;
 
     manager.set_video_callback(move |data, pts_us| {
@@ -232,18 +254,10 @@ pub async fn start_native_video_with_cli(cli: &crate::cli::Cli) -> anyhow::Resul
     manager.start()?;
 
     *PIPELINE_MANAGER.lock().await = Some(manager);
-
-    info!(
-        "GStreamer pipeline started: {} encoder, quality={:.2}",
-        cli.video.video_encoder.codec_name(),
-        cli.quality
-    );
     Ok(())
 }
 
-pub async fn shutdown_video_pipeline() {
-    info!("Shutting down video pipeline...");
-
+async fn stop_pipeline() {
     if let Some(manager) = PIPELINE_MANAGER.lock().await.take() {
         match tokio::time::timeout(
             std::time::Duration::from_secs(5),
@@ -254,9 +268,70 @@ pub async fn shutdown_video_pipeline() {
             Ok(Ok(Ok(()))) => {}
             Ok(Ok(Err(e))) => warn!("Error stopping pipeline: {}", e),
             Ok(Err(e)) => warn!("Pipeline stop task panicked: {}", e),
-            Err(_) => warn!("Pipeline stop timed out after 5s; continuing shutdown"),
+            Err(_) => warn!("Pipeline stop timed out after 5s; continuing"),
         }
     }
+}
+
+/// Tears down and rebuilds the capture/encode pipeline with the boot-time configuration,
+/// keeping any attached WebRTC sink so connected viewers resume on the next keyframe.
+pub async fn restart_video_pipeline() -> anyhow::Result<()> {
+    let (video_config, audio_config) = PIPELINE_CONFIG
+        .get()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("video pipeline was never configured"))?;
+    stop_pipeline().await;
+    crate::observability::metrics::VIDEO_PIPELINE_RESTARTS_TOTAL.inc();
+    start_pipeline(video_config, audio_config).await?;
+    info!("video pipeline restarted");
+    Ok(())
+}
+
+pub async fn is_video_pipeline_running() -> bool {
+    PIPELINE_MANAGER.lock().await.as_ref().is_some_and(PipelineManager::is_video_running)
+}
+
+pub fn restart_backoff(consecutive_failures: u32) -> Duration {
+    RESTART_BACKOFF_BASE
+        .saturating_mul(1u32 << consecutive_failures.min(16))
+        .min(RESTART_BACKOFF_MAX)
+}
+
+/// Restarts the pipeline whenever its bus loop has died (GStreamer error, EOS, or a
+/// failed start at boot), backing off exponentially while restarts keep failing.
+pub fn spawn_video_supervisor() {
+    tokio::spawn(async move {
+        let mut tick = interval(SUPERVISOR_PERIOD);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut failures = 0u32;
+        loop {
+            tick.tick().await;
+            if SUPERVISOR_STOPPED.load(Ordering::SeqCst) {
+                return;
+            }
+            if PIPELINE_CONFIG.get().is_none() || is_video_pipeline_running().await {
+                failures = 0;
+                continue;
+            }
+            warn!(failures, "video pipeline is down, restarting");
+            match restart_video_pipeline().await {
+                Ok(()) => failures = 0,
+                Err(e) => {
+                    let delay = restart_backoff(failures);
+                    failures = failures.saturating_add(1);
+                    warn!(error = %format!("{e:#}"), retry_in_secs = delay.as_secs(), "video pipeline restart failed");
+                    tokio::time::sleep(delay).await;
+                }
+            }
+        }
+    });
+}
+
+pub async fn shutdown_video_pipeline() {
+    info!("Shutting down video pipeline...");
+
+    SUPERVISOR_STOPPED.store(true, Ordering::SeqCst);
+    stop_pipeline().await;
 
     *VIDEO_SINK.write().await = None;
 
