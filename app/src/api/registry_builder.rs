@@ -578,7 +578,37 @@ pub fn create_default_registry() -> RpcRegistry {
             hid::execute_keyboard_macro(steps).await
         })
     });
-    registry.register_no_params("cancelKeyboardMacro", hid::cancel_keyboard_macro);
+    registry.register_async("cancelKeyboardMacro", |_params| {
+        Box::pin(async move { hid::cancel_keyboard_macro().await })
+    });
+    registry.register_async("typeText", |params| {
+        Box::pin(async move {
+            let p: hid::TypeTextParams =
+                serde_json::from_value(params.ok_or(anyhow!("Missing params"))?)?;
+            hid::type_text(p).await
+        })
+    });
+    registry.register_async("pressCombo", |params| {
+        Box::pin(async move {
+            let p: hid::PressComboParams =
+                serde_json::from_value(params.ok_or(anyhow!("Missing params"))?)?;
+            hid::press_combo(p).await
+        })
+    });
+    registry.register_async("mouseMove", |params| {
+        Box::pin(async move {
+            let p: hid::PointerParams =
+                serde_json::from_value(params.ok_or(anyhow!("Missing params"))?)?;
+            hid::mouse_move(p).await
+        })
+    });
+    registry.register_async("mouseClick", |params| {
+        Box::pin(async move {
+            let p: hid::PointerParams =
+                serde_json::from_value(params.ok_or(anyhow!("Missing params"))?)?;
+            hid::mouse_click(p).await
+        })
+    });
 
     registry
 }
