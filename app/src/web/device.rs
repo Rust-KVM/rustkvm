@@ -132,6 +132,12 @@ pub(super) async fn handle_cloud_status() -> Result<Json<CloudStateResponse>, St
 }
 
 #[endpoint]
+pub(super) async fn handle_health(res: &mut Response) {
+    res.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    res.render(Json(crate::observability::health::health_report().await));
+}
+
+#[endpoint]
 pub(super) async fn handle_screenshot(res: &mut Response) -> Result<(), StatusError> {
     let jpeg = crate::video::capture_screenshot_jpeg()
         .await
