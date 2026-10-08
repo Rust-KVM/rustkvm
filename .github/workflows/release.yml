@@ -47,7 +47,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/${{ github.repository_owner }}/rk3588-buildkit:latest
+      image: ghcr.io/rust-kvm/rk3588-buildkit:latest
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

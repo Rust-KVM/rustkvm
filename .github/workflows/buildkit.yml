@@ -20,7 +20,8 @@ permissions:
   packages: write
 
 env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/rk3588-buildkit
+  # Image references must be lowercase; the owner login is "Rust-KVM".
+  IMAGE: ghcr.io/rust-kvm/rk3588-buildkit
 
 jobs:
   buildkit:
