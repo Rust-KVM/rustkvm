@@ -91,6 +91,46 @@ jobs:
         run: cargo clippy --workspace --release --all-targets --locked -- -D warnings
 
   # ---------------------------------------------------------------------------
+  # clippy-aarch64 — type-checks the device target so cfg(target_arch) and
+  # cross-compile breaks surface before deploy. No link step, so host .pc
+  # files plus PKG_CONFIG_ALLOW_CROSS stand in for the buildroot sysroot; the
+  # Ubuntu cross gcc only compiles ring's C/asm.
+  # ---------------------------------------------------------------------------
+  clippy-aarch64:
+    name: clippy (aarch64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PKG_CONFIG_ALLOW_CROSS: "1"
+      PKG_CONFIG_SYSROOT_DIR: /
+      PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+      PKG_CONFIG_LIBDIR: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+      CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
+          targets: aarch64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: aarch64
+      - name: Stub frontend dist
+        run: mkdir -p crates/rkvm-web/dist && touch crates/rkvm-web/dist/index.html
+      - name: cargo clippy (aarch64-unknown-linux-gnu)
+        run: cargo clippy --workspace --release --all-targets --locked --target aarch64-unknown-linux-gnu -- -D warnings
+
+  # ---------------------------------------------------------------------------
   # test — protocol, RPC dispatch and RPC method-set tests (crate tests/ dirs).
   # ---------------------------------------------------------------------------
   test:
@@ -124,7 +164,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [fmt, deny, clippy, test]
+    needs: [fmt, deny, clippy, clippy-aarch64, test]
     if: always()
     steps:
       - name: Verify all jobs succeeded
@@ -132,6 +172,7 @@ jobs:
           if [[ "${{ needs.fmt.result }}" != "success" || \
                 "${{ needs.deny.result }}" != "success" || \
                 "${{ needs.clippy.result }}" != "success" || \
+                "${{ needs.clippy-aarch64.result }}" != "success" || \
                 "${{ needs.test.result }}" != "success" ]]; then
             echo "::error::One or more CI jobs failed"
             exit 1
