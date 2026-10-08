@@ -1,0 +1,87 @@
+name: RK3588 buildkit
+
+# Builds the FriendlyELEC/Rockchip Buildroot SDK once, publishes its host
+# toolchain + sysroot (the /opt/rk3588-buildkit that .cargo/config.toml expects)
+# as a container image for release.yml, and keeps the system images it produced.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdk_gdrive_id:
+        description: Google Drive file ID (or share link) of buildroot-rk3588-YYYYMMDD.tar
+        required: true
+      sdk_tag:
+        description: Image tag, usually the SDK date
+        required: true
+        default: "20250527"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/rk3588-buildkit
+
+jobs:
+  buildkit:
+    name: build SDK + publish image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      # Buildroot needs far more than the runner's default free space.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+      - name: Install SDK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config gcc-arm-linux-gnueabihf clang llvm-dev libclang-dev unzip \
+            build-essential zstd device-tree-compiler gperf libnl-3-dev libdbus-1-dev \
+            libelf-dev libmpc-dev dwarves bc openssl flex bison libssl-dev python3 \
+            python-is-python3 texinfo kmod cmake rsync cpio file wget pipx
+      - name: Download SDK
+        env:
+          SDK_ID: ${{ inputs.sdk_gdrive_id }}
+        run: |
+          pipx run gdown==5.2.0 --fuzzy "$SDK_ID" -O "$RUNNER_TEMP/sdk.tar"
+          ls -lh "$RUNNER_TEMP/sdk.tar"
+      - name: Build Buildroot
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir sdk
+          tar -xf sdk.tar -C sdk
+          rm sdk.tar
+          cd sdk
+          ./build.sh rk3588.mk
+      - name: Stage toolchain
+        run: |
+          host="$RUNNER_TEMP/sdk/buildroot/output/rockchip_rk3588/host"
+          test -x "$host/bin/aarch64-buildroot-linux-gnu-gcc"
+          cp -a "$host" ci/buildkit/rk3588-buildkit
+      - name: Upload system images
+        uses: actions/upload-artifact@v4
+        with:
+          name: rk3588-system-images-${{ inputs.sdk_tag }}
+          path: |
+            ${{ runner.temp }}/sdk/buildroot/output/rockchip_rk3588/images/
+            ${{ runner.temp }}/sdk/rockdev/
+          if-no-files-found: warn
+          retention-days: 30
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ci/buildkit
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ inputs.sdk_tag }}
+            ${{ env.IMAGE }}:latest

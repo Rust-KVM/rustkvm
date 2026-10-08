@@ -1,0 +1,106 @@
+name: Release
+
+# Tag vX.Y.Z (matching the workspace version) → build the frontend, cross-build
+# the device binary inside the rk3588-buildkit image, and publish the assets
+# that app/src/update.rs installs over the air.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  ASSET: rustkvm_app-aarch64-unknown-linux-gnu
+
+jobs:
+  web:
+    name: trunk build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: crates/rkvm-web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: jetli/trunk-action@v0.5.1
+        with:
+          version: "v0.21.14"
+      - run: trunk build --release --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: crates/rkvm-web/dist/
+          if-no-files-found: error
+
+  app:
+    name: device binary
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/rk3588-buildkit:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+      CC_aarch64_unknown_linux_gnu: /opt/rk3588-buildkit/bin/aarch64-buildroot-linux-gnu-gcc
+    steps:
+      - uses: actions/checkout@v7
+      # build.rs reads git metadata; the container user differs from the checkout owner.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Check tag matches workspace version
+        run: |
+          version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n1)
+          test "${GITHUB_REF_NAME}" = "v${version}" || {
+            echo "::error::tag ${GITHUB_REF_NAME} does not match workspace version ${version}"
+            exit 1
+          }
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: aarch64-unknown-linux-gnu
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: crates/rkvm-web/dist
+      - name: Build
+        run: |
+          cargo build -Z build-std=std,panic_abort --locked --release \
+            --target aarch64-unknown-linux-gnu -p rustkvm --bin rustkvm_app
+          cp target/aarch64-unknown-linux-gnu/release/rustkvm_app "$ASSET"
+          sha256sum "$ASSET" > "$ASSET.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: device-binary
+          path: |
+            ${{ env.ASSET }}
+            ${{ env.ASSET }}.sha256
+          if-no-files-found: error
+
+  publish:
+    name: GitHub release
+    needs: app
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: device-binary
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.ASSET }}
+            ${{ env.ASSET }}.sha256
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
