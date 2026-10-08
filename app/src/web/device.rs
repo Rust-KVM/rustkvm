@@ -132,6 +132,18 @@ pub(super) async fn handle_cloud_status() -> Result<Json<CloudStateResponse>, St
 }
 
 #[endpoint]
+pub(super) async fn handle_screenshot(res: &mut Response) -> Result<(), StatusError> {
+    let jpeg = crate::video::capture_screenshot_jpeg()
+        .await
+        .map_err(|e| StatusError::service_unavailable().brief(format!("screenshot: {e:#}")))?;
+    res.headers_mut().insert(CONTENT_TYPE, HeaderValue::from_static("image/jpeg"));
+    res.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    res.write_body(jpeg)
+        .map_err(|e| StatusError::internal_server_error().brief(format!("write body: {e}")))?;
+    Ok(())
+}
+
+#[endpoint]
 pub(super) async fn handle_robots_txt(res: &mut Response) {
     res.headers_mut().insert(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
     res.headers_mut()

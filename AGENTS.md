@@ -100,7 +100,7 @@ lib.rs                   # module roots (see below)
 │   ├── routes.rs        # protected / public / developer / static
 │   ├── auth.rs          # login (rate-limited), logout, mode switch
 │   ├── ratelimit.rs     # login exponential backoff
-│   ├── device.rs        # device endpoints (robots.txt, info, cloud state)
+│   ├── device.rs        # device endpoints (robots.txt, info, cloud state, JPEG screenshot)
 │   ├── storage.rs       # virtual-media upload / list
 │   ├── socket.rs        # Socket.IO signaling namespace (join, signal, ice-candidate)
 │   ├── webrtc_handlers.rs # offer/answer + signaling glue

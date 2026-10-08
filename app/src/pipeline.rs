@@ -10,6 +10,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::video::VideoInputState;
 
+type RawFrameWaiters = parking_lot::Mutex<Vec<tokio::sync::oneshot::Sender<gst::Sample>>>;
+
 #[derive(Debug, Clone)]
 pub struct VideoConfig {
     pub device: String,
@@ -86,6 +88,8 @@ pub struct VideoPipeline {
     appsink: gst_app::AppSink,
     encoder: gst::Element,
     running: Arc<AtomicBool>,
+    raw_frame_waiters: Arc<RawFrameWaiters>,
+    raw_frame_requested: Arc<AtomicBool>,
 }
 
 impl VideoPipeline {
@@ -205,6 +209,30 @@ impl VideoPipeline {
         ])
         .context("Failed to link video pipeline elements")?;
 
+        let raw_frame_waiters: Arc<RawFrameWaiters> = Arc::default();
+        let raw_frame_requested = Arc::new(AtomicBool::new(false));
+        // The probe only takes a buffer ref when a snapshot is pending, so the
+        // steady-state cost per frame is a single relaxed atomic load.
+        let probe_waiters = raw_frame_waiters.clone();
+        let probe_requested = raw_frame_requested.clone();
+        encoder.static_pad("sink").context("Encoder has no sink pad")?.add_probe(
+            gst::PadProbeType::BUFFER,
+            move |pad, info| {
+                if !probe_requested.swap(false, Ordering::AcqRel) {
+                    return gst::PadProbeReturn::Ok;
+                }
+                if let Some(buffer) = info.buffer() {
+                    let caps = pad.current_caps();
+                    let sample =
+                        gst::Sample::builder().buffer(buffer).caps_if_some(caps.as_ref()).build();
+                    for tx in std::mem::take(&mut *probe_waiters.lock()) {
+                        let _ = tx.send(sample.clone());
+                    }
+                }
+                gst::PadProbeReturn::Ok
+            },
+        );
+
         let running = Arc::new(AtomicBool::new(false));
         let encoder_for_state = encoder.clone();
 
@@ -236,7 +264,21 @@ impl VideoPipeline {
             });
         }
 
-        Ok(Self { pipeline, appsink, encoder: encoder_for_state, running })
+        Ok(Self {
+            pipeline,
+            appsink,
+            encoder: encoder_for_state,
+            running,
+            raw_frame_waiters,
+            raw_frame_requested,
+        })
+    }
+
+    pub fn request_raw_frame(&self) -> tokio::sync::oneshot::Receiver<gst::Sample> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.raw_frame_waiters.lock().push(tx);
+        self.raw_frame_requested.store(true, Ordering::Release);
+        rx
     }
 
     pub fn start(&self) -> Result<()> {
@@ -726,10 +768,54 @@ impl PipelineManager {
         }
     }
 
+    pub fn request_raw_frame(&self) -> tokio::sync::oneshot::Receiver<gst::Sample> {
+        self.video.request_raw_frame()
+    }
+
     pub fn force_keyframe(&self) {
         let event = gst_video::UpstreamForceKeyUnitEvent::builder().all_headers(true).build();
         if !self.video.encoder.send_event(event) {
             warn!("force-keyframe event was not handled by encoder");
         }
     }
+}
+
+pub fn encode_jpeg(sample: &gst::Sample) -> Result<bytes::Bytes> {
+    let caps = sample.caps_owned().context("Raw frame has no caps")?;
+    let encoder = gst::ElementFactory::make("mppjpegenc")
+        .build()
+        .or_else(|_| gst::ElementFactory::make("jpegenc").build())
+        .context("No JPEG encoder available (mppjpegenc or jpegenc)")?;
+
+    let pipeline = gst::Pipeline::new();
+    let appsrc = gst_app::AppSrc::builder().caps(&caps).format(gst::Format::Time).build();
+    let videoconvert = gst::ElementFactory::make("videoconvert")
+        .build()
+        .context("Failed to create videoconvert")?;
+    let appsink = gst_app::AppSink::builder().sync(false).build();
+
+    pipeline
+        .add_many([appsrc.upcast_ref(), &videoconvert, &encoder, appsink.upcast_ref()])
+        .context("Failed to add elements to JPEG pipeline")?;
+    gst::Element::link_many([appsrc.upcast_ref(), &videoconvert, &encoder, appsink.upcast_ref()])
+        .context("Failed to link JPEG pipeline elements")?;
+
+    pipeline
+        .set_state(gst::State::Playing)
+        .context("Failed to set JPEG pipeline to PLAYING state")?;
+    let encoded = appsrc
+        .push_sample(sample)
+        .map_err(|e| anyhow::anyhow!("push raw frame: {e:?}"))
+        .and_then(|_| {
+            appsink
+                .try_pull_sample(gst::ClockTime::from_seconds(5))
+                .context("JPEG encode produced no output within 5s")
+        });
+    let _ = pipeline.set_state(gst::State::Null);
+
+    let buffer = encoded?.buffer_owned().context("JPEG sample has no buffer")?;
+    let mapped = buffer
+        .into_mapped_buffer_readable()
+        .map_err(|_| anyhow::anyhow!("Failed to map JPEG buffer"))?;
+    Ok(bytes::Bytes::from_owner(mapped))
 }
