@@ -7,4 +7,6 @@ pub use codec::{
     new_keyboard_led_message, new_keyboard_macro_state_message, new_keyboard_report_message,
     new_keydown_state_message,
 };
-pub use dispatcher::{clear_reliable_channel, dispatch, install_reliable_channel};
+pub use dispatcher::{
+    cancel_running_macro, clear_reliable_channel, dispatch, install_reliable_channel, play_macro,
+};
