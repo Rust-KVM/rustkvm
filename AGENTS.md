@@ -91,7 +91,7 @@ lib.rs                   # module roots (see below)
 ├── config/              # OnceCell<ConfigManager>, TOML at /userdata/rustkvm/config.toml (auto-migrates legacy JSON)
 ├── failsafe.rs          # Boot crash-log / env-var / .enablefailsafe trigger + RPC + broadcast event
 ├── api/                 # JSON-RPC 2.0
-│   ├── registry.rs      # RpcRegistry; per-call counter + latency histogram
+│   ├── registry.rs      # RpcRegistry; transport-agnostic `JsonRpcProcessor::dispatch`; per-call counter + latency histogram
 │   ├── registry_builder.rs
 │   ├── handlers/{hid,media,network,system,usb}.rs
 │   ├── events.rs        # broadcast events: usbState, keyboardLedState, failsafeMode, willReboot, networkState
@@ -100,7 +100,7 @@ lib.rs                   # module roots (see below)
 │   ├── routes.rs        # protected / public / developer / static
 │   ├── auth.rs          # login (rate-limited), logout, mode switch
 │   ├── ratelimit.rs     # login exponential backoff
-│   ├── device.rs        # device endpoints (robots.txt, info, cloud state)
+│   ├── device.rs        # device endpoints (robots.txt, info, cloud state, `POST /device/rpc` JSON-RPC over HTTP)
 │   ├── storage.rs       # virtual-media upload / list
 │   ├── socket.rs        # Socket.IO signaling namespace (join, signal, ice-candidate)
 │   ├── webrtc_handlers.rs # offer/answer + signaling glue
@@ -217,7 +217,7 @@ trunk serve                  # local dev server on :9000 (Trunk.toml)
 
 ## CI
 
-- **`.github/workflows/ci.yml`** — workspace `rustfmt` (nightly) + `cargo deny` + host `clippy --workspace --release --all-targets -D warnings` (GStreamer dev libs, stub `rkvm-web/dist`), gated by a `CI Success` summary check.
+- **`.github/workflows/ci.yml`** — workspace `rustfmt` (nightly) + `cargo deny` + host `clippy --workspace --release --all-targets -D warnings` + `cargo test --workspace` (GStreamer dev libs, stub `rkvm-web/dist`), gated by a `CI Success` summary check.
 - **`.github/workflows/web.yml`** — `rkvm-web` only (triggers on `crates/rkvm-web/**`, `crates/rkvm-proto/**`): `rustfmt` (nightly) → `clippy` (stable, `--target wasm32-unknown-unknown -D warnings`) → `trunk build --locked` → `cargo deny`, gated by a `Web CI Success` summary check.
 
 ## Deployment
@@ -252,7 +252,7 @@ nohup setsid /userdata/rustkvm/bin/rustkvm_app </dev/null >>/userdata/rustkvm/lo
 - **Global state**: `OnceCell`/`OnceLock`. Panic on uninitialized access is intentional.
 - **Comments**: only when the *why* is non-obvious (hidden invariants, hardware quirks, workarounds) and for `unsafe { … }` blocks (`// SAFETY: …`). Section dividers, header banners, and "what this does" comments are forbidden — names should carry the meaning.
 - **Shared protocol**: types crossing the backend/frontend boundary live in `rkvm-proto` (no I/O, `serde`-only). Do not duplicate them in `app/` or `rkvm-web/`.
-- **Tests**: no `#[cfg(test)]` modules. `tests/` holds WebRTC manual-test HTML pages only.
+- **Tests**: no `#[cfg(test)]` modules. Automated tests are integration tests in each crate's own `tests/` dir (`crates/rkvm-proto/tests/`, `app/tests/`) against the public API, run by `cargo test --workspace`. Changing the RPC method set requires updating `app/tests/rpc_methods.txt`. The root `tests/` holds WebRTC manual-test HTML pages only.
 
 ## Gotchas
 
