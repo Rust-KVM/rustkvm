@@ -46,6 +46,7 @@ chrono.workspace             = true
 time.workspace               = true
 
 # Crypto / Auth
+semver.workspace             = true
 sha2.workspace               = true
 bcrypt.workspace             = true
 rustls.workspace             = true

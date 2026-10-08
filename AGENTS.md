@@ -146,6 +146,9 @@ lib.rs                   # module roots (see below)
 │   ├── diagnostics.rs   # `/diagnostics.json`
 │   ├── health.rs        # aggregated health report (`GET /device/health`, `getHealth` RPC): status ok/degraded + issues
 │   └── mod.rs           # `install_log_reload_handle` + `set_log_filter`
+├── update.rs            # OTA from official GitHub releases only (`rustkvm_app-aarch64-unknown-linux-gnu` + `.sha256`, host-pinned);
+│                        # sha256 + aarch64-ELF check → atomic rename (old kept as `.prev`) → graceful shutdown + exec;
+│                        # boot marker rolls back after 3 unconfirmed boots, confirmed after 120s up
 ├── version.rs           # build.rs-populated GIT_REVISION/GIT_BRANCH/BUILD_DATE/RUSTC_VERSION via option_env!
 └── power/               # ATX/DC power button + LED control
     ├── atx.rs           # ATX GPIO state machine
@@ -271,7 +274,7 @@ nohup setsid /userdata/rustkvm/bin/rustkvm_app </dev/null >>/userdata/rustkvm/lo
 8. **Ctrl socket** — `hardware::native::socket::init_ctrl_socket()` MUST be called from `main.rs` after `tls::init()`; otherwise every native bridge call logs `ctrl socket not initialized`. The LVGL companion binary listens on `/var/run/rustkvm_ctrl.sock` (Unix `SEQPACKET`).
 9. **Version reporting** — use `version::built_app_version()` and `version::VersionInfo`. Never hard-code version strings in event payloads.
 10. **Frontend is a separate crate** — `rkvm-web` is workspace-excluded with its own `Cargo.lock`/toolchain. Build it with Trunk first; the app embeds `crates/rkvm-web/dist/` at compile time, so stale/missing `dist/` ships stale UI. The old `client/static` upstream-Go SPA mirror no longer exists.
-11. **Module tree is authoritative** — check `lib.rs` / `mod.rs` before re-adding modules. Do not reintroduce without a real call-site: `hardware::serial`, `fuse`, `hardware::manager`, `hardware::usb::jiggler`, `util`, `web.rs` (→ `web/`), `jsonrpc.rs` (→ `api/`), `app::mdns` (→ `rkvm-net`), `ota/` (→ `version.rs`), `hardware::native::process`, `rkvm_core::lock`, `rkvm_net::mdns::utils`, `signaling` (signaling now lives in `web/socket.rs` + `web/webrtc_handlers.rs`).
+11. **Module tree is authoritative** — check `lib.rs` / `mod.rs` before re-adding modules. Do not reintroduce without a real call-site: `hardware::serial`, `fuse`, `hardware::manager`, `hardware::usb::jiggler`, `util`, `web.rs` (→ `web/`), `jsonrpc.rs` (→ `api/`), `app::mdns` (→ `rkvm-net`), `ota/` (→ `version.rs` + `update.rs`), `hardware::native::process`, `rkvm_core::lock`, `rkvm_net::mdns::utils`, `signaling` (signaling now lives in `web/socket.rs` + `web/webrtc_handlers.rs`).
 12. **Conservative dep pins** documented in root `Cargo.toml` (post-`cargo update`):
     - `reqwest = 0.12.x` (latest 0.12.28) — `0.13` requires TLS-feature migration; `rustls` feature in 0.13 pulls aws-lc-rs (aarch64 cross-compile hazard).
     - `webrtc = 0.17.1` — latest stable; `0.20.0-alpha.1` is alpha-only.

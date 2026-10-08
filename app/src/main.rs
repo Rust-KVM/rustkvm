@@ -3,6 +3,7 @@ use rustkvm::cli::Cli;
 use rustkvm::hardware::native::socket as native_ctrl;
 use rustkvm::hardware::usb::storage as virtual_media;
 use rustkvm::hardware::{display, hw, jiggler, tuning, usb};
+use rustkvm::update::{self, BootDecision};
 use rustkvm::{cloud, config, failsafe, mqtt, network, observability, tls, video, web, webrtc};
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
@@ -85,6 +86,29 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     if cli.dry_run {
         info!("Dry-run mode: configuration valid, exiting");
         return Ok(());
+    }
+
+    let mut update_probation = None;
+    match update::init_paths().and_then(update::on_boot) {
+        Ok(BootDecision::Normal) => {}
+        Ok(BootDecision::Probation(pending)) => {
+            warn!(
+                from = %pending.from_version,
+                to = %pending.to_version,
+                attempt = pending.attempts,
+                "booting freshly installed update"
+            );
+            update_probation = Some(pending);
+        }
+        Ok(BootDecision::RolledBack(pending)) => {
+            error!(
+                from = %pending.from_version,
+                to = %pending.to_version,
+                "update never confirmed, rolled back to previous binary"
+            );
+            return Err(update::exec_current());
+        }
+        Err(e) => warn!(error = %e, "update boot check failed"),
     }
 
     failsafe::check_failsafe_reason();
@@ -195,6 +219,9 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     }
 
     info!("RustKVM system initialized successfully. Waiting for shutdown signal...");
+    if let Some(pending) = update_probation {
+        update::spawn_confirm_after_probation(pending);
+    }
 
     let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
         .map_err(|e| anyhow::anyhow!("failed to create SIGTERM signal handler: {e}"))?;
@@ -209,6 +236,9 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         _ = web_handle => {
             info!("Web server stopped");
         }
+        _ = update::restart_requested() => {
+            info!("Restarting into updated binary...");
+        }
     }
 
     info!("Starting graceful shutdown...");
@@ -222,6 +252,10 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     video::shutdown_video_pipeline().await;
 
     info!("Shutdown complete");
+
+    if update::should_restart() {
+        return Err(update::exec_current());
+    }
 
     // The ctrl-socket accept thread and GStreamer's glib thread pool are not tokio
     // tasks, so they are never joined; dropping the multi-thread runtime would also

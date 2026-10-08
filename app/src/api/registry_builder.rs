@@ -132,7 +132,9 @@ pub fn create_default_registry() -> RpcRegistry {
     registry.register_no_params("getUsbConfig", usb::get_usb_config);
     registry.register_typed("setUsbConfig", usb::set_usb_config);
 
-    registry.register_no_params("getUpdateStatus", system::get_update_status);
+    registry.register_async("getUpdateStatus", |_params| {
+        Box::pin(async move { Ok(serde_json::to_value(system::get_update_status().await?)?) })
+    });
     registry.register_async("getLocalVersion", |_params| {
         Box::pin(async move {
             let v = system::get_local_version().await?;
