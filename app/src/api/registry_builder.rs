@@ -19,6 +19,11 @@ pub fn create_default_registry() -> RpcRegistry {
     registry.register_no_params("ping", system::ping);
     registry.register_no_params("getDeviceID", system::get_device_id);
     registry.register_no_params("getFailsafeMode", system::get_failsafe_mode);
+    registry.register_async("getHealth", |_params| {
+        Box::pin(async move {
+            Ok(serde_json::to_value(crate::observability::health::health_report().await)?)
+        })
+    });
     registry.register_typed("reboot", system::reboot);
 
     registry.register_typed("setSerialSettings", system::set_serial_settings);

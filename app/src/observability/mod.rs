@@ -1,4 +1,5 @@
 pub mod diagnostics;
+pub mod health;
 pub mod metrics;
 
 use anyhow::{Result, anyhow};

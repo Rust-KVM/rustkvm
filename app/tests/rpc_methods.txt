@@ -24,6 +24,7 @@ getDisplayRotation
 getDisplayState
 getEDID
 getFailsafeMode
+getHealth
 getHostDisplayIdleMode
 getJigglerConfig
 getJigglerState
@@ -123,4 +124,3 @@ tryUpdateComponents
 unmountImage
 wakeHost
 wheelReport
-

@@ -100,7 +100,7 @@ lib.rs                   # module roots (see below)
 │   ├── routes.rs        # protected / public / developer / static
 │   ├── auth.rs          # login (rate-limited), logout, mode switch
 │   ├── ratelimit.rs     # login exponential backoff
-│   ├── device.rs        # device endpoints (robots.txt, info, cloud state, `POST /device/rpc` JSON-RPC over HTTP)
+│   ├── device.rs        # device endpoints (robots.txt, info, cloud state, `POST /device/rpc` JSON-RPC over HTTP, `GET /device/health`)
 │   ├── storage.rs       # virtual-media upload / list
 │   ├── socket.rs        # Socket.IO signaling namespace (join, signal, ice-candidate)
 │   ├── webrtc_handlers.rs # offer/answer + signaling glue
@@ -141,6 +141,7 @@ lib.rs                   # module roots (see below)
 ├── observability/       # Prometheus metrics + live log-level reload
 │   ├── metrics.rs       # app_info, video/audio frame counters, RPC call counter + latency histogram
 │   ├── diagnostics.rs   # `/diagnostics.json`
+│   ├── health.rs        # aggregated health report (`GET /device/health`, `getHealth` RPC): status ok/degraded + issues
 │   └── mod.rs           # `install_log_reload_handle` + `set_log_filter`
 ├── version.rs           # build.rs-populated GIT_REVISION/GIT_BRANCH/BUILD_DATE/RUSTC_VERSION via option_env!
 └── power/               # ATX/DC power button + LED control
