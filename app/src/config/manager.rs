@@ -5,6 +5,7 @@ use bcrypt::{DEFAULT_COST, hash, verify};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
+use crate::config::api_token::{self, ApiTokenState};
 use crate::config::persistence::ConfigPersistence;
 use crate::config::types::Config;
 
@@ -110,6 +111,42 @@ impl ConfigManager {
         } else {
             false
         }
+    }
+
+    pub async fn create_api_token(&self) -> Result<String> {
+        let token = api_token::generate_token();
+        let digest = api_token::hash_token(&token);
+        let created_at = chrono::Utc::now().to_rfc3339();
+        self.update(|config| {
+            config.api_token_sha256 = Some(digest);
+            config.api_token_created_at = Some(created_at);
+        })
+        .await?;
+        Ok(token)
+    }
+
+    pub async fn revoke_api_token(&self) -> Result<()> {
+        self.update(|config| {
+            config.api_token_sha256 = None;
+            config.api_token_created_at = None;
+        })
+        .await
+    }
+
+    pub async fn api_token_state(&self) -> ApiTokenState {
+        let config = self.config.read().await;
+        ApiTokenState {
+            enabled: config.api_token_sha256.is_some(),
+            created_at: config.api_token_created_at.clone(),
+        }
+    }
+
+    pub async fn validate_api_token(&self, token: &str) -> bool {
+        let config = self.config.read().await;
+        config
+            .api_token_sha256
+            .as_deref()
+            .is_some_and(|stored| api_token::verify_token(token, stored))
     }
 
     pub async fn validate_password(&self, password: &str) -> bool {

@@ -215,6 +215,10 @@ pub struct Config {
     pub hashed_password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_auth_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_token_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_token_created_at: Option<String>,
     #[serde(alias = "localAuthMode")]
     pub local_auth_mode: String,
     pub local_loopback_only: bool,
@@ -260,6 +264,8 @@ impl Default for Config {
             include_pre_release: false,
             hashed_password: None,
             local_auth_token: None,
+            api_token_sha256: None,
+            api_token_created_at: None,
             local_auth_mode: String::new(),
             local_loopback_only: false,
             keyboard_layout: "en_US".to_string(),

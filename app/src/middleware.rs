@@ -5,6 +5,7 @@ use salvo::prelude::*;
 use serde_json::json;
 use tracing::{debug, warn};
 
+use crate::config::api_token::bearer_token;
 use crate::config::{get_config_manager, get_dev_mode_state};
 
 fn extract_basic_auth(auth_header: &str) -> Option<(String, String)> {
@@ -44,6 +45,15 @@ pub async fn auth_middleware(
             debug!("Authentication successful: valid auth token");
             return;
         }
+    }
+
+    if let Some(auth_header) = req.headers().get("Authorization")
+        && let Ok(auth_str) = auth_header.to_str()
+        && let Some(token) = bearer_token(auth_str)
+        && config_manager.validate_api_token(token).await
+    {
+        debug!("Authentication successful: valid API bearer token");
+        return;
     }
 
     warn!("Authentication failed: invalid or missing auth token");
