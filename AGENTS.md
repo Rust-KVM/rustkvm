@@ -217,7 +217,7 @@ trunk serve                  # local dev server on :9000 (Trunk.toml)
 
 ## CI
 
-- **`.github/workflows/ci.yml`** — workspace `rustfmt` (nightly) + `cargo deny` gated by a `CI Success` summary check.
+- **`.github/workflows/ci.yml`** — workspace `rustfmt` (nightly) + `cargo deny` + host `clippy --workspace --release --all-targets -D warnings` (GStreamer dev libs, stub `rkvm-web/dist`), gated by a `CI Success` summary check.
 - **`.github/workflows/web.yml`** — `rkvm-web` only (triggers on `crates/rkvm-web/**`, `crates/rkvm-proto/**`): `rustfmt` (nightly) → `clippy` (stable, `--target wasm32-unknown-unknown -D warnings`) → `trunk build --locked` → `cargo deny`, gated by a `Web CI Success` summary check.
 
 ## Deployment
