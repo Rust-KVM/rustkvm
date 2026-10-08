@@ -111,6 +111,7 @@ lib.rs                   # module roots (see below)
 ├── webrtc.rs            # PeerConnection factory, ICE, data channels (incl. cdcacm route)
 ├── video.rs             # GStreamer + MPP pipeline; zero-copy `bytes::Bytes::from_owner(MappedBuffer)`
                          # frames into WebRTC RTP — no per-frame memcpy
+                         # supervisor restarts a dead pipeline (5s→300s backoff); `restartVideoPipeline` RPC
 ├── hardware/
 │   ├── usb/             # HID (keyboard/mouse), storage (virtual media), gadget, descriptors
 │   ├── native/          # Ctrl socket (SEQPACKET), JSON-RPC bridge

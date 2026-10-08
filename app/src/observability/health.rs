@@ -2,7 +2,9 @@ use serde::Serialize;
 
 use crate::api::handlers::network::NetworkStateResponse;
 use crate::api::handlers::system::FailsafeModeResponse;
-use crate::observability::metrics::{AUDIO_FRAMES_TOTAL, VIDEO_FRAMES_TOTAL};
+use crate::observability::metrics::{
+    AUDIO_FRAMES_TOTAL, VIDEO_FRAMES_TOTAL, VIDEO_PIPELINE_RESTARTS_TOTAL,
+};
 use crate::version::VersionInfo;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -32,6 +34,7 @@ pub struct VideoReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub frames_total: u64,
+    pub restarts: u64,
 }
 
 #[derive(Serialize)]
@@ -101,6 +104,7 @@ pub async fn health_report() -> HealthReport {
             fps: video_state.frame_per_second,
             error: video_state.error,
             frames_total: VIDEO_FRAMES_TOTAL.get(),
+            restarts: VIDEO_PIPELINE_RESTARTS_TOTAL.get(),
         },
         audio_frames_total: AUDIO_FRAMES_TOTAL.get(),
         usb_state,
