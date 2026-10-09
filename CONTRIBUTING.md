@@ -88,6 +88,12 @@ changes (required check: `Web CI Success`): `rustfmt`, `clippy` for
 
 Keep pull requests focused on one change, and fill in the pull request template.
 
+Labels are defined in [`.github/labels.yml`](.github/labels.yml) and synced to the
+repository on every change to `dev`. Pull requests get `area:` and component labels
+automatically from the paths they touch ([`.github/labeler.yml`](.github/labeler.yml));
+add `breaking` or `skip-changelog` by hand when they apply, since labels drive the
+sections of the generated release notes.
+
 ## Dependency policy
 
 - Workspace dependencies live in the root `[workspace.dependencies]`; member crates use
