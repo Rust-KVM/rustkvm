@@ -173,6 +173,26 @@ rustkvm/
 | Power control | Optional ATX and DC extension boards wired to GPIO |
 | OS | Buildroot-based Linux image for RK3588 (see [Building from source](#building-from-source)) |
 
+## How it compares
+
+RustKVM sits next to two well-known open-source IP-KVMs and borrows ideas from both.
+
+| | **RustKVM** | [JetKVM](https://github.com/jetkvm/kvm) | [PiKVM](https://github.com/pikvm/pikvm) |
+| --- | --- | --- | --- |
+| Hardware | Any RK3588 board with HDMI-RX | JetKVM device | Raspberry Pi + capture board |
+| Device software | Rust | Go | Python |
+| Web UI | Rust / WebAssembly (Leptos) | React | JavaScript |
+| License | GPL-2.0-only | GPL-2.0 | GPL-3.0 |
+
+What RustKVM focuses on:
+
+- **RK3588 headroom**: an 8-core SoC with a hardware H.264 / H.265 encoder, so video
+  encoding stays off the CPU.
+- **One language end to end**: backend, frontend and the shared protocol crate are all
+  Rust, and the tree carries no hand-written C (EDID ioctls go through `rustix`).
+- **Agent-ready API**: every action is a JSON-RPC method, exposed over HTTP, MQTT and a
+  built-in MCP endpoint with API-token auth.
+
 ## Quick start
 
 The full walkthrough, including flashing and wiring, is in
@@ -346,6 +366,11 @@ the project enforces `rustfmt`, `clippy -D warnings` with no `#[allow]` suppress
 If RustKVM is useful to you, consider supporting its development.
 
 BTC: `bc1q3pgq8mc7dm9vvygd7aatq4hnt7j596jcjughm3`
+
+## Citing
+
+If you use RustKVM in research or a publication, GitHub's **Cite this repository**
+button (from [`CITATION.cff`](CITATION.cff)) gives a ready-made reference.
 
 ## License
 

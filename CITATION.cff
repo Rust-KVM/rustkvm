@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use RustKVM in research or a publication, please cite it as below."
+title: "RustKVM: open-source KVM-over-IP for RK3588, written in Rust"
+type: software
+authors:
+  - name: "The RustKVM contributors"
+repository-code: "https://github.com/Rust-KVM/rustkvm"
+url: "https://github.com/Rust-KVM/rustkvm"
+license: GPL-2.0-only
+version: 0.1.0
+abstract: >-
+  RustKVM turns an RK3588 board into an IP-KVM: hardware-encoded H.264/H.265 video
+  over WebRTC, USB keyboard and mouse emulation, virtual media, ATX and DC power
+  control, and JSON-RPC, MQTT and Model Context Protocol (MCP) interfaces for
+  automation and AI agents.
+keywords:
+  - kvm-over-ip
+  - ip-kvm
+  - rk3588
+  - rust
+  - webrtc
+  - remote-access
+  - mcp
