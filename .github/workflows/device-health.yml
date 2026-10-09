@@ -1,0 +1,69 @@
+name: Device health
+
+# Probes a live RustKVM device (health, JSON-RPC, MCP, auth lockdown) with the
+# app/tests/device_live.rs contract tests. Set the repository variable
+# RKVM_DEVICE_URL and the secret RKVM_DEVICE_TOKEN (an agent API token); to
+# reach a device on a private network, point RKVM_PROBE_RUNNER at a
+# self-hosted runner label.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Device base URL (defaults to the RKVM_DEVICE_URL variable)
+        required: false
+      require_healthy:
+        description: Fail when the device reports a degraded status
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: nightly
+
+jobs:
+  probe:
+    name: probe device
+    runs-on: ${{ vars.RKVM_PROBE_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 45
+    env:
+      RKVM_DEVICE_URL: ${{ inputs.url || vars.RKVM_DEVICE_URL }}
+      RKVM_DEVICE_TOKEN: ${{ secrets.RKVM_DEVICE_TOKEN }}
+      RKVM_REQUIRE_HEALTHY: ${{ (inputs.require_healthy || vars.RKVM_REQUIRE_HEALTHY == '1') && '1' || '0' }}
+      PKG_CONFIG_SYSROOT_DIR: /
+      PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+      PKG_CONFIG_LIBDIR: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+    steps:
+      - name: Require a configured device
+        run: |
+          if [ -z "$RKVM_DEVICE_URL" ]; then
+            echo "::notice::RKVM_DEVICE_URL is not configured; nothing to probe."
+            exit 0
+          fi
+          echo "PROBE=1" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v7
+        if: env.PROBE == '1'
+        with:
+          submodules: false
+      - name: Install system libraries
+        if: env.PROBE == '1'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      - name: Install nightly toolchain
+        if: env.PROBE == '1'
+        uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        if: env.PROBE == '1'
+      - name: Stub frontend dist
+        if: env.PROBE == '1'
+        run: mkdir -p crates/rkvm-web/dist && touch crates/rkvm-web/dist/index.html
+      - name: Probe device
+        if: env.PROBE == '1'
+        run: cargo test --locked -p rustkvm --test device_live -- --nocapture
