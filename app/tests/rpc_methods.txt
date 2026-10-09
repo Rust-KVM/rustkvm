@@ -43,6 +43,7 @@ getNetworkIpAddress
 getNetworkSettings
 getNetworkState
 getPublicIPAddresses
+getRecentLogs
 getSSHKeyState
 getSerialCommandHistory
 getSerialSettings

@@ -93,6 +93,7 @@ impl McpServer {
 pub fn rpc_method_for_tool(name: &str) -> Option<&'static str> {
     Some(match name {
         "get_health" => "getHealth",
+        "get_logs" => "getRecentLogs",
         "type_text" => "typeText",
         "press_combo" => "pressCombo",
         "mouse_move" => "mouseMove",
@@ -129,6 +130,19 @@ pub fn tool_definitions() -> Vec<Value> {
             "get_health",
             "Device health: video signal, USB gadget, network, failsafe, versions",
             empty.clone(),
+            true,
+        ),
+        tool(
+            "get_logs",
+            "Recent device log lines (newest last), optionally filtered by minimum level or substring",
+            json!({
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 1000 },
+                    "level": { "type": "string", "enum": ["TRACE", "DEBUG", "INFO", "WARN", "ERROR"] },
+                    "contains": { "type": "string" }
+                }
+            }),
             true,
         ),
         tool(

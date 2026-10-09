@@ -454,6 +454,7 @@ pub fn create_default_registry() -> RpcRegistry {
     registry.register_no_params("getDefaultLogLevel", system::get_default_log_level);
     registry.register_typed("setDefaultLogLevel", system::set_default_log_level);
     registry.register_typed("emitTestLog", system::emit_test_log);
+    registry.register_typed("getRecentLogs", system::get_recent_logs);
     registry.register_async("getTimezones", |_params| {
         Box::pin(async move {
             let result = system::get_timezones()?;

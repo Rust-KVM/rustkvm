@@ -49,9 +49,17 @@ fn init_tracing(cli: &Cli) {
         .with_line_number(true);
 
     if cli.logging.log_json {
-        tracing_subscriber::registry().with(filter).with(fmt_layer.json()).init();
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(rustkvm::observability::log_buffer::layer())
+            .with(fmt_layer.json())
+            .init();
     } else {
-        tracing_subscriber::registry().with(filter).with(fmt_layer.pretty()).init();
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(rustkvm::observability::log_buffer::layer())
+            .with(fmt_layer.pretty())
+            .init();
     }
 }
 
