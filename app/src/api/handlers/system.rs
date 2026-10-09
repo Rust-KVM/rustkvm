@@ -396,17 +396,33 @@ static DEV_CHANNEL_ENABLED: AtomicBool = AtomicBool::new(false);
 pub struct UpdateStatusResponse {
     #[serde(rename = "updateAvailable")]
     pub update_available: bool,
+    #[serde(rename = "appUpdateAvailable")]
+    pub app_update_available: bool,
+    #[serde(rename = "systemUpdateAvailable")]
+    pub system_update_available: bool,
     #[serde(rename = "currentVersion")]
     pub current_version: String,
+    #[serde(rename = "latestVersion", skip_serializing_if = "Option::is_none")]
+    pub latest: Option<String>,
+    pub progress: crate::update::UpdateProgress,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-pub fn get_update_status() -> Result<UpdateStatusResponse> {
+pub async fn get_update_status() -> Result<UpdateStatusResponse> {
+    let include_pre_release = crate::config::get_config_manager().get().await.include_pre_release;
+    let (latest, error) = match crate::update::check_latest(include_pre_release).await {
+        Ok(latest) => (latest, None),
+        Err(e) => (None, Some(format!("{e:#}"))),
+    };
     Ok(UpdateStatusResponse {
-        update_available: false,
+        update_available: latest.is_some(),
+        app_update_available: latest.is_some(),
+        system_update_available: false,
         current_version: crate::version::built_app_version().to_string(),
-        error: None,
+        latest: latest.map(|l| l.version),
+        progress: crate::update::progress(),
+        error,
     })
 }
 
@@ -433,7 +449,7 @@ pub async fn set_auto_update_state(params: AutoUpdateParams) -> Result<bool> {
 }
 
 pub fn is_update_pending() -> Result<bool> {
-    Ok(false)
+    Ok(crate::update::is_pending())
 }
 
 #[derive(Serialize)]
@@ -486,8 +502,14 @@ pub async fn check_update_components(
 }
 
 pub async fn try_update() -> Result<Value> {
-    info!("Update triggered via RPC");
-    Ok(Value::Null)
+    let include_pre_release = crate::config::get_config_manager().get().await.include_pre_release;
+    let release = crate::update::check_latest(include_pre_release)
+        .await?
+        .ok_or_else(|| anyhow!("already on the latest release"))?;
+    info!(version = %release.version, "update triggered via RPC");
+    let version = release.version.clone();
+    crate::update::start_update(release)?;
+    Ok(serde_json::json!({ "started": true, "version": version }))
 }
 
 #[derive(Deserialize)]
