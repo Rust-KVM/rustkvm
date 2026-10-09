@@ -11,10 +11,32 @@ import sys
 import urllib.request
 
 ONEDRIVE_API = "https://api.onedrive.com/v1.0"
+# Anonymous share-link access to the consumer OneDrive API needs a "Badger"
+# guest token; this is the app id the OneDrive web viewer requests it with.
+BADGER_TOKEN_URL = "https://api-badgerp.svc.ms/v1.0/token"
+BADGER_APP_ID = "5cbed6ac-a083-4e14-b191-b4ba07653de2"
 
 
-def onedrive_get(url):
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+def badger_token():
+    body = json.dumps({"appId": BADGER_APP_ID}).encode()
+    req = urllib.request.Request(
+        BADGER_TOKEN_URL, data=body, headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.load(resp)["token"]
+
+
+def onedrive_get(url, _auth=[]):
+    if not _auth:
+        _auth.append(f"Badger {badger_token()}")
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "Authorization": _auth[0],
+            "Prefer": "autoredeem",
+        },
+    )
     with urllib.request.urlopen(req, timeout=60) as resp:
         return json.load(resp)
 
