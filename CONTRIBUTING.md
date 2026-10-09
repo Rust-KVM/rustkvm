@@ -102,9 +102,10 @@ Keep pull requests focused on one change, and fill in the pull request template.
 ## Release process
 
 1. Bump `version` in the workspace `Cargo.toml`.
-2. Tag the commit: `git tag -a vX.Y.Z -m "release vX.Y.Z" && git push origin vX.Y.Z`.
+2. Move the `Unreleased` entries in [`CHANGELOG.md`](CHANGELOG.md) under the new version.
+3. Tag the commit: `git tag -a vX.Y.Z -m "release vX.Y.Z" && git push origin vX.Y.Z`.
    The tag must equal the workspace version.
-3. `.github/workflows/release.yml` builds the frontend, cross-builds `rustkvm_app` in the
+4. `.github/workflows/release.yml` builds the frontend, cross-builds `rustkvm_app` in the
    `rk3588-buildkit` image, and publishes `rustkvm_app-aarch64-unknown-linux-gnu` with a
    `.sha256` checksum to the GitHub release.
 
