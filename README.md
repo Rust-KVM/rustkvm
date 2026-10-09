@@ -175,6 +175,9 @@ rustkvm/
 
 ## Quick start
 
+The full walkthrough, including flashing and wiring, is in
+[docs/getting-started.md](docs/getting-started.md).
+
 1. **Build** the frontend and the device binary (next section), or use `dev_deploy.sh`.
 2. **Deploy** to the device:
 
@@ -324,10 +327,12 @@ claude mcp add --transport http rustkvm https://rustkvm.local/mcp \
 
 ## Documentation
 
+- [`docs/getting-started.md`](docs/getting-started.md): flash, deploy, wire up and log in on an RK3588 board
 - [`docs/api.md`](docs/api.md): HTTP, JSON-RPC, MCP, HID-RPC and metrics reference
 - [`AGENTS.md`](AGENTS.md): architecture, module tree, coding conventions and gotchas
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): development workflow and quality gates
 - [`SECURITY.md`](SECURITY.md): how to report a vulnerability
+- [`CHANGELOG.md`](CHANGELOG.md): release history
 
 ## Contributing
 

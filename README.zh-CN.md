@@ -65,6 +65,8 @@ RustKVM 把一块 RK3588 开发板变成 **IP-KVM**：将它的 HDMI 输入和 U
 
 ## 快速开始
 
+完整步骤（刷机、接线、首次登录）见 [docs/getting-started.md](docs/getting-started.md)。
+
 1. 构建前端与设备程序（见下节），或直接使用 `dev_deploy.sh`
 2. 部署到设备：`./dev_deploy.sh -r <设备IP> -u root`
 3. 浏览器打开 `https://<设备IP>/` 或 `https://rustkvm.local/`，接受自签名证书
