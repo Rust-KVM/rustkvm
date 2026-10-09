@@ -49,7 +49,7 @@ def onedrive_children(url):
         url = page.get("@odata.nextLink")
 
 
-def onedrive_find(share_url, name, max_depth=4):
+def onedrive_find(share_url, name, max_depth=3):
     share_id = "u!" + base64.urlsafe_b64encode(share_url.encode()).decode().rstrip("=")
     queue = [(f"{ONEDRIVE_API}/shares/{share_id}/driveItem/children", 0, "")]
     while queue:
@@ -57,10 +57,18 @@ def onedrive_find(share_url, name, max_depth=4):
         for child in onedrive_children(children_url):
             child_path = f"{path}/{child['name']}"
             print(child_path, flush=True)
+            if child["name"].startswith("."):
+                continue
             if "folder" in child and depth < max_depth:
                 drive = child["parentReference"]["driveId"]
                 url = f"{ONEDRIVE_API}/drives/{drive}/items/{child['id']}/children"
-                queue.append((url, depth + 1, child_path))
+                # FriendlyELEC keeps the SDK tars under "07_Source codes";
+                # search folders named like that first.
+                entry = (url, depth + 1, child_path)
+                if "source" in child["name"].lower():
+                    queue.insert(0, entry)
+                else:
+                    queue.append(entry)
             elif child["name"] == name:
                 return child
     sys.exit(f"{name} not found in {share_url}")
