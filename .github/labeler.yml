@@ -1,0 +1,35 @@
+# Path-based PR labels, applied by .github/workflows/labeler.yml.
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file: ["**/*.md", "docs/**"]
+ci:
+  - changed-files:
+      - any-glob-to-any-file: [".github/workflows/**", "ci/**"]
+build:
+  - changed-files:
+      - any-glob-to-any-file: ["Cargo.toml", ".cargo/**", "rust-toolchain.toml", "rust", "dev_deploy.sh", "flake.nix", "deny.toml"]
+rkvm-web:
+  - changed-files:
+      - any-glob-to-any-file: ["crates/rkvm-web/**"]
+rkvm-proto:
+  - changed-files:
+      - any-glob-to-any-file: ["crates/rkvm-proto/**"]
+"area: video":
+  - changed-files:
+      - any-glob-to-any-file: ["app/src/video.rs", "app/src/pipeline.rs", "app/src/webrtc.rs"]
+"area: hid":
+  - changed-files:
+      - any-glob-to-any-file: ["app/src/hidrpc/**", "app/src/hardware/usb/hid.rs", "app/src/hardware/jiggler.rs"]
+"area: usb":
+  - changed-files:
+      - any-glob-to-any-file: ["app/src/hardware/usb/**", "app/src/hardware/block_device.rs", "app/src/remote_mount.rs"]
+"area: power":
+  - changed-files:
+      - any-glob-to-any-file: ["app/src/power/**", "crates/rkvm-net/src/wol.rs"]
+"area: api":
+  - changed-files:
+      - any-glob-to-any-file: ["app/src/api/**", "app/src/mcp.rs", "app/src/mqtt/**", "app/src/web/**"]
+"area: network":
+  - changed-files:
+      - any-glob-to-any-file: ["app/src/network.rs", "app/src/tls.rs", "app/src/cloud/**", "crates/rkvm-net/**"]
