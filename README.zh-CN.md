@@ -63,6 +63,18 @@ RustKVM 把一块 RK3588 开发板变成 **IP-KVM**：将它的 HDMI 输入和 U
 | **设置抽屉** | 功能开关、虚拟介质、USB 设备、视频编码与休眠、EDID、键盘布局、网络、WoL、MQTT、屏幕旋转与背光、SSH 公钥、密码、日志级别、关于 |
 | **高级设置** | ATX / DC 电源、扩展板、键盘宏、串口控制台、TLS、Tailscale、云、开发者模式、恢复出厂 |
 
+## 与同类项目对比
+
+| | **RustKVM** | [JetKVM](https://github.com/jetkvm/kvm) | [PiKVM](https://github.com/pikvm/pikvm) |
+| --- | --- | --- | --- |
+| 硬件 | 任意带 HDMI-RX 的 RK3588 板卡 | JetKVM 设备 | 树莓派 + 采集卡 |
+| 设备端语言 | Rust | Go | Python |
+| Web 界面 | Rust / WebAssembly（Leptos） | React | JavaScript |
+| 许可证 | GPL-2.0-only | GPL-2.0 | GPL-3.0 |
+
+RustKVM 的侧重点：RK3588 的 8 核算力与 H.264 / H.265 硬件编码；后端、前端与协议全部使用 Rust；
+所有操作都是 JSON-RPC 方法，并通过 HTTP、MQTT 和内置 MCP 接口对外开放。
+
 ## 快速开始
 
 完整步骤（刷机、接线、首次登录）见 [docs/getting-started.md](docs/getting-started.md)。
