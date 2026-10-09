@@ -224,7 +224,7 @@ trunk serve                  # local dev server on :9000 (Trunk.toml)
 ## CI
 
 - **`.github/workflows/ci.yml`** — workspace `rustfmt` (nightly) + `cargo deny` + host `clippy --workspace --release --all-targets -D warnings` + aarch64 `clippy --target aarch64-unknown-linux-gnu` (Ubuntu cross gcc, no link) + `cargo test --workspace` (GStreamer dev libs, stub `rkvm-web/dist`), gated by a `CI Success` summary check.
-- **`.github/workflows/buildkit.yml`** — manual: downloads the Buildroot SDK tar (Google Drive file ID), runs `./build.sh rk3588.mk`, publishes `/opt/rk3588-buildkit` as `ghcr.io/rust-kvm/rk3588-buildkit:{sdk_tag,latest}` and uploads the system images as an artifact.
+- **`.github/workflows/buildkit.yml`** — manual: downloads the Buildroot SDK tar (Google Drive file or FriendlyELEC OneDrive folder via `ci/buildkit/fetch_sdk.py`), runs `./build.sh rk3588.mk`, publishes `/opt/rk3588-buildkit` as `ghcr.io/rust-kvm/rk3588-buildkit:{sdk_tag,latest}` and uploads the system images as an artifact.
 - **`.github/workflows/release.yml`** — tag `vX.Y.Z` (must equal the workspace version): Trunk frontend → `cargo +nightly build -Z build-std` in the buildkit image → GitHub Release with `rustkvm_app-aarch64-unknown-linux-gnu` + `.sha256` (the assets OTA installs).
 - **`.github/workflows/web.yml`** — `rkvm-web` only (triggers on `crates/rkvm-web/**`, `crates/rkvm-proto/**`): `rustfmt` (nightly) → `clippy` (stable, `--target wasm32-unknown-unknown -D warnings`) → `trunk build --locked` → `cargo deny`, gated by a `Web CI Success` summary check.
 
