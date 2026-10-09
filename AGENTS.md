@@ -144,6 +144,7 @@ lib.rs                   # module roots (see below)
 │   ├── rpc.rs / stubs.rs / tls.rs / types.rs
 ├── observability/       # Prometheus metrics + live log-level reload
 │   ├── metrics.rs       # app_info, video/audio frame counters, RPC call counter + latency histogram
+│   ├── log_buffer.rs    # tracing layer: last 1000 events in a ring buffer; `getRecentLogs` RPC / `get_logs` MCP tool
 │   ├── diagnostics.rs   # `/diagnostics.json`
 │   ├── health.rs        # aggregated health report (`GET /device/health`, `getHealth` RPC): status ok/degraded + issues
 │   └── mod.rs           # `install_log_reload_handle` + `set_log_filter`

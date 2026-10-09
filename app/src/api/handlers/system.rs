@@ -129,6 +129,32 @@ pub fn emit_test_log(params: LogLevelParams) -> Result<Value> {
     Ok(Value::Null)
 }
 
+#[derive(Deserialize)]
+pub struct RecentLogsParams {
+    #[serde(default = "default_log_limit")]
+    pub limit: usize,
+    pub level: Option<String>,
+    pub contains: Option<String>,
+}
+
+fn default_log_limit() -> usize {
+    200
+}
+
+pub fn get_recent_logs(params: RecentLogsParams) -> Result<Value> {
+    use crate::observability::log_buffer;
+
+    let min_level = match params.level.as_deref() {
+        Some(level) => Some(log_buffer::parse_level(level).ok_or_else(|| {
+            anyhow!("Invalid log level: {level} (must be TRACE, DEBUG, INFO, WARN, or ERROR)")
+        })?),
+        None => None,
+    };
+    let limit = params.limit.clamp(1, log_buffer::CAPACITY);
+    let entries = log_buffer::recent(limit, min_level, params.contains.as_deref());
+    Ok(serde_json::to_value(entries)?)
+}
+
 pub fn get_timezones() -> Result<Vec<String>> {
     Ok(vec![
         "UTC".to_string(),
