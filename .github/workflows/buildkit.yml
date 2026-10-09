@@ -7,8 +7,8 @@ name: RK3588 buildkit
 on:
   workflow_dispatch:
     inputs:
-      sdk_source:
-        description: Google Drive file ID/link of buildroot-rk3588-<sdk_tag>.tar, or a OneDrive shared-folder link containing it
+      sdk_gdrive_id:
+        description: Google Drive file ID (or share link) of buildroot-rk3588-YYYYMMDD.tar
         required: true
       sdk_tag:
         description: Image tag, usually the SDK date
@@ -48,10 +48,9 @@ jobs:
             python-is-python3 texinfo kmod cmake rsync cpio file wget pipx
       - name: Download SDK
         env:
-          SDK_SOURCE: ${{ inputs.sdk_source }}
-          SDK_NAME: buildroot-rk3588-${{ inputs.sdk_tag }}.tar
+          SDK_ID: ${{ inputs.sdk_gdrive_id }}
         run: |
-          python3 ci/buildkit/fetch_sdk.py "$SDK_SOURCE" "$SDK_NAME" "$RUNNER_TEMP/sdk.tar"
+          pipx run gdown==5.2.0 --fuzzy "$SDK_ID" -O "$RUNNER_TEMP/sdk.tar"
           ls -lh "$RUNNER_TEMP/sdk.tar"
       # FriendlyELEC ships the SDK as a top-level directory holding only a
       # .repo mirror; `repo sync -l` checks the sources out without network.
