@@ -41,9 +41,8 @@ def onedrive_get(url, _auth=[]):
         return json.load(resp)
 
 
-def onedrive_children(item):
-    drive = item["parentReference"]["driveId"]
-    url = f"{ONEDRIVE_API}/drives/{drive}/items/{item['id']}/children?$top=200"
+def onedrive_children(url):
+    url += "?$top=200"
     while url:
         page = onedrive_get(url)
         yield from page.get("value", [])
@@ -52,15 +51,16 @@ def onedrive_children(item):
 
 def onedrive_find(share_url, name, max_depth=4):
     share_id = "u!" + base64.urlsafe_b64encode(share_url.encode()).decode().rstrip("=")
-    root = onedrive_get(f"{ONEDRIVE_API}/shares/{share_id}/driveItem")
-    queue = [(root, 0, root.get("name", ""))]
+    queue = [(f"{ONEDRIVE_API}/shares/{share_id}/driveItem/children", 0, "")]
     while queue:
-        folder, depth, path = queue.pop(0)
-        for child in onedrive_children(folder):
+        children_url, depth, path = queue.pop(0)
+        for child in onedrive_children(children_url):
             child_path = f"{path}/{child['name']}"
             print(child_path, flush=True)
             if "folder" in child and depth < max_depth:
-                queue.append((child, depth + 1, child_path))
+                drive = child["parentReference"]["driveId"]
+                url = f"{ONEDRIVE_API}/drives/{drive}/items/{child['id']}/children"
+                queue.append((url, depth + 1, child_path))
             elif child["name"] == name:
                 return child
     sys.exit(f"{name} not found in {share_url}")
