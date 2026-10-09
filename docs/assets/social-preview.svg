@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f1115"/>
+      <stop offset="1" stop-color="#1b1f27"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f74c00"/>
+      <stop offset="1" stop-color="#ffb35c"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <g fill="none" stroke="#2a303b" stroke-width="1">
+    <path d="M0 160H1280M0 320H1280M0 480H1280M320 0V640M640 0V640M960 0V640"/>
+  </g>
+  <g font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <text x="96" y="236" font-size="104" font-weight="800" fill="#f5f6f8" letter-spacing="-2">Rust<tspan fill="url(#accent)">KVM</tspan></text>
+    <text x="100" y="304" font-size="34" font-weight="500" fill="#c9ced8">KVM-over-IP for RK3588, written in Rust</text>
+    <g font-size="26" fill="#9aa3b2">
+      <text x="100" y="392">H.264 / H.265 hardware encode  ·  WebRTC  ·  USB HID</text>
+      <text x="100" y="436">Virtual media  ·  ATX / DC power  ·  MQTT  ·  MCP for AI agents</text>
+    </g>
+    <rect x="100" y="496" width="188" height="6" rx="3" fill="url(#accent)"/>
+    <text x="100" y="560" font-size="24" fill="#6f7888">github.com/Rust-KVM/rustkvm</text>
+  </g>
+  <g transform="translate(900 150)">
+    <rect x="0" y="0" width="300" height="200" rx="14" fill="#151922" stroke="#3a4250" stroke-width="3"/>
+    <rect x="16" y="16" width="268" height="150" rx="6" fill="#0b0d11"/>
+    <path d="M40 140l50-56 40 36 46-60 68 80z" fill="#f74c00" opacity="0.85"/>
+    <circle cx="232" cy="52" r="14" fill="#ffb35c"/>
+    <rect x="120" y="200" width="60" height="34" fill="#3a4250"/>
+    <rect x="80" y="234" width="140" height="10" rx="5" fill="#3a4250"/>
+    <rect x="70" y="290" width="160" height="56" rx="10" fill="#151922" stroke="#f74c00" stroke-width="3"/>
+    <g fill="#f74c00"><circle cx="100" cy="318" r="6"/><circle cx="124" cy="318" r="6"/></g>
+    <text x="148" y="326" font-family="ui-monospace, Menlo, monospace" font-size="20" fill="#c9ced8">RK3588</text>
+    <path d="M150 290V244" stroke="#f74c00" stroke-width="3" stroke-dasharray="6 6"/>
+  </g>
+</svg>
