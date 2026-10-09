@@ -1,0 +1,73 @@
+name: Bug report
+description: Something in RustKVM does not work as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. For security issues, do **not** use this form; follow [SECURITY.md](https://github.com/Rust-KVM/rustkvm/blob/dev/SECURITY.md) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the web UI
+        2. Mount an ISO from URL
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Video / audio streaming
+        - Keyboard / mouse (HID)
+        - Virtual media / USB
+        - Power (ATX / DC / Wake-on-LAN)
+        - Web UI (rkvm-web)
+        - Network / mDNS / TLS
+        - Auth / API tokens
+        - JSON-RPC / MCP / MQTT
+        - Build / cross-compilation
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: RustKVM version or commit
+      description: The commit SHA you built from, or the version shown under Settings → About.
+      placeholder: "dev @ 7b087ca"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Board and image, target machine, browser and OS.
+      placeholder: |
+        Board: RK3588 (model, Buildroot image date)
+        Target: e.g. ASUS B550 desktop, HDMI 1920x1080@60
+        Browser: Firefox 131 on macOS 15
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant lines from `/userdata/rustkvm/log/rustkvm_app.log` or the browser console. A diagnostics bundle from `GET /diagnostics` helps too.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
