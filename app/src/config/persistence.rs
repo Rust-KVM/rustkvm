@@ -3,11 +3,16 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 
 use crate::config::types::Config;
 
 const DEFAULT_CONFIG_PATH: &str = "/userdata/rustkvm/config.toml";
+
+/// Keys written by older or experimental builds that no longer exist in `Config`.
+/// They are dropped with a warning on load so the strict `deny_unknown_fields`
+/// check still rejects genuine typos.
+const DEPRECATED_KEYS: &[&str] = &["ai_enabled"];
 
 pub(crate) async fn write_atomic_secret(path: &Path, contents: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -78,8 +83,18 @@ impl ConfigPersistence {
             return Ok(Config::default());
         }
 
-        let mut loaded = toml::from_str::<Config>(&contents)
+        let mut table = toml::from_str::<toml::Table>(&contents)
             .with_context(|| "Failed to parse TOML configuration")?;
+        for key in DEPRECATED_KEYS {
+            if table.remove(*key).is_some() {
+                warn!(
+                    "Ignoring deprecated config key `{key}` in {:?}; it will be dropped on next save",
+                    self.config_path
+                );
+            }
+        }
+        let mut loaded =
+            table.try_into::<Config>().with_context(|| "Failed to parse TOML configuration")?;
 
         if let Err(errors) = loaded.validate() {
             bail!("Configuration validation failed for {:?}: {errors:?}", self.config_path);
