@@ -1,4 +1,5 @@
-use rustkvm::config::{Config, persistence::ConfigPersistence};
+use rustkvm::config::Config;
+use rustkvm::config::persistence::ConfigPersistence;
 
 async fn write_config(dir: &std::path::Path, extra: &str) -> ConfigPersistence {
     let path = dir.join("config.toml");
