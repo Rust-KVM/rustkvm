@@ -240,6 +240,9 @@ cargo +stage2 build -Z build-std=std,panic_abort --target aarch64-unknown-linux-
 scp target/aarch64-unknown-linux-gnu/release/rustkvm_app root@<device_ip>:/userdata/rustkvm/bin/
 ```
 
+### Hardware test loop (maintainer)
+Build happens in WSL2 behind a Windows jump host and the app is deployed to the RK3588 over SSH, without `dev_deploy.sh`. IPs, SSH setup, steps and caveats (strict config, auto-mode limits): [`docs/hardware-test-loop.md`](docs/hardware-test-loop.md). Release packages are never built in the cloud.
+
 ### Start on device
 ```bash
 ssh root@<device_ip>
