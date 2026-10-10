@@ -9,10 +9,10 @@ use crate::config::types::Config;
 
 const DEFAULT_CONFIG_PATH: &str = "/userdata/rustkvm/config.toml";
 
-/// Keys written by older or experimental builds that no longer exist in `Config`.
-/// They are dropped with a warning on load so the strict `deny_unknown_fields`
-/// check still rejects genuine typos.
-const DEPRECATED_KEYS: &[&str] = &["ai_enabled"];
+/// Top-level key prefix written by an older AI experiment (`ai_enabled`, `ai_model`, ...)
+/// that no longer exists in `Config`. Matching keys are dropped with a warning on load so
+/// the strict `deny_unknown_fields` check still rejects genuine typos.
+const DEPRECATED_KEY_PREFIX: &str = "ai_";
 
 pub(crate) async fn write_atomic_secret(path: &Path, contents: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -85,13 +85,14 @@ impl ConfigPersistence {
 
         let mut table = toml::from_str::<toml::Table>(&contents)
             .with_context(|| "Failed to parse TOML configuration")?;
-        for key in DEPRECATED_KEYS {
-            if table.remove(*key).is_some() {
-                warn!(
-                    "Ignoring deprecated config key `{key}` in {:?}; it will be dropped on next save",
-                    self.config_path
-                );
-            }
+        let deprecated: Vec<String> =
+            table.keys().filter(|k| k.starts_with(DEPRECATED_KEY_PREFIX)).cloned().collect();
+        for key in deprecated {
+            table.remove(&key);
+            warn!(
+                "Ignoring deprecated config key `{key}` in {:?}; it will be dropped on next save",
+                self.config_path
+            );
         }
         let mut loaded =
             table.try_into::<Config>().with_context(|| "Failed to parse TOML configuration")?;

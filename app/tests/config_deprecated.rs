@@ -21,6 +21,18 @@ async fn deprecated_ai_enabled_is_ignored() {
 }
 
 #[tokio::test]
+async fn deprecated_ai_group_is_ignored() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let extra = "ai_enabled = true\nai_model = \"claude-opus-4-8\"\nai_extra = 3";
+    let persistence = write_config(dir.path(), extra).await;
+    let loaded = persistence.load().await.expect("ai_* keys must not fail load");
+
+    persistence.save(&loaded).await.expect("save");
+    let rewritten = std::fs::read_to_string(persistence.path()).expect("read back");
+    assert!(!rewritten.contains("ai_"), "deprecated keys survived save");
+}
+
+#[tokio::test]
 async fn unknown_fields_are_still_rejected() {
     let dir = tempfile::tempdir().expect("tempdir");
     let persistence = write_config(dir.path(), "bogus_field = 1").await;
