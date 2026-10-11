@@ -213,7 +213,7 @@ enabled the device announces itself under `homeassistant/…/rustkvm_<device id>
 | Metric | Type |
 | --- | --- |
 | `rustkvm_app_info` | gauge with build labels |
-| `rustkvm_video_frames_total` | counter |
+| `rustkvm_video_frames_total` | counter (encoded frames; encoding pauses while no session is watching) |
 | `rustkvm_audio_frames_total` | counter |
 | `rustkvm_video_pipeline_restarts_total` | counter |
 | `rustkvm_rpc_calls_total{method}` | counter |

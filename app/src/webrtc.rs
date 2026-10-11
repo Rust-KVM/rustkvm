@@ -258,6 +258,7 @@ impl WebRTCApi {
                                 increment_session_counter().await;
                                 if let Some(track) = video_track.clone() {
                                     video::attach_webrtc_sink(track).await;
+                                    video::set_encoding_active(true).await;
                                     info!("Video track attached to WebRTC session {}", session_id);
                                 }
                                 if let Some(track) = audio_track.clone() {
