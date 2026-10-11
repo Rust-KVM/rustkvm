@@ -327,7 +327,12 @@ impl WebRTCApi {
             })
         }));
 
-        let session_clone = session.clone();
+        // This handler (and the data channel callbacks it installs) lives inside
+        // the peer connection, so it must not hold the connection itself: that
+        // cycle kept every closed session's ICE agent alive, and with it one
+        // UDP socket per local address, because UDP conns only close on drop.
+        let mut session_clone = session.clone();
+        session_clone.peer_connection = None;
         peer_connection.on_data_channel(Box::new(move |data_channel: Arc<RTCDataChannel>| {
             let session = session_clone.clone();
             let label = data_channel.label().to_string();
