@@ -173,18 +173,25 @@ impl VideoPipeline {
         let keyframe_requested_at: Arc<parking_lot::Mutex<Option<std::time::Instant>>> =
             Arc::default();
         let probe_requested_at = keyframe_requested_at.clone();
+        let is_h264 = matches!(config.encoder, crate::cli::VideoEncoder::H264);
         encoder.static_pad("src").context("Encoder has no src pad")?.add_probe(
             gst::PadProbeType::BUFFER,
             move |_pad, info| {
-                if let Some(buffer) = info.buffer()
-                    && !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT)
+                // Decide by the bitstream, not the buffer flags: the MPP encoder
+                // does not reliably clear DELTA_UNIT on IDR frames.
+                if is_h264
+                    && let Some(buffer) = info.buffer()
+                    && let Ok(map) = buffer.map_readable()
+                    && contains_h264_idr(map.as_slice())
                 {
+                    let delta = buffer.flags().contains(gst::BufferFlags::DELTA_UNIT);
                     match probe_requested_at.lock().take() {
                         Some(at) => info!(
                             elapsed_ms = at.elapsed().as_millis() as u64,
-                            "encoder emitted keyframe after request"
+                            delta_flag = delta,
+                            "encoder emitted IDR after request"
                         ),
-                        None => debug!("encoder emitted periodic keyframe"),
+                        None => debug!(delta_flag = delta, "encoder emitted periodic IDR"),
                     }
                 }
                 gst::PadProbeReturn::Ok
@@ -814,6 +821,21 @@ impl PipelineManager {
             warn!("force-keyframe event was not handled by encoder");
         }
     }
+}
+
+/// Whether an Annex B H.264 access unit is an IDR: the first slice NAL found
+/// is type 5. Stops at the first slice, so a P frame costs only its headers.
+fn contains_h264_idr(data: &[u8]) -> bool {
+    for w in data.windows(4) {
+        if w[0] == 0 && w[1] == 0 && w[2] == 1 {
+            match w[3] & 0x1f {
+                5 => return true,
+                1 => return false,
+                _ => {}
+            }
+        }
+    }
+    false
 }
 
 pub fn encode_jpeg(sample: &gst::Sample) -> Result<bytes::Bytes> {
