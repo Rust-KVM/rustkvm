@@ -8,7 +8,7 @@ use leptos::task::spawn_local;
 use serde_json::{Value, json};
 use web_sys::HtmlVideoElement;
 
-use crate::hid::MouseMode;
+use crate::hid::{MouseMode, Session};
 use crate::net::{peer, rest};
 use crate::rpc::RpcClient;
 
@@ -55,6 +55,9 @@ pub fn App() -> impl IntoView {
     let peer_store = StoredValue::new_local(None::<Rc<peer::Peer>>);
     let video_store = StoredValue::new_local(None::<HtmlVideoElement>);
     let mouse_mode = StoredValue::new_local(Rc::new(Cell::new(false)) as MouseMode);
+    let hid_session = StoredValue::new_local(Session::default());
+    let hid_attached = StoredValue::new_local(false);
+    let conn_gen = StoredValue::new_local(Rc::new(Cell::new(0_u64)));
 
     Effect::new(move |_| {
         spawn_local(async move {
@@ -94,6 +97,11 @@ pub fn App() -> impl IntoView {
     };
 
     let do_connect = move |_| {
+        // A second click before the button re-renders as disabled would open a
+        // second session and get the first one kicked by the device.
+        if conn_state.get_untracked() == "connecting" {
+            return;
+        }
         error.set(None);
         conn_state.set("connecting".to_string());
         spawn_local(async move {
@@ -119,13 +127,37 @@ pub fn App() -> impl IntoView {
                     rpc_store.set_value(Some(client.clone()));
                     peer_store.set_value(Some(peer.clone()));
                     video_store.set_value(Some(video.clone()));
-                    crate::hid::attach(
-                        video.clone(),
-                        peer.clone(),
-                        client.clone(),
-                        mouse_mode.get_value(),
-                    );
+                    crate::hid::init_channels(&peer);
+                    *hid_session.get_value().borrow_mut() = Some((peer.clone(), client.clone()));
+                    if !hid_attached.get_value() {
+                        crate::hid::attach(
+                            video.clone(),
+                            hid_session.get_value(),
+                            mouse_mode.get_value(),
+                        );
+                        hid_attached.set_value(true);
+                    }
                     conn_state.set("connected".to_string());
+
+                    let generation = conn_gen.get_value();
+                    let this_gen = generation.get() + 1;
+                    generation.set(this_gen);
+                    {
+                        let peer = peer.clone();
+                        spawn_local(async move {
+                            let reason = peer::watch(&peer, || generation.get() != this_gen).await;
+                            let Some(reason) = reason else { return };
+                            hid_session.get_value().borrow_mut().take();
+                            rpc_store.set_value(None);
+                            peer_store.set_value(None);
+                            peer.close();
+                            video_info.set(VideoInfo::default());
+                            show_settings.set(false);
+                            show_terminal.set(false);
+                            error.set(Some(reason));
+                            conn_state.set("lost".to_string());
+                        });
+                    }
 
                     spawn_local(async move {
                         if let Ok(v) = client.call("getVideoState", Value::Null).await {
@@ -378,7 +410,11 @@ pub fn App() -> impl IntoView {
                             <span class="spinner"></span>
                         </Show>
                         {move || {
-                            if conn_state.get() == "connecting" { "Connecting…" } else { "Connect" }
+                            match conn_state.get().as_str() {
+                                "connecting" => "Connecting…",
+                                "lost" => "Reconnect",
+                                _ => "Connect",
+                            }
                         }}
                     </button>
                     <div class="err">{move || error.get().unwrap_or_default()}</div>
