@@ -95,7 +95,10 @@ pub(super) async fn init_static_routes() -> Result<Router> {
             .push(
                 Router::with_path("{*path}")
                     .hoop(compression)
-                    .get(static_embed::<ClientAssets>().fallback("index.html")),
+                    // Only "/" maps to the app; the frontend has no client-side
+                    // routes, so unknown paths (and /favicon.ico) get a 404
+                    // rather than index.html served as every file.
+                    .get(static_embed::<ClientAssets>().defaults("index.html")),
             )
     };
     Ok(router)
