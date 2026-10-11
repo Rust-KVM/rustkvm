@@ -72,6 +72,10 @@ pub struct InterfaceState {
     pub ipv6_link_local: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub ipv6_gateway: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ipv4_gateway: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dns_servers: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ipv4_addresses: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -147,7 +151,56 @@ pub fn get_network_state() -> InterfaceState {
     }
 
     state.online = state.ipv4_ready || state.ipv6_ready;
+    if let Ok(routes) = std::fs::read_to_string("/proc/net/route") {
+        state.ipv4_gateway = parse_default_gateway(&routes).unwrap_or_default();
+    }
+    if let Ok(resolv) = std::fs::read_to_string("/etc/resolv.conf") {
+        state.dns_servers = parse_nameservers(&resolv);
+    }
     state
+}
+
+/// Returns the gateway of the lowest-metric IPv4 default route in
+/// `/proc/net/route` format, preferring routes on `NET_IF_NAME` on a tie.
+pub fn parse_default_gateway(routes: &str) -> Option<String> {
+    routes
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            let (iface, dest, gw, metric) =
+                (cols.first()?, cols.get(1)?, cols.get(2)?, cols.get(6)?);
+            if *dest != "00000000" {
+                return None;
+            }
+            // The kernel prints addresses as host-endian u32 hex; on the
+            // little-endian targets we run on that is reversed byte order.
+            let gw = u32::from_str_radix(gw, 16).ok()?;
+            if gw == 0 {
+                return None;
+            }
+            let metric: u32 = metric.parse().ok()?;
+            Some((metric, *iface != NET_IF_NAME, std::net::Ipv4Addr::from(gw.to_le_bytes())))
+        })
+        .min()
+        .map(|(_, _, gw)| gw.to_string())
+}
+
+/// Returns the unique `nameserver` entries of a resolv.conf, in order.
+pub fn parse_nameservers(resolv: &str) -> Vec<String> {
+    let mut servers: Vec<String> = Vec::new();
+    for line in resolv.lines() {
+        let mut words = line.split_whitespace();
+        if words.next() != Some("nameserver") {
+            continue;
+        }
+        if let Some(addr) = words.next().filter(|a| a.parse::<IpAddr>().is_ok())
+            && !servers.iter().any(|s| s == addr)
+        {
+            servers.push(addr.to_string());
+        }
+    }
+    servers
 }
 
 pub fn spawn_state_monitor(period: std::time::Duration) {

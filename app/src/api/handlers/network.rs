@@ -38,12 +38,13 @@ pub struct NetworkStateResponse {
 
 pub fn get_network_state() -> Result<NetworkStateResponse> {
     let state = crate::network::get_network_state();
-    Ok(NetworkStateResponse {
-        online: state.online,
-        ip: state.ipv4_address,
-        gateway: if state.ipv6_gateway.is_empty() { None } else { Some(state.ipv6_gateway) },
-        dns: state.dhcp_lease.as_ref().map(|l| l.dns.clone()).unwrap_or_default(),
-    })
+    let gateway = [state.ipv4_gateway, state.ipv6_gateway].into_iter().find(|g| !g.is_empty());
+    let dns = if state.dns_servers.is_empty() {
+        state.dhcp_lease.map(|l| l.dns).unwrap_or_default()
+    } else {
+        state.dns_servers
+    };
+    Ok(NetworkStateResponse { online: state.online, ip: state.ipv4_address, gateway, dns })
 }
 
 #[derive(Debug, Serialize, Deserialize)]
