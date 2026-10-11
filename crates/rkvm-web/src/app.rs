@@ -378,7 +378,7 @@ pub fn App() -> impl IntoView {
                 <span class="tb-group">
                     <button
                         on:click=quality_down
-                        disabled=move || quality.get() <= 0.15
+                        disabled=move || { quality.get() <= 0.15 }
                         title="Lower stream quality"
                     >
                         "−"
@@ -386,7 +386,7 @@ pub fn App() -> impl IntoView {
                     <span class="tb-stat">{move || format!("{:.0}%", quality.get() * 100.0)}</span>
                     <button
                         on:click=quality_up
-                        disabled=move || quality.get() >= 0.95
+                        disabled=move || { quality.get() >= 0.95 }
                         title="Raise stream quality"
                     >
                         "+"
