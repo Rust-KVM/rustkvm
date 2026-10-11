@@ -22,9 +22,11 @@ pub struct Peer {
     pub hidrpc: RtcDataChannel,
     pub hidrpc_unreliable_nonordered: RtcDataChannel,
     pub terminal: RtcDataChannel,
-    /// Outbound signaling queue. Closing it ends the sender task, which then
-    /// closes the signaling WebSocket.
+    /// Outbound signaling queue; closing it stops the sender and ping tasks.
     signaling: mpsc::UnboundedSender<String>,
+    /// The signaling socket itself. gloo's `Sink::close` is a no-op and its
+    /// `WebSocket` has no `Drop`, so the socket is only closed through this.
+    signaling_ws: web_sys::WebSocket,
 }
 
 impl Peer {
@@ -34,6 +36,7 @@ impl Peer {
         }
         self.pc.close();
         self.signaling.close_channel();
+        let _ = self.signaling_ws.close();
     }
 }
 
@@ -140,12 +143,17 @@ pub async fn connect(video: &HtmlVideoElement) -> Result<Peer, String> {
             .map_err(|e| format!("encode offer: {e}"))?,
     );
 
-    let ws = WebSocket::open(&signaling_url()?).map_err(|e| format!("open signaling ws: {e}"))?;
+    let raw_ws = web_sys::WebSocket::new(&signaling_url()?).map_err(js_err("open signaling ws"))?;
+    let ws = WebSocket::try_from(raw_ws.clone()).map_err(|e| format!("open signaling ws: {e}"))?;
     let (mut sink, mut stream) = ws.split();
 
     sink.send(WsMessage::Text(json!({ "type": "offer", "data": { "sd": sd } }).to_string()))
         .await
-        .map_err(|e| format!("send offer: {e}"))?;
+        .map_err(|e| {
+            pc.close();
+            let _ = raw_ws.close();
+            format!("send offer: {e}")
+        })?;
 
     spawn_local(async move {
         while let Some(text) = out_rx.next().await {
@@ -153,9 +161,6 @@ pub async fn connect(video: &HtmlVideoElement) -> Result<Peer, String> {
                 break;
             }
         }
-        // Without this the socket outlives the session and every reconnect
-        // leaks one signaling connection on the device.
-        let _ = sink.close().await;
     });
 
     {
@@ -206,6 +211,7 @@ pub async fn connect(video: &HtmlVideoElement) -> Result<Peer, String> {
             RtcIceConnectionState::Failed | RtcIceConnectionState::Closed => {
                 pc.close();
                 out_tx.close_channel();
+                let _ = raw_ws.close();
                 return Err("ICE connection failed".to_string());
             }
             _ => {}
@@ -218,12 +224,14 @@ pub async fn connect(video: &HtmlVideoElement) -> Result<Peer, String> {
                 hidrpc_unreliable_nonordered,
                 terminal,
                 signaling: out_tx,
+                signaling_ws: raw_ws,
             });
         }
         TimeoutFuture::new(100).await;
     }
     pc.close();
     out_tx.close_channel();
+    let _ = raw_ws.close();
     Err("timed out waiting for the data channel to open".to_string())
 }
 
