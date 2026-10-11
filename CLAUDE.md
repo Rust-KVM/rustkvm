@@ -27,6 +27,10 @@ cargo deny check
 
 For backend-only work on a host, a stub `crates/rkvm-web/dist/index.html` is enough to satisfy the embed. Tests are integration tests in each crate's `tests/` directory; changing the RPC method set requires updating `app/tests/rpc_methods.txt`.
 
+## Testing on hardware
+
+Build in WSL2 via the Windows jump host, deploy to the device with SIGTERM + `S99rustkvm restart`, verify via log and web UI. Full flow, IPs, SSH and caveats: [`docs/hardware-test-loop.md`](docs/hardware-test-loop.md). Don't build release packages in the cloud.
+
 ## Hard rules
 
 - No `#[allow(...)]` or other lint suppressions; fix or remove the offending code.
