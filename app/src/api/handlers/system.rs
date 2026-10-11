@@ -155,6 +155,29 @@ pub fn get_recent_logs(params: RecentLogsParams) -> Result<Value> {
     Ok(serde_json::to_value(entries)?)
 }
 
+/// The device's current time zone: `TZ`, then `/etc/timezone`, then the
+/// `/etc/localtime` symlink target; a device with none of them runs on UTC.
+pub fn get_timezone() -> Result<String> {
+    if let Ok(tz) = std::env::var("TZ") {
+        let tz = tz.trim().trim_start_matches(':');
+        if !tz.is_empty() {
+            return Ok(tz.to_string());
+        }
+    }
+    if let Ok(tz) = std::fs::read_to_string("/etc/timezone") {
+        let tz = tz.trim();
+        if !tz.is_empty() {
+            return Ok(tz.to_string());
+        }
+    }
+    if let Ok(target) = std::fs::read_link("/etc/localtime")
+        && let Some((_, zone)) = target.to_string_lossy().split_once("zoneinfo/")
+    {
+        return Ok(zone.to_string());
+    }
+    Ok("UTC".to_string())
+}
+
 pub fn get_timezones() -> Result<Vec<String>> {
     Ok(vec![
         "UTC".to_string(),

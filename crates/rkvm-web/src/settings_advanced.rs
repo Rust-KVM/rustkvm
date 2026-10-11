@@ -25,6 +25,7 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
     let serial_cmd = RwSignal::new(String::new());
     let serial_history = RwSignal::new(Vec::<String>::new());
     let timezones = RwSignal::new(Vec::<String>::new());
+    let timezone = RwSignal::new(String::new());
     let macros = RwSignal::new(Vec::<MacroItem>::new());
     let edit_id = RwSignal::new(Option::<String>::None);
     let edit_name = RwSignal::new(String::new());
@@ -94,9 +95,18 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             if let Ok(v) = c.call("getSerialCommandHistory", Value::Null).await {
                 serial_history.set(json_string_list(&v));
             }
+            let current = match c.call("getTimezone", Value::Null).await {
+                Ok(v) => as_string(&v),
+                Err(_) => String::new(),
+            };
             if let Ok(v) = c.call("getTimezones", Value::Null).await {
-                timezones.set(json_string_list(&v));
+                let mut list = json_string_list(&v);
+                if !current.is_empty() && !list.contains(&current) {
+                    list.insert(0, current.clone());
+                }
+                timezones.set(list);
             }
+            timezone.set(current);
             if let Ok(v) = c.call("getKeyboardMacros", Value::Null).await {
                 macros.set(MacroItem::list_from(&v));
             }
@@ -336,7 +346,9 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
 
         <section>
             <h3>"Timezone"</h3>
-            <select>
+            // The device has no RPC to change its zone yet, so show the current
+            // one without pretending the select does something.
+            <select disabled=true prop:value=move || timezone.get()>
                 {move || {
                     timezones
                         .get()
@@ -345,6 +357,7 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
                         .collect_view()
                 }}
             </select>
+            <div class="muted">"Current device time zone. Changing it is not supported yet."</div>
         </section>
 
         <section>
@@ -378,7 +391,7 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             />
             <textarea
                 rows="4"
-                placeholder="One step per line: modifiers | keys | delayMs&#10;e.g. ControlLeft,AltLeft | Delete | 50"
+                placeholder="One step per line: modifiers | keys | delayMs\ne.g. ControlLeft,AltLeft | Delete | 50"
                 prop:value=move || edit_steps.get()
                 on:input=move |ev| edit_steps.set(event_target_value(&ev))
             ></textarea>
