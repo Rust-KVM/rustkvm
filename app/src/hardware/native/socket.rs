@@ -161,8 +161,14 @@ impl CtrlSocket {
         };
 
         let ctrl = CtrlAction { action: action.to_string(), seq: Some(seq), params };
-        let payload = serde_json::to_vec(&ctrl)?;
-        self.write_message(&payload).await?;
+        let sent = match serde_json::to_vec(&ctrl) {
+            Ok(payload) => self.write_message(&payload).await,
+            Err(e) => Err(e.into()),
+        };
+        if let Err(e) = sent {
+            self.inner.lock().pending.remove(&seq);
+            return Err(e);
+        }
 
         match timeout(Duration::from_secs(5), rx).await {
             Ok(Ok(resp)) => {
@@ -178,6 +184,10 @@ impl CtrlSocket {
                 Err(anyhow!("timeout waiting for response"))
             }
         }
+    }
+
+    pub fn is_connected(&self) -> bool {
+        self.inner.lock().conn.is_some()
     }
 
     pub async fn write_message(&self, data: &[u8]) -> Result<()> {
@@ -250,11 +260,13 @@ fn read_loop(conn: OwnedFd, shared: Arc<Mutex<CtrlShared>>, rt: Option<TokioHand
 static CTRL: OnceCell<CtrlSocket> = OnceCell::new();
 
 pub fn init_ctrl_socket() -> Result<()> {
-    let sock = CtrlSocket::new();
-    let _ = CTRL.set(sock);
-    let ctrl = CTRL.get().expect("ctrl OnceCell");
-    ctrl.start_server("/var/run/rustkvm_ctrl.sock", true)?;
-    Ok(())
+    CTRL.get_or_init(CtrlSocket::new).start_server("/var/run/rustkvm_ctrl.sock", true)
+}
+
+/// Whether a native control client is attached to the ctrl socket. RustKVM
+/// boards run video in-process, so this is normally false.
+pub fn ctrl_client_connected() -> bool {
+    CTRL.get().is_some_and(CtrlSocket::is_connected)
 }
 
 pub async fn call_ctrl_action(

@@ -463,7 +463,11 @@ pub fn video_metrics_snapshot() -> String {
 }
 
 pub async fn write_ctrl_action(action: &str) -> anyhow::Result<()> {
-    use crate::hardware::native::socket::call_ctrl_action;
+    use crate::hardware::native::socket::{call_ctrl_action, ctrl_client_connected};
+    if !ctrl_client_connected() {
+        debug!(action, "no native ctrl client attached; skipping control action");
+        return Ok(());
+    }
     info!("Writing control action: {}", serde_json::json!({ "action": action }));
     let _ = call_ctrl_action(action, None).await?;
     Ok(())
