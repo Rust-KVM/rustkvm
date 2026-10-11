@@ -128,12 +128,10 @@ pub async fn ensure_video_pipeline_started() -> anyhow::Result<()> {
         .map(|_| ())
 }
 
-/// Switches video output to a new session's track and asks the encoder for an
-/// IDR, so the new viewer does not wait up to a GOP for its first decodable
-/// frame.
+/// Switches video output to a new session's track. The keyframe for the new
+/// viewer is requested once its connection is fully up (see webrtc.rs).
 pub async fn attach_webrtc_sink(track: Arc<TrackLocalStaticSample>) {
     *VIDEO_SINK.write().await = Some(track);
-    force_video_keyframe().await;
 }
 
 pub async fn attach_audio_sink(track: Arc<TrackLocalStaticSample>) {

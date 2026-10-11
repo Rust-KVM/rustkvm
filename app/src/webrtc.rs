@@ -13,6 +13,7 @@ use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
+use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::rtp_transceiver::rtp_codec::{
     RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType,
 };
@@ -305,6 +306,26 @@ impl WebRTCApi {
                         }
                         _ => {}
                     }
+                })
+            },
+        ));
+
+        // A keyframe requested at ICE "connected" is encoded before DTLS has
+        // finished, so it never reaches the browser and the viewer waits for
+        // the next periodic IDR. Ask again once the whole connection is up, and
+        // once more shortly after in case the RTP sender started a little later.
+        let session_id_clone = session.id.clone();
+        peer_connection.on_peer_connection_state_change(Box::new(
+            move |state: RTCPeerConnectionState| {
+                let session_id = session_id_clone.clone();
+                Box::pin(async move {
+                    if state != RTCPeerConnectionState::Connected {
+                        return;
+                    }
+                    video::force_video_keyframe().await;
+                    info!("forced keyframe for new session {}", session_id);
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    video::force_video_keyframe().await;
                 })
             },
         ));
