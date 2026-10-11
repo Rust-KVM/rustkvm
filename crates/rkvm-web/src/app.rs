@@ -131,6 +131,11 @@ pub fn App() -> impl IntoView {
                         if let Ok(v) = client.call("getVideoState", Value::Null).await {
                             video_info.set(parse_video(&v));
                         }
+                        // LED changes arrive as events; fetch the current state so
+                        // the indicators are right before the next host change.
+                        if let Ok(v) = client.call("getKeyboardLedState", Value::Null).await {
+                            leds.set(parse_leds(&v));
+                        }
                         if let Ok(v) = client.call("getAudioConfig", Value::Null).await {
                             let enabled =
                                 v.get("enabled").and_then(Value::as_bool).unwrap_or(false);
