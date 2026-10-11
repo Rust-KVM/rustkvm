@@ -33,6 +33,8 @@ pub fn App() -> impl IntoView {
     let checking = RwSignal::new(true);
     let is_setup = RwSignal::new(true);
     let needs_login = RwSignal::new(false);
+    let no_password = RwSignal::new(false);
+    let nopw_dismissed = RwSignal::new(false);
     let conn_state = RwSignal::new("idle".to_string());
     let error = RwSignal::new(Option::<String>::None);
     let password = RwSignal::new(String::new());
@@ -65,6 +67,7 @@ pub fn App() -> impl IntoView {
             is_setup.set(setup_done);
             if setup_done {
                 needs_login.set(rest::auth_required().await);
+                no_password.set(rest::no_password().await);
             }
             checking.set(false);
         });
@@ -79,6 +82,7 @@ pub fn App() -> impl IntoView {
                 Ok(()) => {
                     is_setup.set(true);
                     needs_login.set(rest::auth_required().await);
+                    no_password.set(rest::no_password().await);
                 }
                 Err(e) => error.set(Some(e)),
             }
@@ -333,7 +337,7 @@ pub fn App() -> impl IntoView {
                 <button on:click=send_cad title="Send Ctrl+Alt+Del">"C·A·D"</button>
                 <button on:click=go_fullscreen title="Fullscreen">"⛶"</button>
                 <button on:click=do_ocr title="Copy text from screen (OCR)">"OCR"</button>
-                <button on:click=move |_| show_terminal.update(|s| *s = !*s) title="Serial terminal">"›_"</button>
+                <button on:click=move |_| show_terminal.update(|s| *s = !*s) title="Device shell (root)">"›_"</button>
                 <button on:click=move |_| show_settings.update(|s| *s = !*s) title="Settings">"⚙"</button>
 
                 <span class="tb-sep"></span>
@@ -342,7 +346,22 @@ pub fn App() -> impl IntoView {
                 <span class="tb-err">{move || error.get().unwrap_or_default()}</span>
             </div>
 
-            <crate::settings::Settings open=show_settings rpc=rpc_store peer=peer_store />
+            <Show when=move || no_password.get() && !nopw_dismissed.get()>
+                <div class="nopw-banner" role="alert">
+                    <span>
+                        "⚠ No password set: anyone on this network can control this machine and open a root shell on the device. Set one in ⚙ Settings → Password."
+                    </span>
+                    <button title="Hide until reload" on:click=move |_| nopw_dismissed.set(true)>
+                        "✕"
+                    </button>
+                </div>
+            </Show>
+            <crate::settings::Settings
+                open=show_settings
+                rpc=rpc_store
+                peer=peer_store
+                no_password=no_password
+            />
             <crate::terminal::Terminal open=show_terminal peer=peer_store />
             <Show when=move || ocr_text.get().is_some()>
                 <div class="panel">
@@ -407,6 +426,11 @@ pub fn App() -> impl IntoView {
             <div class="panel">
                 <div class="card">
                     <h1>"rustkvm"</h1>
+                    <Show when=move || no_password.get()>
+                        <div class="nopw-card">
+                            "No password is set. Anyone on this network can connect, control this machine and open a root shell on the device. After connecting, set a password in ⚙ Settings → Password."
+                        </div>
+                    </Show>
                     <button
                         on:click=do_connect
                         disabled=move || conn_state.get() == "connecting"

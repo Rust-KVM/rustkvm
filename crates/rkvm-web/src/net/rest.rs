@@ -9,6 +9,20 @@ pub async fn auth_required() -> bool {
     }
 }
 
+/// Whether the device runs without a password (`authMode: "noPassword"`), in
+/// which case anyone who can reach the web UI gets full control.
+pub async fn no_password() -> bool {
+    match Request::get("/device").credentials(RequestCredentials::Include).send().await {
+        Ok(resp) if resp.ok() => resp
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v.get("authMode").and_then(|m| m.as_str().map(|m| m == "noPassword")))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
 pub async fn is_setup() -> bool {
     match Request::get("/device/status").credentials(RequestCredentials::Include).send().await {
         Ok(resp) => resp
@@ -34,6 +48,18 @@ pub async fn setup(mode: &str, password: Option<&str>) -> Result<(), String> {
         .await
         .map_err(|e| format!("setup request failed: {e}"))?;
     if resp.ok() { Ok(()) } else { Err(format!("setup HTTP {}", resp.status())) }
+}
+
+/// Sets the first password on a device in no-password mode.
+pub async fn set_password(password: &str) -> Result<(), String> {
+    let resp = Request::post("/auth/password-local")
+        .credentials(RequestCredentials::Include)
+        .json(&json!({ "password": password }))
+        .map_err(|e| format!("set-password serialize: {e}"))?
+        .send()
+        .await
+        .map_err(|e| format!("set-password request failed: {e}"))?;
+    if resp.ok() { Ok(()) } else { Err(format!("set-password HTTP {}", resp.status())) }
 }
 
 pub async fn change_password(old: &str, new: &str) -> Result<(), String> {
