@@ -90,6 +90,9 @@ pub struct VideoPipeline {
     running: Arc<AtomicBool>,
     raw_frame_waiters: Arc<RawFrameWaiters>,
     raw_frame_requested: Arc<AtomicBool>,
+    /// When the oldest unanswered keyframe request was made; the encoder
+    /// output probe logs how long it took to produce the keyframe.
+    keyframe_requested_at: Arc<parking_lot::Mutex<Option<std::time::Instant>>>,
 }
 
 impl VideoPipeline {
@@ -166,6 +169,27 @@ impl VideoPipeline {
         if let Some(gop) = config.gop_size {
             encoder.set_property("gop", gop);
         }
+
+        let keyframe_requested_at: Arc<parking_lot::Mutex<Option<std::time::Instant>>> =
+            Arc::default();
+        let probe_requested_at = keyframe_requested_at.clone();
+        encoder.static_pad("src").context("Encoder has no src pad")?.add_probe(
+            gst::PadProbeType::BUFFER,
+            move |_pad, info| {
+                if let Some(buffer) = info.buffer()
+                    && !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT)
+                {
+                    match probe_requested_at.lock().take() {
+                        Some(at) => info!(
+                            elapsed_ms = at.elapsed().as_millis() as u64,
+                            "encoder emitted keyframe after request"
+                        ),
+                        None => debug!("encoder emitted periodic keyframe"),
+                    }
+                }
+                gst::PadProbeReturn::Ok
+            },
+        );
 
         let parser_name = config.encoder.parser_element_name();
         let parser = gst::ElementFactory::make(parser_name)
@@ -271,6 +295,7 @@ impl VideoPipeline {
             running,
             raw_frame_waiters,
             raw_frame_requested,
+            keyframe_requested_at,
         })
     }
 
@@ -781,8 +806,11 @@ impl PipelineManager {
     }
 
     pub fn force_keyframe(&self) {
+        self.video.keyframe_requested_at.lock().get_or_insert_with(std::time::Instant::now);
         let event = gst_video::UpstreamForceKeyUnitEvent::builder().all_headers(true).build();
-        if !self.video.encoder.send_event(event) {
+        let handled = self.video.encoder.send_event(event);
+        info!(handled, "keyframe requested");
+        if !handled {
             warn!("force-keyframe event was not handled by encoder");
         }
     }

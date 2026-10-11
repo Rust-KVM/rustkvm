@@ -40,7 +40,6 @@ fn init_tracing(cli: &Cli) {
 
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_ansi(!cli.logging.log_no_color)
-        .without_time()
         .with_level(true)
         .with_target(true)
         .with_thread_ids(true)

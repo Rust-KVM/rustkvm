@@ -326,6 +326,7 @@ impl WebRTCApi {
                     info!("forced keyframe for new session {}", session_id);
                     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                     video::force_video_keyframe().await;
+                    info!("forced follow-up keyframe for session {}", session_id);
                 })
             },
         ));
