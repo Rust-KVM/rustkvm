@@ -67,6 +67,7 @@
       .card button:not(:disabled):hover { background: var(--accent-hover); }
       .card button:not(:disabled):active { transform: translateY(1px); }
       .card button:disabled { opacity: .65; cursor: progress; }
+      .card .row { display: flex; gap: 8px; }
       .err { color: var(--danger); margin-top: 10px; min-height: 1em; font-size: 12.5px; }
 
       .tb-handle { position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 31;
@@ -81,12 +82,16 @@
         transition: transform .22s cubic-bezier(.2,.8,.2,1), opacity .18s; opacity: 0; z-index: 32;
         display: flex; align-items: center; gap: 8px; padding: 7px 10px;
         border-radius: 14px; background: rgba(18, 21, 28, 0.82); border: 1px solid var(--border);
-        font-size: 12px; backdrop-filter: blur(16px) saturate(1.4); box-shadow: var(--shadow); }
+        font-size: 12px; backdrop-filter: blur(16px) saturate(1.4); box-shadow: var(--shadow);
+        max-width: calc(100vw - 16px); box-sizing: border-box; flex-wrap: wrap;
+        justify-content: center; row-gap: 4px; }
       .toolbar.open { transform: translateX(-50%) translateY(0); opacity: 1; }
       .toolbar button { display: inline-flex; align-items: center; justify-content: center;
         min-width: 30px; height: 28px; padding: 0 10px; border: 1px solid transparent;
         border-radius: var(--r1); background: transparent; color: var(--text); cursor: pointer;
-        font: 500 12px var(--font); transition: background .12s, border-color .12s, color .12s, transform .05s; }
+        font: 500 12px var(--font); white-space: nowrap;
+        transition: background .12s, border-color .12s, color .12s, transform .05s; }
+      .toolbar button:disabled { opacity: .4; cursor: default; }
       .toolbar button:hover { background: var(--surface-3); }
       .toolbar button:active { transform: translateY(1px); }
       .toolbar button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -103,12 +108,15 @@
       .tb-leds span.on { color: #07120c; background: var(--success); border-color: var(--success);
         box-shadow: 0 0 10px -1px var(--success); }
       .tb-err { color: var(--danger); max-width: 220px; overflow: hidden; text-overflow: ellipsis;
-        white-space: nowrap; }
+        white-space: nowrap; cursor: pointer; }
+      .tb-err:empty { display: none; }
 
       .nopw-banner { position: fixed; top: 8px; left: 8px; z-index: 30; max-width: min(460px, calc(100vw - 16px));
         display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: var(--r1);
         background: rgba(120, 22, 32, 0.92); border: 1px solid var(--danger); color: #fff;
         font: 500 12.5px/1.4 var(--font); box-shadow: var(--shadow); }
+      /* The open toolbar sits at the top; move the warning out of its way. */
+      .nopw-banner.low { top: auto; bottom: 8px; }
       .nopw-banner button { flex: none; background: none; border: 0; color: #fff; cursor: pointer;
         font-size: 12px; padding: 0 2px; opacity: .8; }
       .nopw-banner button:hover { opacity: 1; }

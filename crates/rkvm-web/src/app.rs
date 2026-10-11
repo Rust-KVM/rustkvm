@@ -213,7 +213,11 @@ pub fn App() -> impl IntoView {
 
     let adjust_quality = move |delta: f64| {
         let Some(client) = rpc_store.get_value() else { return };
-        let target = (quality.get_untracked() + delta).clamp(0.1, 1.0);
+        let current = quality.get_untracked();
+        let target = ((current + delta).clamp(0.1, 1.0) * 10.0).round() / 10.0;
+        if (target - current).abs() < 0.01 {
+            return;
+        }
         spawn_local(async move {
             match client.call("setStreamQualityFactor", json!({ "factor": target })).await {
                 Ok(_) => quality.set(target),
@@ -272,11 +276,11 @@ pub fn App() -> impl IntoView {
     };
 
     let go_fullscreen = move |_| {
-        if let Some(el) =
-            web_sys::window().and_then(|w| w.document()).and_then(|d| d.document_element())
-        {
-            let _ = el.request_fullscreen();
-        }
+        spawn_local(async move {
+            if let Err(e) = crate::util::toggle_fullscreen().await {
+                error.set(Some(e));
+            }
+        });
     };
 
     let do_ocr = move |_| {
@@ -289,6 +293,34 @@ pub fn App() -> impl IntoView {
             }
         });
     };
+
+    let ocr_copy_msg = RwSignal::new(String::new());
+    let copy_ocr = move |_| {
+        let text = ocr_text.get_untracked().unwrap_or_default();
+        spawn_local(async move {
+            ocr_copy_msg.set(match crate::util::copy_text(&text).await {
+                Ok(()) => "Copied".to_string(),
+                Err(e) => e,
+            });
+        });
+    };
+
+    // Toolbar errors are transient: clear each one after a few seconds unless a
+    // newer error replaced it. Errors shown on the Connect card stay put.
+    let error_timer = StoredValue::new_local(None::<Timeout>);
+    Effect::new(move |_| {
+        let Some(msg) = error.get() else { return };
+        if conn_state.get_untracked() != "connected" {
+            return;
+        }
+        error_timer.set_value(Some(Timeout::new(6000, move || {
+            if error.get_untracked().as_deref() == Some(msg.as_str())
+                && conn_state.get_untracked() == "connected"
+            {
+                error.set(None);
+            }
+        })));
+    });
 
     let hide_timer = StoredValue::new_local(None::<Timeout>);
     let cancel_hide = move |_| hide_timer.set_value(None);
@@ -344,9 +376,21 @@ pub fn App() -> impl IntoView {
                     {move || if mouse_relative.get() { "Mouse: Rel" } else { "Mouse: Abs" }}
                 </button>
                 <span class="tb-group">
-                    <button on:click=quality_down title="Lower stream quality">"−"</button>
+                    <button
+                        on:click=quality_down
+                        disabled=move || quality.get() <= 0.15
+                        title="Lower stream quality"
+                    >
+                        "−"
+                    </button>
                     <span class="tb-stat">{move || format!("{:.0}%", quality.get() * 100.0)}</span>
-                    <button on:click=quality_up title="Raise stream quality">"+"</button>
+                    <button
+                        on:click=quality_up
+                        disabled=move || quality.get() >= 0.95
+                        title="Raise stream quality"
+                    >
+                        "+"
+                    </button>
                 </span>
                 <button class:active=move || audio_on.get() on:click=toggle_audio title="Toggle device audio">
                     {move || if audio_on.get() { "Audio: on" } else { "Audio: off" }}
@@ -363,11 +407,17 @@ pub fn App() -> impl IntoView {
                 <span class="tb-sep"></span>
 
                 <button class="tb-danger" on:click=do_reboot title="Reboot device">"⏻"</button>
-                <span class="tb-err">{move || error.get().unwrap_or_default()}</span>
+                <span
+                    class="tb-err"
+                    title=move || error.get().unwrap_or_default()
+                    on:click=move |_| error.set(None)
+                >
+                    {move || error.get().unwrap_or_default()}
+                </span>
             </div>
 
             <Show when=move || no_password.get() && !nopw_dismissed.get()>
-                <div class="nopw-banner" role="alert">
+                <div class="nopw-banner" class:low=move || toolbar_open.get() role="alert">
                     <span>
                         "⚠ No password set: anyone on this network can control this machine and open a root shell on the device. Set one in ⚙ Settings → Password."
                     </span>
@@ -390,7 +440,14 @@ pub fn App() -> impl IntoView {
                         <textarea rows="10" readonly=true prop:value=move || {
                             ocr_text.get().unwrap_or_default()
                         }></textarea>
-                        <button on:click=move |_| ocr_text.set(None)>"Close"</button>
+                        <div class="row">
+                            <button on:click=copy_ocr>"Copy"</button>
+                            <button on:click=move |_| {
+                                ocr_copy_msg.set(String::new());
+                                ocr_text.set(None);
+                            }>"Close"</button>
+                        </div>
+                        <div class="muted">{move || ocr_copy_msg.get()}</div>
                     </div>
                 </div>
             </Show>
