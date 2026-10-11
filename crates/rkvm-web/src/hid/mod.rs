@@ -21,33 +21,40 @@ use crate::rpc::RpcClient;
 
 pub type MouseMode = Rc<Cell<bool>>;
 
+/// The live connection the input listeners send to. Listeners are attached to
+/// the page once and read this slot on every event, so a reconnect only swaps
+/// the slot and a lost connection (slot `None`) silently drops input.
+pub type Session = Rc<RefCell<Option<(Rc<Peer>, Rc<RpcClient>)>>>;
+
 #[derive(Default)]
 struct KbState {
     modifiers: u8,
     keys: Vec<u8>,
 }
 
-pub fn attach(video: HtmlVideoElement, peer: Rc<Peer>, rpc: Rc<RpcClient>, mouse_mode: MouseMode) {
+/// Per-connection setup of the HID channels: binary framing and handshake.
+pub fn init_channels(peer: &Peer) {
     peer.hidrpc.set_binary_type(RtcDataChannelType::Arraybuffer);
     let _ = peer.hidrpc.send_with_u8_array(&new_handshake_message().marshal());
-    {
-        let on_msg = Closure::<dyn FnMut(MessageEvent)>::new(move |ev: MessageEvent| {
-            if let Ok(buf) = ev.data().dyn_into::<ArrayBuffer>() {
-                let bytes = Uint8Array::new(&buf).to_vec();
-                if let Ok(msg) = Message::unmarshal(&bytes) {
-                    tracing::debug!("hidrpc inbound: {:?}", msg.r#type);
-                }
+    let on_msg = Closure::<dyn FnMut(MessageEvent)>::new(move |ev: MessageEvent| {
+        if let Ok(buf) = ev.data().dyn_into::<ArrayBuffer>() {
+            let bytes = Uint8Array::new(&buf).to_vec();
+            if let Ok(msg) = Message::unmarshal(&bytes) {
+                tracing::debug!("hidrpc inbound: {:?}", msg.r#type);
             }
-        });
-        peer.hidrpc.set_onmessage(Some(on_msg.as_ref().unchecked_ref()));
-        on_msg.forget();
-    }
+        }
+    });
+    peer.hidrpc.set_onmessage(Some(on_msg.as_ref().unchecked_ref()));
+    on_msg.forget();
+}
 
+/// Attaches keyboard and mouse listeners. Call once per page; see [`Session`].
+pub fn attach(video: HtmlVideoElement, session: Session, mouse_mode: MouseMode) {
     let kb = Rc::new(RefCell::new(KbState::default()));
     let window: EventTarget = web_sys::window().expect("window").into();
 
     {
-        let peer = peer.clone();
+        let session = session.clone();
         let kb = kb.clone();
         let cb = Closure::<dyn FnMut(KeyboardEvent)>::new(move |ev: KeyboardEvent| {
             if editable_focused() {
@@ -65,13 +72,15 @@ pub fn attach(video: HtmlVideoElement, peer: Rc<Peer>, rpc: Rc<RpcClient>, mouse
             } else {
                 return;
             }
-            send_keyboard(&peer, &st);
+            if let Some((peer, _)) = session.borrow().as_ref() {
+                send_keyboard(peer, &st);
+            }
         });
         let _ = window.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
         cb.forget();
     }
     {
-        let peer = peer.clone();
+        let session = session.clone();
         let kb = kb.clone();
         let cb = Closure::<dyn FnMut(KeyboardEvent)>::new(move |ev: KeyboardEvent| {
             if editable_focused() {
@@ -87,17 +96,20 @@ pub fn attach(video: HtmlVideoElement, peer: Rc<Peer>, rpc: Rc<RpcClient>, mouse
             } else {
                 return;
             }
-            send_keyboard(&peer, &st);
+            if let Some((peer, _)) = session.borrow().as_ref() {
+                send_keyboard(peer, &st);
+            }
         });
         let _ = window.add_event_listener_with_callback("keyup", cb.as_ref().unchecked_ref());
         cb.forget();
     }
 
     {
-        let peer = peer.clone();
+        let session = session.clone();
         let video_for_handler = video.clone();
         let mode = mouse_mode.clone();
         let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let Some((peer, _)) = session.borrow().clone() else { return };
             let buttons = (ev.buttons() & 0x1f) as u8;
             if mode.get() {
                 if ev.type_() == "mousedown" && !pointer_locked(&video_for_handler) {
@@ -136,7 +148,9 @@ pub fn attach(video: HtmlVideoElement, peer: Rc<Peer>, rpc: Rc<RpcClient>, mouse
             if wheel_y == 0 {
                 return;
             }
-            rpc.notify("wheelReport", json!({ "wheelY": wheel_y, "wheelX": 0 }));
+            if let Some((_, rpc)) = session.borrow().as_ref() {
+                rpc.notify("wheelReport", json!({ "wheelY": wheel_y, "wheelX": 0 }));
+            }
         });
         let target: &EventTarget = video.as_ref();
         let _ = target.add_event_listener_with_callback("wheel", cb.as_ref().unchecked_ref());

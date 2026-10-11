@@ -24,6 +24,54 @@ pub struct Peer {
     pub terminal: RtcDataChannel,
 }
 
+impl Peer {
+    pub fn close(&self) {
+        for ch in [&self.rpc, &self.hidrpc, &self.hidrpc_unreliable_nonordered, &self.terminal] {
+            ch.close();
+        }
+        self.pc.close();
+    }
+}
+
+const LOST_MESSAGE: &str = "Connection lost: another client may have taken over this session, \
+                            or the network dropped.";
+
+/// Polls an established connection until it is lost or `cancelled` returns
+/// true. Returns the user-facing reason when the connection is lost.
+///
+/// ICE `disconnected` can recover on its own, so it only counts as lost after
+/// it persists for a few seconds; `failed`, `closed` or a closed RPC channel
+/// (the device ends the session when another client takes over) count at once.
+pub async fn watch(peer: &Peer, cancelled: impl Fn() -> bool) -> Option<String> {
+    const TICK_MS: u32 = 500;
+    const DISCONNECTED_TICKS: u32 = 6;
+    let mut disconnected = 0;
+    loop {
+        TimeoutFuture::new(TICK_MS).await;
+        if cancelled() {
+            return None;
+        }
+        match peer.pc.ice_connection_state() {
+            RtcIceConnectionState::Failed | RtcIceConnectionState::Closed => {
+                return Some(LOST_MESSAGE.to_string());
+            }
+            RtcIceConnectionState::Disconnected => {
+                disconnected += 1;
+                if disconnected >= DISCONNECTED_TICKS {
+                    return Some(LOST_MESSAGE.to_string());
+                }
+            }
+            _ => disconnected = 0,
+        }
+        if matches!(
+            peer.rpc.ready_state(),
+            RtcDataChannelState::Closing | RtcDataChannelState::Closed
+        ) {
+            return Some(LOST_MESSAGE.to_string());
+        }
+    }
+}
+
 pub async fn connect(video: &HtmlVideoElement) -> Result<Peer, String> {
     let pc = RtcPeerConnection::new().map_err(js_err("RtcPeerConnection::new"))?;
 
