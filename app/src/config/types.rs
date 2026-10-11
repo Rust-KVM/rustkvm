@@ -268,7 +268,7 @@ impl Default for Config {
             api_token_created_at: None,
             local_auth_mode: String::new(),
             local_loopback_only: false,
-            keyboard_layout: "en_US".to_string(),
+            keyboard_layout: "us".to_string(),
             edid_string: None,
             active_extension: None,
             display_rotation: "270".to_string(),

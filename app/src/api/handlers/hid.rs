@@ -1,7 +1,5 @@
-use std::sync::OnceLock;
-
 use anyhow::{Result, anyhow};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use rkvm_proto::keymap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -13,7 +11,6 @@ use crate::hidrpc::{HID_KEY_BUFFER_SIZE, KeyboardMacroStep};
 
 static KEYBOARD_LED: once_cell::sync::OnceCell<RwLock<HidKeyboardState>> =
     once_cell::sync::OnceCell::new();
-static KEYBOARD_LAYOUT: OnceLock<Mutex<String>> = OnceLock::new();
 
 pub fn get_keyboard_led_state() -> Result<HidKeyboardState> {
     let cell = KEYBOARD_LED.get_or_init(|| parking_lot::RwLock::new(HidKeyboardState::default()));
@@ -143,10 +140,30 @@ pub fn keypress_report(params: KeypressReportParams) -> Result<Value> {
     Ok(Value::Null)
 }
 
-pub fn get_keyboard_layout() -> Result<String> {
-    let layout_mutex = KEYBOARD_LAYOUT.get_or_init(|| Mutex::new("us".to_string()));
-    let layout = layout_mutex.lock().clone();
-    Ok(layout)
+const KEYBOARD_LAYOUTS: &[&str] = &["us", "uk", "de", "fr", "es", "it", "jp", "kr"];
+
+/// Maps a stored layout to the short code the RPC uses. Older configs (and
+/// the config default) hold locale-style values such as `en_US`; unknown
+/// values fall back to `us` rather than failing.
+pub fn normalize_keyboard_layout(stored: &str) -> &'static str {
+    let lower = stored.trim().to_ascii_lowercase();
+    let code = match lower.as_str() {
+        "en_us" | "en-us" => "us",
+        "en_uk" | "en_gb" | "en-gb" | "en-uk" => "uk",
+        "de_de" | "de-de" => "de",
+        "fr_fr" | "fr-fr" => "fr",
+        "es_es" | "es-es" => "es",
+        "it_it" | "it-it" => "it",
+        "ja_jp" | "ja-jp" => "jp",
+        "ko_kr" | "ko-kr" => "kr",
+        other => other,
+    };
+    KEYBOARD_LAYOUTS.iter().copied().find(|l| *l == code).unwrap_or("us")
+}
+
+pub async fn get_keyboard_layout() -> Result<String> {
+    let config = crate::config::get_config_manager().get().await;
+    Ok(normalize_keyboard_layout(&config.keyboard_layout).to_string())
 }
 
 #[derive(Deserialize)]
@@ -154,15 +171,14 @@ pub struct KeyboardLayoutParams {
     pub layout: String,
 }
 
-pub fn set_keyboard_layout(params: KeyboardLayoutParams) -> Result<Value> {
-    const VALID_LAYOUTS: &[&str] = &["us", "uk", "de", "fr", "es", "it", "jp", "kr"];
-    if !VALID_LAYOUTS.contains(&params.layout.as_str()) {
+pub async fn set_keyboard_layout(params: KeyboardLayoutParams) -> Result<Value> {
+    if !KEYBOARD_LAYOUTS.contains(&params.layout.as_str()) {
         return Err(anyhow!("Unsupported keyboard layout: {}", params.layout));
     }
-
-    let layout_mutex = KEYBOARD_LAYOUT.get_or_init(|| Mutex::new("us".to_string()));
-    *layout_mutex.lock() = params.layout.clone();
-
+    let layout = params.layout.clone();
+    crate::config::get_config_manager()
+        .update(move |config| config.keyboard_layout = layout)
+        .await?;
     info!("Keyboard layout set to: {}", params.layout);
     Ok(Value::Null)
 }
