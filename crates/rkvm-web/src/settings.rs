@@ -47,6 +47,9 @@ pub fn Settings(
 
     let network = RwSignal::new(String::new());
     let update_state = RwSignal::new(String::new());
+    // Only offered after Check reports an update.
+    let update_available = RwSignal::new(false);
+    let confirm_pw = RwSignal::new(String::new());
     let usb = RwSignal::new(UsbDevices::default());
     let edid = RwSignal::new(String::new());
     let wol_mac = RwSignal::new(String::new());
@@ -181,7 +184,10 @@ pub fn Settings(
                 }),
                 Box::pin(async move {
                     if let Ok(v) = client.call("getVideoSleepMode", Value::Null).await {
-                        video_sleep.set(v.get("duration").and_then(Value::as_i64).unwrap_or(-1));
+                        // The device keeps the last duration while disabled.
+                        let enabled = v.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+                        let duration = v.get("duration").and_then(Value::as_i64).unwrap_or(-1);
+                        video_sleep.set(if enabled { duration } else { -1 });
                     }
                 }),
                 Box::pin(async move {
@@ -211,8 +217,9 @@ pub fn Settings(
     });
 
     let do_mount = move |_| {
-        let url = mount_url.get();
+        let url = mount_url.get().trim().to_string();
         if url.is_empty() {
+            mount_state.set("enter an image URL first".to_string());
             return;
         }
         let mode = mount_mode.get();
@@ -278,6 +285,7 @@ pub fn Settings(
                     let app = v.get("appUpdateAvailable").and_then(Value::as_bool).unwrap_or(false);
                     let sys =
                         v.get("systemUpdateAvailable").and_then(Value::as_bool).unwrap_or(false);
+                    update_available.set(app || sys);
                     update_state.set(if app || sys {
                         "update available".to_string()
                     } else {
@@ -289,6 +297,9 @@ pub fn Settings(
         });
     };
     let apply_update = move |_| {
+        if !update_available.get_untracked() {
+            return;
+        }
         let Some(client) = rpc.get_value() else { return };
         update_state.set("updating…".to_string());
         spawn_local(async move {
@@ -387,6 +398,10 @@ pub fn Settings(
             pw_msg.set("New password too short".to_string());
             return;
         }
+        if n != confirm_pw.get() {
+            pw_msg.set("The two new passwords do not match".to_string());
+            return;
+        }
         let first = no_password.get_untracked();
         spawn_local(async move {
             let result = if first {
@@ -400,6 +415,7 @@ pub fn Settings(
                     pw_msg.set(if first { "Password set" } else { "Password updated" }.to_string());
                     old_pw.set(String::new());
                     new_pw.set(String::new());
+                    confirm_pw.set(String::new());
                 }
                 Err(e) => pw_msg.set(e),
             }
@@ -494,6 +510,12 @@ pub fn Settings(
                         prop:value=move || new_pw.get()
                         on:input=move |ev| new_pw.set(event_target_value(&ev))
                     />
+                    <input
+                        type="password"
+                        placeholder="Repeat new password"
+                        prop:value=move || confirm_pw.get()
+                        on:input=move |ev| confirm_pw.set(event_target_value(&ev))
+                    />
                     <button on:click=submit_password>
                         {move || if no_password.get() { "Set password" } else { "Update password" }}
                     </button>
@@ -536,7 +558,13 @@ pub fn Settings(
                     <div class="muted">{move || update_state.get()}</div>
                     <div class="row">
                         <button on:click=check_update>"Check"</button>
-                        <button on:click=apply_update>"Update now"</button>
+                        <button
+                            on:click=apply_update
+                            disabled=move || !update_available.get()
+                            title="Run Check first; enabled when an update is available"
+                        >
+                            "Update now"
+                        </button>
                     </div>
                 </section>
 

@@ -52,6 +52,7 @@ getStreamQualityFactor
 getTLSState
 getTailscaleControlURL
 getTailscaleStatus
+getTimezone
 getTimezones
 getUSBState
 getUpdateStatus
