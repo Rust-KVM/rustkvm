@@ -28,6 +28,7 @@ pub fn Settings(
     open: RwSignal<bool>,
     rpc: StoredValue<Option<Rc<RpcClient>>, LocalStorage>,
     peer: StoredValue<Option<Rc<Peer>>, LocalStorage>,
+    no_password: RwSignal<bool>,
 ) -> impl IntoView {
     let codec = RwSignal::new(String::new());
     let rotation = RwSignal::new(String::new());
@@ -385,10 +386,17 @@ pub fn Settings(
             pw_msg.set("New password too short".to_string());
             return;
         }
+        let first = no_password.get_untracked();
         spawn_local(async move {
-            match rest::change_password(&o, &n).await {
+            let result = if first {
+                rest::set_password(&n).await
+            } else {
+                rest::change_password(&o, &n).await
+            };
+            match result {
                 Ok(()) => {
-                    pw_msg.set("Password updated".to_string());
+                    no_password.set(false);
+                    pw_msg.set(if first { "Password set" } else { "Password updated" }.to_string());
                     old_pw.set(String::new());
                     new_pw.set(String::new());
                 }
@@ -470,20 +478,24 @@ pub fn Settings(
                 </section>
 
                 <section>
-                    <h3>"Change password"</h3>
-                    <input
-                        type="password"
-                        placeholder="Current password"
-                        prop:value=move || old_pw.get()
-                        on:input=move |ev| old_pw.set(event_target_value(&ev))
-                    />
+                    <h3>"Password"</h3>
+                    <Show when=move || !no_password.get()>
+                        <input
+                            type="password"
+                            placeholder="Current password"
+                            prop:value=move || old_pw.get()
+                            on:input=move |ev| old_pw.set(event_target_value(&ev))
+                        />
+                    </Show>
                     <input
                         type="password"
                         placeholder="New password"
                         prop:value=move || new_pw.get()
                         on:input=move |ev| new_pw.set(event_target_value(&ev))
                     />
-                    <button on:click=submit_password>"Update password"</button>
+                    <button on:click=submit_password>
+                        {move || if no_password.get() { "Set password" } else { "Update password" }}
+                    </button>
                     <div class="muted">{move || pw_msg.get()}</div>
                 </section>
 

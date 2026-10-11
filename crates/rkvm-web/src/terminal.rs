@@ -169,7 +169,7 @@ pub fn Terminal(
         <Show when=move || open.get()>
             <div class="term">
                 <header>
-                    <span>"Serial / Terminal"</span>
+                    <span>"Device shell (root)"</span>
                     <button title="Close" on:click=move |_| open.set(false)>
                         "✕"
                     </button>

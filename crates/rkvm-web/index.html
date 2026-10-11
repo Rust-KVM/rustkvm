@@ -105,6 +105,17 @@
       .tb-err { color: var(--danger); max-width: 220px; overflow: hidden; text-overflow: ellipsis;
         white-space: nowrap; }
 
+      .nopw-banner { position: fixed; top: 8px; left: 8px; z-index: 30; max-width: min(460px, calc(100vw - 16px));
+        display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: var(--r1);
+        background: rgba(120, 22, 32, 0.92); border: 1px solid var(--danger); color: #fff;
+        font: 500 12.5px/1.4 var(--font); box-shadow: var(--shadow); }
+      .nopw-banner button { flex: none; background: none; border: 0; color: #fff; cursor: pointer;
+        font-size: 12px; padding: 0 2px; opacity: .8; }
+      .nopw-banner button:hover { opacity: 1; }
+      .nopw-card { margin: 0 0 14px; padding: 10px 12px; max-width: 320px; border-radius: var(--r1);
+        background: rgba(240, 97, 109, 0.12); border: 1px solid rgba(240, 97, 109, 0.5);
+        color: #ffd5d9; font-size: 12.5px; }
+
       .drawer-scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
         backdrop-filter: blur(2px); z-index: 40; animation: fade 0.18s ease; }
       .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 360px; overflow-y: auto;
