@@ -185,8 +185,28 @@ pub fn App() -> impl IntoView {
 
     let toggle_mouse = move |_| {
         let next = !mouse_relative.get();
-        mouse_relative.set(next);
-        mouse_mode.get_value().set(next);
+        if !next {
+            mouse_relative.set(false);
+            mouse_mode.get_value().set(false);
+            return;
+        }
+        // Relative reports go to a separate USB function; without it the host
+        // receives nothing, so only switch when the device has it enabled.
+        let Some(client) = rpc_store.get_value() else { return };
+        spawn_local(async move {
+            match client.call("getUsbDevices", Value::Null).await {
+                Ok(v) if v.get("relative_mouse").and_then(Value::as_bool).unwrap_or(false) => {
+                    error.set(None);
+                    mouse_relative.set(true);
+                    mouse_mode.get_value().set(true);
+                }
+                Ok(_) => error.set(Some(
+                    "Relative mouse is disabled: enable it in ⚙ Settings → USB devices first"
+                        .to_string(),
+                )),
+                Err(e) => error.set(Some(e.to_string())),
+            }
+        });
     };
 
     let do_reboot = move |_| {
