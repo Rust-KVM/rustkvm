@@ -13,14 +13,17 @@ use crate::net::{rest, upload};
 use crate::rpc::RpcClient;
 use crate::util::{Rpc, as_string, fire, json_str};
 
+/// Values are the codes `getKeyboardLayout` returns and `setKeyboardLayout`
+/// accepts on the device.
 const KEYBOARD_LAYOUTS: &[(&str, &str)] = &[
-    ("en_US", "English (US)"),
-    ("en_UK", "English (UK)"),
-    ("de_DE", "German"),
-    ("fr_FR", "French"),
-    ("es_ES", "Spanish"),
-    ("it_IT", "Italian"),
-    ("ja_JP", "Japanese"),
+    ("us", "English (US)"),
+    ("uk", "English (UK)"),
+    ("de", "German"),
+    ("fr", "French"),
+    ("es", "Spanish"),
+    ("it", "Italian"),
+    ("jp", "Japanese"),
+    ("kr", "Korean"),
 ];
 
 #[component]
@@ -110,7 +113,11 @@ pub fn Settings(
                     if let Ok(v) = client.call("getLocalVersion", Value::Null).await {
                         let app = json_str(&v, "app_version");
                         let sys = json_str(&v, "system_version");
-                        version.set(format!("app {app} · system {sys}"));
+                        version.set(if sys.is_empty() {
+                            format!("app {app}")
+                        } else {
+                            format!("app {app} · system {sys}")
+                        });
                     }
                 }),
                 Box::pin(async move {
@@ -120,13 +127,7 @@ pub fn Settings(
                 }),
                 Box::pin(async move {
                     if let Ok(v) = client.call("getNetworkState", Value::Null).await {
-                        let ip = json_str(&v, "ip");
-                        let online = v.get("online").and_then(Value::as_bool).unwrap_or(false);
-                        network.set(format!(
-                            "{} ({})",
-                            if ip.is_empty() { "—" } else { &ip },
-                            if online { "online" } else { "offline" }
-                        ));
+                        network.set(describe_network(&v));
                     }
                 }),
                 Box::pin(async move {
@@ -263,7 +264,7 @@ pub fn Settings(
         spawn_local(async move {
             let _ = client.call("renewDHCPLease", Value::Null).await;
             if let Ok(v) = client.call("getNetworkState", Value::Null).await {
-                network.set(json_str(&v, "ip"));
+                network.set(describe_network(&v));
             }
         });
     };
@@ -789,6 +790,37 @@ impl UsbDevices {
             mass_storage: b("mass_storage"),
         }
     }
+}
+
+/// One line for the Network section: address, link state, gateway and DNS.
+/// The device can have several interfaces, so when this page was loaded from a
+/// different address than the one reported, say so instead of looking wrong.
+fn describe_network(v: &Value) -> String {
+    let ip = json_str(v, "ip");
+    let online = v.get("online").and_then(Value::as_bool).unwrap_or(false);
+    let mut line = format!(
+        "{} ({})",
+        if ip.is_empty() { "—" } else { &ip },
+        if online { "online" } else { "offline" }
+    );
+    let gateway = json_str(v, "gateway");
+    if !gateway.is_empty() {
+        line.push_str(&format!(" · gateway {gateway}"));
+    }
+    let dns: Vec<&str> = v
+        .get("dns")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if !dns.is_empty() {
+        line.push_str(&format!(" · DNS {}", dns.join(", ")));
+    }
+    let page_host =
+        web_sys::window().and_then(|w| w.location().hostname().ok()).unwrap_or_default();
+    if !ip.is_empty() && !page_host.is_empty() && page_host != ip {
+        line.push_str(&format!(" · this page via {page_host}"));
+    }
+    line
 }
 
 fn describe_mount(v: &Value) -> String {

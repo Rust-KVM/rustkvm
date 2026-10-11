@@ -7,8 +7,11 @@ use crate::util::{Rpc, as_string, fire, json_str, json_string_list};
 #[component]
 pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
     let dc_enabled = RwSignal::new(false);
-    let dc_supported = RwSignal::new(false);
+    let dc_restore = RwSignal::new(String::new());
+    let dc_reading = RwSignal::new(String::new());
     let atx_state = RwSignal::new(String::new());
+    // "dc-power", "atx-power" or "" (no power extension mounted).
+    let power_ext = RwSignal::new(String::new());
     let cloud_state = RwSignal::new(String::new());
     let cloud_api = RwSignal::new(String::new());
     let cloud_app = RwSignal::new(String::new());
@@ -33,21 +36,51 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
         }
         let Some(c) = rpc.get_value() else { return };
         spawn_local(async move {
-            if let Ok(v) = c.call("getDCPowerState", Value::Null).await {
-                dc_enabled.set(v.get("enabled").and_then(Value::as_bool).unwrap_or(false));
-                dc_supported.set(v.get("supported").and_then(Value::as_bool).unwrap_or(false));
+            // Power controls depend on which extension is mounted. Asking for
+            // ATX state while it is not mounted only logs an error on the device.
+            let ext = match c.call("getActiveExtension", Value::Null).await {
+                Ok(v) => as_string(&v),
+                Err(_) => String::new(),
+            };
+            match ext.as_str() {
+                "dc-power" => {
+                    if let Ok(v) = c.call("getDCPowerState", Value::Null).await {
+                        dc_enabled.set(v.get("isOn").and_then(Value::as_bool).unwrap_or(false));
+                        dc_restore.set(
+                            v.get("restoreState")
+                                .and_then(Value::as_i64)
+                                .map(|s| s.to_string())
+                                .unwrap_or_default(),
+                        );
+                        let num = |k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(0.0);
+                        dc_reading.set(format!(
+                            "{:.2} V · {:.2} A · {:.2} W",
+                            num("voltage"),
+                            num("current"),
+                            num("power")
+                        ));
+                    }
+                }
+                "atx-power" => match c.call("getATXState", Value::Null).await {
+                    Ok(v) => {
+                        let on = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
+                        atx_state.set(format!(
+                            "power LED {} · HDD LED {}",
+                            if on("power") { "on" } else { "off" },
+                            if on("hdd") { "on" } else { "off" }
+                        ));
+                    }
+                    Err(e) => atx_state.set(e.to_string()),
+                },
+                _ => {}
             }
-            if let Ok(v) = c.call("getATXState", Value::Null).await {
-                atx_state.set(compact_json(&v));
-            }
+            active_ext.set(ext.clone());
+            power_ext.set(ext);
             if let Ok(v) = c.call("getCloudState", Value::Null).await {
                 cloud_state.set(compact_json(&v));
             }
             if let Ok(v) = c.call("getTailscaleControlURL", Value::Null).await {
                 ts_url.set(as_string(&v));
-            }
-            if let Ok(v) = c.call("getActiveExtension", Value::Null).await {
-                active_ext.set(as_string(&v));
             }
             if let Ok(v) = c.call("getDevModeState", Value::Null).await {
                 dev_mode.set(v.get("enabled").and_then(Value::as_bool).unwrap_or(false));
@@ -173,26 +206,31 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
     view! {
         <section>
             <h3>"Power"</h3>
-            <Show
-                when=move || dc_supported.get()
-                fallback=|| view! { <div class="muted">"DC power not supported"</div> }
-            >
+            <Show when=move || power_ext.get() == "dc-power">
                 <label class="toggle">
                     <input type="checkbox" prop:checked=move || dc_enabled.get() on:change=toggle_dc />
                     "DC power"
                 </label>
-                <select on:change=set_restore>
+                <div class="muted">{move || dc_reading.get()}</div>
+                <select on:change=set_restore prop:value=move || dc_restore.get()>
                     <option value="0">"Restore: off"</option>
                     <option value="1">"Restore: on"</option>
                     <option value="2">"Restore: last"</option>
                 </select>
             </Show>
-            <div class="muted">"ATX: "{move || atx_state.get()}</div>
-            <div class="row">
-                <button on:click=move |_| atx("power-short")>"Power"</button>
-                <button on:click=move |_| atx("power-long")>"Force off"</button>
-                <button on:click=move |_| atx("reset")>"Reset"</button>
-            </div>
+            <Show when=move || power_ext.get() == "atx-power">
+                <div class="muted">"ATX: "{move || atx_state.get()}</div>
+                <div class="row">
+                    <button on:click=move |_| atx("power-short")>"Power"</button>
+                    <button on:click=move |_| atx("power-long")>"Force off"</button>
+                    <button on:click=move |_| atx("reset")>"Reset"</button>
+                </div>
+            </Show>
+            <Show when=move || power_ext.get().is_empty()>
+                <div class="muted">
+                    "No power extension active. Choose atx-power or dc-power under Extension to control host power."
+                </div>
+            </Show>
         </section>
 
         <section>
