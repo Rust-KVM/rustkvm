@@ -22,6 +22,9 @@ pub struct Peer {
     pub hidrpc: RtcDataChannel,
     pub hidrpc_unreliable_nonordered: RtcDataChannel,
     pub terminal: RtcDataChannel,
+    /// Outbound signaling queue. Closing it ends the sender task, which then
+    /// closes the signaling WebSocket.
+    signaling: mpsc::UnboundedSender<String>,
 }
 
 impl Peer {
@@ -30,6 +33,7 @@ impl Peer {
             ch.close();
         }
         self.pc.close();
+        self.signaling.close_channel();
     }
 }
 
@@ -149,6 +153,9 @@ pub async fn connect(video: &HtmlVideoElement) -> Result<Peer, String> {
                 break;
             }
         }
+        // Without this the socket outlives the session and every reconnect
+        // leaks one signaling connection on the device.
+        let _ = sink.close().await;
     });
 
     {
@@ -197,15 +204,26 @@ pub async fn connect(video: &HtmlVideoElement) -> Result<Peer, String> {
     for _ in 0..240 {
         match pc.ice_connection_state() {
             RtcIceConnectionState::Failed | RtcIceConnectionState::Closed => {
+                pc.close();
+                out_tx.close_channel();
                 return Err("ICE connection failed".to_string());
             }
             _ => {}
         }
         if rpc.ready_state() == RtcDataChannelState::Open {
-            return Ok(Peer { pc, rpc, hidrpc, hidrpc_unreliable_nonordered, terminal });
+            return Ok(Peer {
+                pc,
+                rpc,
+                hidrpc,
+                hidrpc_unreliable_nonordered,
+                terminal,
+                signaling: out_tx,
+            });
         }
         TimeoutFuture::new(100).await;
     }
+    pc.close();
+    out_tx.close_channel();
     Err("timed out waiting for the data channel to open".to_string())
 }
 
