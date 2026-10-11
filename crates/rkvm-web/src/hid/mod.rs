@@ -180,7 +180,7 @@ fn send_keyboard(peer: &Peer, st: &KbState) {
         *slot = usage;
     }
     let bytes = new_keyboard_report_message(st.modifiers, &keys).marshal();
-    let _ = peer.hidrpc_unreliable_nonordered.send_with_u8_array(&bytes);
+    let _ = peer.hidrpc.send_with_u8_array(&bytes);
 }
 
 fn abs_position(video: &HtmlVideoElement, ev: &MouseEvent) -> Option<(i32, i32, u8)> {
@@ -194,11 +194,14 @@ fn abs_position(video: &HtmlVideoElement, ev: &MouseEvent) -> Option<(i32, i32, 
     Some(((rel_x * 32767.0).round() as i32, (rel_y * 32767.0).round() as i32, buttons))
 }
 
+/// Sends a press and a release report. Keyboard reports go over the reliable,
+/// ordered `hidrpc` channel: a lost or reordered release would leave keys or
+/// modifiers stuck on the host. Only pointer motion uses the unreliable one.
 pub fn send_key_combo(peer: &Peer, modifiers: u8, keys: &[u8]) {
     let press = new_keyboard_report_message(modifiers, keys).marshal();
-    let _ = peer.hidrpc_unreliable_nonordered.send_with_u8_array(&press);
+    let _ = peer.hidrpc.send_with_u8_array(&press);
     let release = new_keyboard_report_message(0, &[]).marshal();
-    let _ = peer.hidrpc_unreliable_nonordered.send_with_u8_array(&release);
+    let _ = peer.hidrpc.send_with_u8_array(&release);
 }
 
 fn clamp_wheel(delta_y: f64) -> i32 {
