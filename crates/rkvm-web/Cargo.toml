@@ -67,6 +67,8 @@ web-sys = { version = "0.3", features = [
     "HtmlSelectElement",
     "HtmlCanvasElement",
     "CanvasRenderingContext2d",
+    "Navigator",
+    "Node",
 ] }
 
 [profile.release]
