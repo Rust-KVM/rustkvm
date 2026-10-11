@@ -127,8 +127,16 @@ pub fn create_default_registry() -> RpcRegistry {
     registry.register_typed("relMouseReport", hid::rel_mouse_report);
     registry.register_typed("wheelReport", hid::wheel_report);
     registry.register_async("wakeHost", |_params| Box::pin(async move { hid::wake_host().await }));
-    registry.register_no_params("getKeyboardLayout", hid::get_keyboard_layout);
-    registry.register_typed("setKeyboardLayout", hid::set_keyboard_layout);
+    registry.register_async("getKeyboardLayout", |_params| {
+        Box::pin(async move { Ok(serde_json::to_value(hid::get_keyboard_layout().await?)?) })
+    });
+    registry.register_async("setKeyboardLayout", |params| {
+        Box::pin(async move {
+            let p = params.unwrap_or(serde_json::json!({}));
+            let params: hid::KeyboardLayoutParams = serde_json::from_value(p)?;
+            Ok(serde_json::to_value(hid::set_keyboard_layout(params).await?)?)
+        })
+    });
     registry.register_no_params("getKeyboardLedState", hid::get_keyboard_led_state);
     registry.register_no_params("getKeyDownState", hid::get_key_down_state);
     registry.register_typed("keypressReport", hid::keypress_report);
