@@ -27,3 +27,4 @@ pub mod failsafe;
 pub mod hidrpc;
 pub mod mcp;
 pub mod network;
+pub mod update;
