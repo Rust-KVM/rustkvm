@@ -48,6 +48,10 @@ impl Default for SessionConfig {
     }
 }
 
+/// High profile, level 5.2: what mpph264enc produces by default.
+const H264_HIGH_FMTP: &str =
+    "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640034";
+
 pub struct WebRTCApi;
 
 impl WebRTCApi {
@@ -108,7 +112,7 @@ impl WebRTCApi {
                         sdp_fmtp_line:
                             "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e034"
                                 .to_owned(),
-                        rtcp_feedback: video_rtcp_feedback,
+                        rtcp_feedback: video_rtcp_feedback.clone(),
                     },
                     payload_type: 102,
                     ..Default::default()
@@ -116,6 +120,26 @@ impl WebRTCApi {
                 RTPCodecType::Video,
             )
             .context("register H264 codec failed")?;
+        // The encoder emits High profile; registering it lets a browser that
+        // offers High (Chrome, Safari, Edge) negotiate the profile actually
+        // sent. The Constrained Baseline entry above stays as the fallback for
+        // offers without High, which keeps today's behaviour for them.
+        media_engine
+            .register_codec(
+                RTCRtpCodecParameters {
+                    capability: RTCRtpCodecCapability {
+                        mime_type: MIME_TYPE_H264.to_owned(),
+                        clock_rate: 90_000,
+                        channels: 0,
+                        sdp_fmtp_line: H264_HIGH_FMTP.to_owned(),
+                        rtcp_feedback: video_rtcp_feedback,
+                    },
+                    payload_type: 106,
+                    ..Default::default()
+                },
+                RTPCodecType::Video,
+            )
+            .context("register H264 High codec failed")?;
         media_engine
             .register_codec(
                 RTCRtpCodecParameters {
@@ -147,8 +171,15 @@ impl WebRTCApi {
 
         let peer_connection = Arc::new(api.new_peer_connection(configuration).await?);
 
+        // The fmtp makes binding prefer a negotiated High profile payload; with
+        // none it falls back to the first negotiated H264 payload, as before.
         let video_track = Arc::new(TrackLocalStaticSample::new(
-            RTCRtpCodecCapability { mime_type: MIME_TYPE_H264.to_owned(), ..Default::default() },
+            RTCRtpCodecCapability {
+                mime_type: MIME_TYPE_H264.to_owned(),
+                clock_rate: 90_000,
+                sdp_fmtp_line: H264_HIGH_FMTP.to_owned(),
+                ..Default::default()
+            },
             "video".to_owned(),
             "rustkvm".to_owned(),
         ));
