@@ -141,6 +141,14 @@ pub async fn attach_audio_sink(track: Arc<TrackLocalStaticSample>) {
 pub async fn detach_webrtc_sink() {
     *VIDEO_SINK.write().await = None;
     *AUDIO_SINK.write().await = None;
+    set_encoding_active(false).await;
+}
+
+/// Encoding only runs while a session has a video track attached.
+pub async fn set_encoding_active(active: bool) {
+    if let Some(manager) = PIPELINE_MANAGER.lock().await.as_ref() {
+        manager.set_encoding_active(active);
+    }
 }
 
 async fn audio_frame_writer(mut rx: mpsc::Receiver<AudioFrame>) {
@@ -208,6 +216,8 @@ async fn start_pipeline(
     }
 
     manager.start()?;
+    // A restarted pipeline comes up paused; resume it if a viewer is attached.
+    manager.set_encoding_active(VIDEO_SINK.read().await.is_some());
 
     *PIPELINE_MANAGER.lock().await = Some(manager);
     Ok(())

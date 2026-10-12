@@ -87,6 +87,7 @@ pub struct VideoPipeline {
     pipeline: gst::Pipeline,
     appsink: gst_app::AppSink,
     encoder: gst::Element,
+    valve: gst::Element,
     running: Arc<AtomicBool>,
     raw_frame_waiters: Arc<RawFrameWaiters>,
     raw_frame_requested: Arc<AtomicBool>,
@@ -147,6 +148,17 @@ impl VideoPipeline {
             .property_from_str("leaky", "downstream")
             .build()
             .context("Failed to create queue")?;
+
+        // Gates the encoder: while nobody is watching it drops raw frames so the
+        // hardware encoder and its output thread sit idle. Sticky events (caps)
+        // still pass, so the encoder stays negotiated and video state, dynamic
+        // GOP and the screenshot probe keep working. Starts closed.
+        let valve = gst::ElementFactory::make("valve")
+            .name("encode_valve")
+            .property_from_str("drop-mode", "forward-sticky-events")
+            .property("drop", true)
+            .build()
+            .context("Failed to create valve")?;
 
         let encoder_name = config.encoder.gst_element_name();
         info!("Creating {} encoder for {}", encoder_name, config.encoder.codec_name());
@@ -221,6 +233,7 @@ impl VideoPipeline {
                 &videorate,
                 &rate_caps,
                 &queue,
+                &valve,
                 &encoder,
                 &parser,
                 appsink.upcast_ref(),
@@ -234,6 +247,7 @@ impl VideoPipeline {
             &videorate,
             &rate_caps,
             &queue,
+            &valve,
             &encoder,
             &parser,
             appsink.upcast_ref(),
@@ -246,7 +260,8 @@ impl VideoPipeline {
         // steady-state cost per frame is a single relaxed atomic load.
         let probe_waiters = raw_frame_waiters.clone();
         let probe_requested = raw_frame_requested.clone();
-        encoder.static_pad("sink").context("Encoder has no sink pad")?.add_probe(
+        // On the valve's input, so snapshots work while encoding is paused.
+        valve.static_pad("sink").context("Valve has no sink pad")?.add_probe(
             gst::PadProbeType::BUFFER,
             move |pad, info| {
                 if !probe_requested.swap(false, Ordering::AcqRel) {
@@ -299,6 +314,7 @@ impl VideoPipeline {
             pipeline,
             appsink,
             encoder: encoder_for_state,
+            valve,
             running,
             raw_frame_waiters,
             raw_frame_requested,
@@ -332,6 +348,17 @@ impl VideoPipeline {
 
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
+    }
+
+    /// Opens or closes the encoder valve. Returns whether this changed it.
+    pub fn set_encoding_active(&self, active: bool) -> bool {
+        let drop = !active;
+        if self.valve.property::<bool>("drop") == drop {
+            return false;
+        }
+        self.valve.set_property("drop", drop);
+        info!(active, "video encoding {}", if active { "resumed" } else { "paused" });
+        true
     }
 
     pub fn stop(&self) -> Result<()> {
@@ -848,6 +875,14 @@ impl PipelineManager {
         info!(handled, "keyframe requested");
         if !handled {
             warn!("force-keyframe event was not handled by encoder");
+        }
+    }
+
+    /// Resumes encoding for a viewer (with a keyframe so it can decode at once)
+    /// or pauses it when nobody is watching.
+    pub fn set_encoding_active(&self, active: bool) {
+        if self.video.set_encoding_active(active) && active {
+            self.force_keyframe();
         }
     }
 }
