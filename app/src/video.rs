@@ -69,42 +69,23 @@ type AudioFrame = bytes::Bytes;
 static VIDEO_FRAME_TX: tokio::sync::OnceCell<mpsc::Sender<VideoFrame>> =
     tokio::sync::OnceCell::const_new();
 
+/// Writes encoded frames to the current session's track. The sink is read per
+/// frame rather than cached: a cached track kept feeding a taken-over session
+/// for up to a second after the new one attached, delaying its first frame.
 fn video_writer_loop(mut rx: mpsc::Receiver<VideoFrame>) {
     tokio::spawn(async move {
         let mut last_pts: Option<u64> = None;
-        let mut current_track: Option<Arc<TrackLocalStaticSample>> = None;
-        let mut track_refresh = interval(Duration::from_secs(1));
-        track_refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        while let Some((data, pts)) = rx.recv().await {
+            let dur = match last_pts {
+                Some(prev) if pts > prev => Duration::from_micros(pts - prev),
+                _ => Duration::from_millis(16),
+            };
+            last_pts = Some(pts);
 
-        loop {
-            tokio::select! {
-                _ = track_refresh.tick() => {
-                    current_track = VIDEO_SINK.read().await.clone();
-                }
-                maybe_frame = rx.recv() => {
-                    let Some((data, pts)) = maybe_frame else { break; };
-
-                    let dur = match last_pts {
-                        Some(prev) if pts > prev => Duration::from_micros(pts - prev),
-                        _ => Duration::from_millis(16),
-                    };
-                    last_pts = Some(pts);
-
-                    if current_track.is_none() {
-                        current_track = VIDEO_SINK.read().await.clone();
-                    }
-                    if let Some(track) = &current_track {
-                        let sample = Sample {
-                            data,
-                            duration: dur,
-                            ..Default::default()
-                        };
-                        if let Err(e) = track.write_sample(&sample).await {
-                            warn!("Failed to write video sample: {}", e);
-                            current_track = None;
-                        }
-                    }
-                }
+            let Some(track) = VIDEO_SINK.read().await.clone() else { continue };
+            let sample = Sample { data, duration: dur, ..Default::default() };
+            if let Err(e) = track.write_sample(&sample).await {
+                warn!("Failed to write video sample: {}", e);
             }
         }
     });
@@ -147,6 +128,8 @@ pub async fn ensure_video_pipeline_started() -> anyhow::Result<()> {
         .map(|_| ())
 }
 
+/// Switches video output to a new session's track. The keyframe for the new
+/// viewer is requested once its connection is fully up (see webrtc.rs).
 pub async fn attach_webrtc_sink(track: Arc<TrackLocalStaticSample>) {
     *VIDEO_SINK.write().await = Some(track);
 }
@@ -163,42 +146,15 @@ pub async fn detach_webrtc_sink() {
 async fn audio_frame_writer(mut rx: mpsc::Receiver<AudioFrame>) {
     const AUDIO_FRAME_DURATION: Duration = Duration::from_millis(10);
 
-    let mut current_track: Option<Arc<TrackLocalStaticSample>> = None;
-    let mut track_check_interval = interval(Duration::from_secs(1));
-    track_check_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
-    loop {
-        tokio::select! {
-            _ = track_check_interval.tick() => {
-                current_track = AUDIO_SINK.read().await.clone();
-            }
-            frame = rx.recv() => {
-                match frame {
-                    Some(data) => {
-                        if !is_audio_enabled() {
-                            continue;
-                        }
-                        if let Some(track) = &current_track {
-                            let sample = Sample {
-                                data,
-                                duration: AUDIO_FRAME_DURATION,
-                                ..Default::default()
-                            };
-                            if let Err(e) = track.write_sample(&sample).await {
-                                warn!("error writing audio sample: {}", e);
-                                current_track = AUDIO_SINK.read().await.clone();
-                            }
-                        } else {
-                            current_track = AUDIO_SINK.read().await.clone();
-                        }
-                    }
-                    None => {
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                        current_track = AUDIO_SINK.read().await.clone();
-                        continue;
-                    }
-                }
-            }
+    // Read the sink per frame for the same reason as the video writer.
+    while let Some(data) = rx.recv().await {
+        if !is_audio_enabled() {
+            continue;
+        }
+        let Some(track) = AUDIO_SINK.read().await.clone() else { continue };
+        let sample = Sample { data, duration: AUDIO_FRAME_DURATION, ..Default::default() };
+        if let Err(e) = track.write_sample(&sample).await {
+            warn!("error writing audio sample: {}", e);
         }
     }
 }
@@ -358,6 +314,13 @@ pub async fn force_video_keyframe() {
     let manager = PIPELINE_MANAGER.lock().await;
     if let Some(manager) = manager.as_ref() {
         manager.force_keyframe();
+    }
+}
+
+/// Uncoalesced keyframe request for a viewer whose connection just came up.
+pub async fn force_new_viewer_keyframe() {
+    if let Some(manager) = PIPELINE_MANAGER.lock().await.as_ref() {
+        manager.force_keyframe_now();
     }
 }
 

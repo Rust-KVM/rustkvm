@@ -90,6 +90,9 @@ pub struct VideoPipeline {
     running: Arc<AtomicBool>,
     raw_frame_waiters: Arc<RawFrameWaiters>,
     raw_frame_requested: Arc<AtomicBool>,
+    /// When the oldest unanswered keyframe request was made; the encoder
+    /// output probe logs how long it took to produce the keyframe.
+    keyframe_requested_at: Arc<parking_lot::Mutex<Option<std::time::Instant>>>,
 }
 
 impl VideoPipeline {
@@ -166,6 +169,34 @@ impl VideoPipeline {
         if let Some(gop) = config.gop_size {
             encoder.set_property("gop", gop);
         }
+
+        let keyframe_requested_at: Arc<parking_lot::Mutex<Option<std::time::Instant>>> =
+            Arc::default();
+        let probe_requested_at = keyframe_requested_at.clone();
+        let is_h264 = matches!(config.encoder, crate::cli::VideoEncoder::H264);
+        encoder.static_pad("src").context("Encoder has no src pad")?.add_probe(
+            gst::PadProbeType::BUFFER,
+            move |_pad, info| {
+                // Decide by the bitstream, not the buffer flags: the MPP encoder
+                // does not reliably clear DELTA_UNIT on IDR frames.
+                if is_h264
+                    && let Some(buffer) = info.buffer()
+                    && let Ok(map) = buffer.map_readable()
+                    && contains_h264_idr(map.as_slice())
+                {
+                    let delta = buffer.flags().contains(gst::BufferFlags::DELTA_UNIT);
+                    match probe_requested_at.lock().take() {
+                        Some(at) => info!(
+                            elapsed_ms = at.elapsed().as_millis() as u64,
+                            delta_flag = delta,
+                            "encoder emitted IDR after request"
+                        ),
+                        None => debug!(delta_flag = delta, "encoder emitted periodic IDR"),
+                    }
+                }
+                gst::PadProbeReturn::Ok
+            },
+        );
 
         let parser_name = config.encoder.parser_element_name();
         let parser = gst::ElementFactory::make(parser_name)
@@ -271,6 +302,7 @@ impl VideoPipeline {
             running,
             raw_frame_waiters,
             raw_frame_requested,
+            keyframe_requested_at,
         })
     }
 
@@ -780,12 +812,59 @@ impl PipelineManager {
         self.video.request_raw_frame()
     }
 
+    /// Requests an IDR from the encoder.
+    ///
+    /// The request carries the current running time. An "as soon as possible"
+    /// request (no running time) only works once per pipeline: GstVideoEncoder
+    /// keeps it pending until the encoder outputs a frame flagged as a sync
+    /// point, which the MPP encoder never does, and while one is pending it
+    /// ignores every later ASAP request. Timed requests are only compared with
+    /// the last forced request, so each one goes through.
+    ///
+    /// Requests are skipped while an earlier one is still waiting for its IDR
+    /// (up to a GOP), so a burst of browser PLIs costs one keyframe, and so
+    /// the encoder's never-cleared request queue grows by a few entries per
+    /// session rather than per PLI.
     pub fn force_keyframe(&self) {
-        let event = gst_video::UpstreamForceKeyUnitEvent::builder().all_headers(true).build();
-        if !self.video.encoder.send_event(event) {
+        {
+            let requested_at = self.video.keyframe_requested_at.lock();
+            if requested_at.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(1)) {
+                debug!("keyframe already requested, waiting for it");
+                return;
+            }
+        }
+        self.force_keyframe_now();
+    }
+
+    /// Like [`Self::force_keyframe`] but never coalesced: a new viewer needs
+    /// an IDR encoded after its connection is up, even if one is in flight.
+    pub fn force_keyframe_now(&self) {
+        self.video.keyframe_requested_at.lock().get_or_insert_with(std::time::Instant::now);
+        let mut builder = gst_video::UpstreamForceKeyUnitEvent::builder().all_headers(true);
+        if let Some(running_time) = self.video.encoder.current_running_time() {
+            builder = builder.running_time(running_time);
+        }
+        let handled = self.video.encoder.send_event(builder.build());
+        info!(handled, "keyframe requested");
+        if !handled {
             warn!("force-keyframe event was not handled by encoder");
         }
     }
+}
+
+/// Whether an Annex B H.264 access unit is an IDR: the first slice NAL found
+/// is type 5. Stops at the first slice, so a P frame costs only its headers.
+fn contains_h264_idr(data: &[u8]) -> bool {
+    for w in data.windows(4) {
+        if w[0] == 0 && w[1] == 0 && w[2] == 1 {
+            match w[3] & 0x1f {
+                5 => return true,
+                1 => return false,
+                _ => {}
+            }
+        }
+    }
+    false
 }
 
 pub fn encode_jpeg(sample: &gst::Sample) -> Result<bytes::Bytes> {
