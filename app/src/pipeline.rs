@@ -812,10 +812,39 @@ impl PipelineManager {
         self.video.request_raw_frame()
     }
 
+    /// Requests an IDR from the encoder.
+    ///
+    /// The request carries the current running time. An "as soon as possible"
+    /// request (no running time) only works once per pipeline: GstVideoEncoder
+    /// keeps it pending until the encoder outputs a frame flagged as a sync
+    /// point, which the MPP encoder never does, and while one is pending it
+    /// ignores every later ASAP request. Timed requests are only compared with
+    /// the last forced request, so each one goes through.
+    ///
+    /// Requests are skipped while an earlier one is still waiting for its IDR
+    /// (up to a GOP), so a burst of browser PLIs costs one keyframe, and so
+    /// the encoder's never-cleared request queue grows by a few entries per
+    /// session rather than per PLI.
     pub fn force_keyframe(&self) {
+        {
+            let requested_at = self.video.keyframe_requested_at.lock();
+            if requested_at.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(1)) {
+                debug!("keyframe already requested, waiting for it");
+                return;
+            }
+        }
+        self.force_keyframe_now();
+    }
+
+    /// Like [`Self::force_keyframe`] but never coalesced: a new viewer needs
+    /// an IDR encoded after its connection is up, even if one is in flight.
+    pub fn force_keyframe_now(&self) {
         self.video.keyframe_requested_at.lock().get_or_insert_with(std::time::Instant::now);
-        let event = gst_video::UpstreamForceKeyUnitEvent::builder().all_headers(true).build();
-        let handled = self.video.encoder.send_event(event);
+        let mut builder = gst_video::UpstreamForceKeyUnitEvent::builder().all_headers(true);
+        if let Some(running_time) = self.video.encoder.current_running_time() {
+            builder = builder.running_time(running_time);
+        }
+        let handled = self.video.encoder.send_event(builder.build());
         info!(handled, "keyframe requested");
         if !handled {
             warn!("force-keyframe event was not handled by encoder");

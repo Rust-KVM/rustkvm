@@ -317,6 +317,13 @@ pub async fn force_video_keyframe() {
     }
 }
 
+/// Uncoalesced keyframe request for a viewer whose connection just came up.
+pub async fn force_new_viewer_keyframe() {
+    if let Some(manager) = PIPELINE_MANAGER.lock().await.as_ref() {
+        manager.force_keyframe_now();
+    }
+}
+
 pub async fn update_video_quality(quality: f32) -> anyhow::Result<()> {
     if !(0.0..=1.0).contains(&quality) {
         anyhow::bail!("Quality must be between 0.0 and 1.0");
