@@ -14,7 +14,7 @@ futures     = { version = "0.3", default-features = false, features = ["std", "a
 gloo-net    = { version = "0.7", features = ["http", "websocket"] }
 gloo-timers = { version = "0.4", features = ["futures"] }
 js-sys               = "0.3"
-leptos               = { version = "0.8", features = ["csr"] }
+leptos               = { version = "0.8.22", features = ["csr"] }
 rkvm-proto           = { path = "../rkvm-proto" }
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"
