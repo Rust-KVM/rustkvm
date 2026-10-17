@@ -1,6 +1,6 @@
 # Releasing and shipping firmware
 
-How a RustKVM version goes from a tag to a flashed unit in a box. Building itself is
+How a RustKVM version goes from a draft release to a flashed unit in a box. Building itself is
 in [building.md](building.md).
 
 ## Versions
@@ -11,24 +11,58 @@ in [building.md](building.md).
 | Firmware image | `X.Y.Z-YYYYMMDD-<rev>` | `FW_VERSION` in `scripts/build-firmware.sh`, written to `/etc/rustkvm-release` |
 | SDK | commit per project | `os/rk3588/manifest.xml` |
 
-The application updates itself over the air from GitHub Releases (`app/src/update.rs`);
-the firmware image is what a unit leaves the factory with. A firmware release therefore
-always embeds a released application version.
+The firmware image is what a unit leaves the factory with, and it always embeds a
+released application version. Over-the-air application updates from GitHub Releases
+are pending (PR #29); until they land, updates mean reflashing or `dev_deploy.sh`.
+
+## Release assets
+
+| Asset | Built by |
+| --- | --- |
+| `rustkvm_app-aarch64-unknown-linux-gnu` + `.sha256` | `release.yml` (the pair OTA will install) |
+| `BUILD_INFO` | `release.yml` |
+| `rustkvm-X.Y.Z-source.tar.gz` | `release.yml` via `scripts/gpl-source-bundle.sh` |
+| `SHA256SUMS` + `SHA256SUMS.asc` | `release.yml`, signed with the release key |
+| `rustkvm-rk3588-<fw>-sd.img.gz`, `-eflasher.img.gz`, `.release` | `scripts/release-firmware.sh` from a local firmware build |
+| `rustkvm-rk3588-<fw>.SHA256SUMS` + `.asc` | `scripts/release-firmware.sh` |
+| `rustkvm-X.Y.Z-legal-info.tar.gz` | `LEGAL_INFO=1 scripts/release-firmware.sh` (Buildroot license texts and package sources) |
 
 ## Release checklist
 
-1. Bump `version` in `Cargo.toml`, update `CHANGELOG.md`, merge to `main`.
-2. Tag `vX.Y.Z`. `release.yml` builds the application and publishes the OTA assets.
-3. Build the firmware from that tag with the released binary:
+Nothing is public until step 6; every earlier step only touches a draft.
+
+1. Bump `version` in `Cargo.toml`, update `CHANGELOG.md`, write
+   `docs/release-notes/vX.Y.Z.md`, merge to `dev`.
+2. Actions → **Release** → *Run workflow* with `X.Y.Z`. It builds the application in the
+   published devkit image and creates the draft release `vX.Y.Z` (the tag does not exist
+   yet).
+3. Build the firmware from the same commit and attach it to the draft:
    ```bash
-   git checkout vX.Y.Z
    scripts/devkit.sh run scripts/build-app.sh
    FW_VERSION=X.Y.Z-$(date -u +%Y%m%d) scripts/devkit.sh firmware
+   LEGAL_INFO=1 scripts/release-firmware.sh X.Y.Z
    ```
-   Check that `out/app/*.sha256` matches the one on the GitHub release.
 4. Flash a unit with the eflasher image and run the acceptance test below.
-5. Archive `out/firmware/` (images, `.release`, `SHA256SUMS`) with the release; it is
-   what the production line flashes.
+5. Review the draft: assets, notes, `gpg --verify SHA256SUMS.asc SHA256SUMS`.
+6. **Publish** the draft on GitHub. That creates the tag `vX.Y.Z` on the drafted commit.
+
+### Release signing key (one-time)
+
+Generate a dedicated signing key on a trusted machine, store the private half only as
+the `RELEASE_SIGNING_KEY` Actions secret (and an offline backup), and commit the public
+half so users can verify downloads:
+
+```bash
+gpg --quick-gen-key "RustKVM Release Signing" ed25519 sign 3y
+fpr=$(gpg --list-keys --with-colons "RustKVM Release Signing" | awk -F: '/^fpr/{print $10; exit}')
+gpg --armor --export-secret-keys "$fpr" | gh secret set RELEASE_SIGNING_KEY
+gpg --armor --export "$fpr" > docs/release-signing-key.asc
+```
+
+The workflow needs the key without a passphrase; leave it empty when gpg asks, or
+strip it afterwards with `gpg --passwd "$fpr"`. Set `RELEASE_GPG_KEY=$fpr` for
+`scripts/release-firmware.sh` so the firmware checksums carry the same signature.
+Without the secret the workflow still creates the draft, unsigned, with a warning.
 
 ## Flashing
 
