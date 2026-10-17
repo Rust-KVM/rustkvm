@@ -1,0 +1,14 @@
+diff --git a/rockit/mpi/CMakeLists.txt b/rockit/mpi/CMakeLists.txt
+index ea77198d..7ac1cf4d 100644
+--- a/rockit/mpi/CMakeLists.txt
++++ b/rockit/mpi/CMakeLists.txt
+@@ -12,7 +12,8 @@ if(ARCH64)
+         ${CMAKE_CURRENT_LIST_DIR}/sdk/lib/lib64/libgraphic_lsf.so
+         ${CMAKE_CURRENT_LIST_DIR}/sdk/lib/lib64/libRkSwCac.so
+         ${CMAKE_CURRENT_LIST_DIR}/sdk/lib/lib64/libturbojpeg.so
+-        ${CMAKE_CURRENT_LIST_DIR}/sdk/lib/lib64/libjpeg.so 
++        ${CMAKE_CURRENT_LIST_DIR}/sdk/lib/lib64/libjpeg.so
++        ${CMAKE_CURRENT_LIST_DIR}/sdk/lib/lib64/librkAlgoDis.so
+     )
+     set(ROCKIT_DUMPSYS_FILE ${CMAKE_CURRENT_LIST_DIR}/example/bin/bin64/dumpsys)
+ else()

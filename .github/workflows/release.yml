@@ -52,7 +52,8 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     env:
-      RUSTUP_TOOLCHAIN: nightly
+      # Same pin as ci/devkit/Dockerfile.
+      RUSTUP_TOOLCHAIN: nightly-2026-06-14
       CC_aarch64_unknown_linux_gnu: /opt/rk3588-buildkit/bin/aarch64-buildroot-linux-gnu-gcc
     steps:
       - uses: actions/checkout@v7
@@ -65,8 +66,9 @@ jobs:
             echo "::error::tag ${GITHUB_REF_NAME} does not match workspace version ${version}"
             exit 1
           }
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-06-14
           components: rust-src
           targets: aarch64-unknown-linux-gnu
       - uses: actions/download-artifact@v8

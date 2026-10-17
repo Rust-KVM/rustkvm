@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- RustKVM RK3588 firmware: FriendlyElec Buildroot SDK pinned to exact commits.
+     Generated from the reference workbench checkout on 2026-10-17. Local changes
+     live in ../patches and ../rootfs-overlay, never in a fork. -->
+<manifest>
+  <remote name="friendlyarm" fetch="https://github.com/friendlyarm/" />
+  <project path="app" name="linuxsdk-rockchip-app" remote="friendlyarm" revision="d361dca6223688f221f237948c3d7d19140e35a2" upstream="refs/heads/kernel-5.10" />
+  <project path="buildroot" name="linuxsdk-rockchip-buildroot" remote="friendlyarm" revision="cfb107eaab2c160ee95701ece836186d8a049d4e" upstream="refs/heads/kernel-5.10" />
+  <project path="device/friendlyelec" name="buildroot_device_friendlyelec" remote="friendlyarm" revision="9baed4566eb549c37e3b33718be5a4f087e98e2d" upstream="refs/heads/kernel-5.10">
+    <linkfile dest=".current" src="rk3588"/>
+  </project>
+  <project path="device/rockchip" name="buildroot_device_rockchip" remote="friendlyarm" revision="c0e4d3c483d07551731e0a430e25482ef3d59203" upstream="refs/heads/kernel-5.10" />
+  <project path="external" name="linuxsdk-rockchip-external" remote="friendlyarm" revision="fd788b4f85581a89ecdbb4646b8ef9b522a0b09a" upstream="refs/heads/kernel-5.10" />
+  <project path="external/mpp" name="mpp" remote="friendlyarm" revision="50037d3946c90f6bf4934754944d5b9df3542c01" upstream="refs/heads/develop" />
+  <project path="external/rknn-toolkit2" name="rknn-toolkit2" remote="friendlyarm" revision="77b71094e08391c543d9c65fea5f7cf98cc16eee" upstream="refs/heads/master" />
+  <project path="external/rknpu2" name="rknpu2" remote="friendlyarm" revision="22b548a2862b05c93876349ae209a8d49e0fd562" upstream="refs/heads/master" />
+  <project path="kernel" name="kernel-rockchip" remote="friendlyarm" revision="28c0b8a30d656e29a3b1c1801d1f2339a73e6355" upstream="refs/heads/nanopi6-v6.1.y" />
+  <project path="rkbin" name="rkbin" remote="friendlyarm" revision="0f8ac860f0479da56a1decae207ddc99e289f2e2" upstream="refs/heads/nanopi6" />
+  <project path="scripts" name="buildroot_scripts" remote="friendlyarm" revision="7c50fb58d5567ef74e7632fc7fa612064a06b12c" upstream="refs/heads/kernel-5.10">
+    <linkfile dest="build.sh" src="build.sh"/>
+  </project>
+  <project path="scripts/sd-fuse" name="sd-fuse_rk3588" remote="friendlyarm" revision="66a9ca01dbd3ba3682c857bb820ee640563b05f6" upstream="refs/heads/kernel-6.1.y">
+    <linkfile dest="out" src="out"/>
+  </project>
+  <project path="toolchain" name="prebuilts" remote="friendlyarm" revision="b156c94f1d3e90ae935819fe0a7a2910f013aded" upstream="refs/heads/master" />
+  <project path="u-boot" name="uboot-rockchip" remote="friendlyarm" revision="99b3b4c9ed00ae2d3df817a25c0ec9878be5ee83" upstream="refs/heads/nanopi6-v2017.09" />
+</manifest>

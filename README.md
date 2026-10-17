@@ -156,7 +156,9 @@ rustkvm/
 │   ├── rkvm-proto/       # protocol types shared with the frontend (HID-RPC, JSON-RPC, keymaps)
 │   └── rkvm-web/         # Leptos 0.8 CSR frontend, built with Trunk (not a workspace member)
 ├── assets/images/        # built-in virtual-media images
-├── ci/buildkit/          # Docker image for the RK3588 cross-build kit
+├── ci/                   # Docker images: cross toolchain, devkit, firmware builder
+├── os/rk3588/            # firmware layer: pinned SDK manifest, patches, rootfs overlay
+├── scripts/              # devkit.sh, build-app.sh, build-firmware.sh
 ├── rust/                 # rust-lang/rust submodule for the self-built stage2 toolchain
 └── dev_deploy.sh         # build and deploy to a device over SSH
 ```
@@ -222,6 +224,17 @@ rustkvm_app --video-encoder h265 --video-bitrate 20000000 --video-fps 60 \
 RustKVM has two build products: the **WASM frontend** (any host, stable Rust) and the
 **device binary** (cross-compiled for `aarch64-unknown-linux-gnu`). The frontend is
 embedded into the binary at compile time, so build it first.
+
+**Quickest path, any Linux host with Docker:**
+
+```bash
+scripts/devkit.sh run scripts/build-app.sh   # → out/app/rustkvm_app-aarch64-unknown-linux-gnu
+scripts/devkit.sh firmware                   # → out/firmware/ SD and eMMC images
+```
+
+Pinned versions, caches, proxies and the firmware build are covered in
+[`docs/building.md`](docs/building.md). The manual setup below is what the containers
+automate.
 
 ### 1. Frontend (any host)
 

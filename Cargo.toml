@@ -60,7 +60,7 @@ tracing            = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 uuid               = { version = "1.23.3", default-features = false, features = ["v4"] }
 webrtc             = "0.17.1"
-zip                = { version = "8.0", default-features = false }
+zip                = { version = "9.0", default-features = false }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
