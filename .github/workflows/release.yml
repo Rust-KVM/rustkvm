@@ -1,12 +1,26 @@
 name: Release
 
-# Tag vX.Y.Z (matching the workspace version) → build the frontend, cross-build
-# the device binary inside the rk3588-buildkit image, and publish the assets
-# that app/src/update.rs installs over the air.
+# Builds the application package in the published devkit image (the same
+# environment as `scripts/devkit.sh run scripts/build-app.sh`), signs the
+# checksums, and creates or updates a DRAFT GitHub release. Nothing is
+# published: a maintainer reviews the draft, attaches the firmware images
+# (scripts/release-firmware.sh) and clicks Publish, which creates the tag.
+#
+# Trigger: Actions → Release → Run workflow with the version (no tag needed),
+# or push a vX.Y.Z tag. Either way the version must equal Cargo.toml's.
+#
+# Signing: the RELEASE_SIGNING_KEY secret holds an ASCII-armored private key
+# without a passphrase (see docs/firmware-release.md). Without it the draft is
+# created unsigned and the run prints a warning.
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version without the leading v, e.g. 0.1.0
+        required: true
 
 permissions:
   contents: read
@@ -16,93 +30,81 @@ env:
   ASSET: rustkvm_app-aarch64-unknown-linux-gnu
 
 jobs:
-  web:
-    name: trunk build
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: crates/rkvm-web
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - uses: jetli/trunk-action@v0.5.1
-        with:
-          version: "v0.21.14"
-      - run: trunk build --release --locked
-      - uses: actions/upload-artifact@v4
-        with:
-          name: web-dist
-          path: crates/rkvm-web/dist/
-          if-no-files-found: error
-
-  app:
-    name: device binary
-    needs: web
+  build:
+    name: application package
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    permissions:
-      contents: read
-      packages: read
     container:
-      image: ghcr.io/${{ github.repository_owner }}/rk3588-buildkit:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    env:
-      # Same pin as ci/devkit/Dockerfile.
-      RUSTUP_TOOLCHAIN: nightly-2026-06-14
-      CC_aarch64_unknown_linux_gnu: /opt/rk3588-buildkit/bin/aarch64-buildroot-linux-gnu-gcc
+      image: ghcr.io/rust-kvm/rustkvm-devkit:nightly-2026-06-14
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
-      # build.rs reads git metadata; the container user differs from the checkout owner.
-      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - name: Check tag matches workspace version
+      - name: Check version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n1)
-          test "${GITHUB_REF_NAME}" = "v${version}" || {
-            echo "::error::tag ${GITHUB_REF_NAME} does not match workspace version ${version}"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then want=${GITHUB_REF_NAME#v}; else want=$INPUT_VERSION; fi
+          have=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n1)
+          test "$want" = "$have" || {
+            echo "::error::requested version $want does not match workspace version $have"
             exit 1
           }
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-06-14
-          components: rust-src
-          targets: aarch64-unknown-linux-gnu
-      - uses: actions/download-artifact@v8
-        with:
-          name: web-dist
-          path: crates/rkvm-web/dist
+          echo "version=$have" >> "$GITHUB_OUTPUT"
       - name: Build
-        run: |
-          cargo build -Z build-std=std,panic_abort --locked --release \
-            --target aarch64-unknown-linux-gnu -p rustkvm --bin rustkvm_app
-          cp target/aarch64-unknown-linux-gnu/release/rustkvm_app "$ASSET"
-          sha256sum "$ASSET" > "$ASSET.sha256"
+        run: scripts/build-app.sh
+      - name: GPL source bundle
+        run: OUT=out/app scripts/gpl-source-bundle.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: device-binary
-          path: |
-            ${{ env.ASSET }}
-            ${{ env.ASSET }}.sha256
+          name: release-assets
+          path: out/app/
           if-no-files-found: error
 
-  publish:
-    name: GitHub release
-    needs: app
+  draft:
+    name: draft release
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          name: device-binary
+          name: release-assets
+          path: assets
+      - name: Checksums and signature
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          cd assets
+          sha256sum -- * > SHA256SUMS
+          if [ -n "$RELEASE_SIGNING_KEY" ]; then
+            export GNUPGHOME="$RUNNER_TEMP/gnupg"
+            mkdir -m 700 "$GNUPGHOME"
+            printf '%s\n' "$RELEASE_SIGNING_KEY" | gpg --batch --import
+            gpg --batch --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS
+            gpg --batch --verify SHA256SUMS.asc SHA256SUMS
+            rm -rf "$GNUPGHOME"
+          else
+            echo "::warning::RELEASE_SIGNING_KEY is not set; the draft is unsigned"
+          fi
+          ls -l
+      - name: Release notes
+        id: notes
+        run: |
+          f="docs/release-notes/v$VERSION.md"
+          if [ -f "$f" ]; then echo "path=$f" >> "$GITHUB_OUTPUT"; fi
       - uses: softprops/action-gh-release@v2
         with:
-          files: |
-            ${{ env.ASSET }}
-            ${{ env.ASSET }}.sha256
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
+          draft: true
+          tag_name: v${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
+          name: RustKVM v${{ env.VERSION }}
+          body_path: ${{ steps.notes.outputs.path }}
+          generate_release_notes: ${{ steps.notes.outputs.path == '' }}
+          prerelease: ${{ contains(env.VERSION, '-') }}
+          files: assets/*

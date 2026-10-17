@@ -2,6 +2,7 @@
 
 | Guide | For |
 | --- | --- |
+| [Quick start: flash and first boot](quickstart.md) | Installing a release image and first login |
 | [Getting started on RK3588](getting-started.md) | Flashing, deploying, wiring and first login |
 | [API reference](api.md) | HTTP routes, JSON-RPC, MCP tools, HID-RPC, MQTT, Prometheus metrics |
 | [Building](building.md) | Docker devkit, application package and firmware image, pinned versions |
