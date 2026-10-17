@@ -225,10 +225,29 @@ trunk serve                  # local dev server on :9000 (Trunk.toml)
 ## CI
 
 - **`.github/workflows/ci.yml`** — workspace `rustfmt` (nightly) + `cargo deny` + host `clippy --workspace --release --all-targets -D warnings` + aarch64 `clippy --target aarch64-unknown-linux-gnu` (Ubuntu cross gcc, no link) + `cargo test --workspace` (GStreamer dev libs, stub `rkvm-web/dist`) + `actionlint` over every workflow, gated by a `CI Success` summary check.
-- **`.github/workflows/buildkit.yml`** — manual: downloads the Buildroot SDK tar (Google Drive file ID), runs `./build.sh rk3588.mk`, publishes `/opt/rk3588-buildkit` as `ghcr.io/<owner>/rk3588-buildkit:{sdk_tag,latest}` and uploads the system images as an artifact.
-- **`.github/workflows/release.yml`** — tag `vX.Y.Z` (must equal the workspace version): Trunk frontend → `cargo +nightly build -Z build-std` in the buildkit image → GitHub Release with `rustkvm_app-aarch64-unknown-linux-gnu` + `.sha256` (the assets OTA installs).
+- **`.github/workflows/buildkit.yml`** — manual: downloads the Buildroot SDK tar (Google Drive file ID), runs `./build.sh rk3588.mk`, publishes `/opt/rk3588-buildkit` as `ghcr.io/<owner>/rk3588-buildkit:{sdk_tag,latest}` (via the `rk3588-buildkit` named build context of `ci/buildkit/Dockerfile`) and uploads the system images as an artifact.
+- **`.github/workflows/release.yml`** — tag `vX.Y.Z` (must equal the workspace version): Trunk frontend → `cargo +nightly-2026-06-14 build -Z build-std` in the buildkit image → GitHub Release with `rustkvm_app-aarch64-unknown-linux-gnu` + `.sha256` (the assets OTA installs).
 - **`.github/workflows/device-health.yml`** — every 6h and on demand: runs `app/tests/device_live.rs` against a live device (`RKVM_DEVICE_URL` variable, `RKVM_DEVICE_TOKEN` secret; optional `RKVM_PROBE_RUNNER` self-hosted runner label); a no-op when no device is configured. The same test runs locally with those env vars and is skipped when `RKVM_DEVICE_URL` is unset.
 - **`.github/workflows/web.yml`** — `rkvm-web` only (triggers on `crates/rkvm-web/**`, `crates/rkvm-proto/**`): `rustfmt` (nightly) → `clippy` (stable, `--target wasm32-unknown-unknown -D warnings`) → `trunk build --locked` → `cargo deny`, gated by a `Web CI Success` summary check.
+
+## Reproducible builds (devkit and firmware)
+
+Only Docker is needed on a host; full guide in [`docs/building.md`](docs/building.md), shipping flow in [`docs/firmware-release.md`](docs/firmware-release.md).
+
+```
+ci/buildkit/Dockerfile       # RK3588 cross gcc + sysroot image (Buildroot host dir as named context)
+ci/devkit/Dockerfile         # buildkit + pinned nightly/stable Rust + trunk; RUSTUP_TOOLCHAIN overrides `stage2`
+ci/firmware/Dockerfile       # Ubuntu 22.04 SDK host + repo; runs --privileged (loop devices)
+.devcontainer/               # VS Code devcontainer on the devkit image
+scripts/devkit.sh            # buildkit | image | shell | run CMD | firmware-image | firmware STEPS
+scripts/build-app.sh         # trunk + device binary → out/app/ (binary, .sha256, BUILD_INFO)
+scripts/build-firmware.sh    # sync | patch | build | collect → out/firmware/ (sd + eflasher images)
+os/rk3588/manifest.xml       # FriendlyElec SDK projects pinned to exact commits
+os/rk3588/patches/<project>/ # every local SDK change, applied with git apply after a reset
+os/rk3588/rootfs-overlay/    # S99rustkvm, dhcpcd/network config, dropbear devmode wrapper
+```
+
+Toolchain pins live in `ci/devkit/Dockerfile` (and the nightly in `release.yml`); SDK changes go into `os/rk3588/patches`, never only into a local SDK checkout.
 
 ## Deployment
 

@@ -1,0 +1,24 @@
+diff --git a/rk3588/base.mk b/rk3588/base.mk
+index 46d7ddb..3929936 100644
+--- a/rk3588/base.mk
++++ b/rk3588/base.mk
+@@ -23,6 +23,7 @@ BUILDROOT_FILES+=(device/friendlyelec/rk3588/r8125)
+ BUILDROOT_FILES+=(device/friendlyelec/rk3588/set-pulse-audio-default-output-to-hdmi0)
+ BUILDROOT_FILES+=(device/friendlyelec/alsa-config)
+ BUILDROOT_FILES+=(device/friendlyelec/usbdevice-wrapper)
++BUILDROOT_FILES+=(device/friendlyelec/rustkvm-files)
+ 
+ # U-boot
+ # 
+diff --git a/rk3588/disable-unnecessary-services/install.sh b/rk3588/disable-unnecessary-services/install.sh
+index fbcb560..b548d25 100755
+--- a/rk3588/disable-unnecessary-services/install.sh
++++ b/rk3588/disable-unnecessary-services/install.sh
+@@ -3,6 +3,7 @@ set -eu
+ ROOTFS_DIR=$1
+ 
+ services+=("40rkaiq_3A")
++services+=("50dropbear")
+ 
+ (cd ${ROOTFS_DIR} && {
+     cd etc/init.d

@@ -1,0 +1,2 @@
+# SDK patches are applied byte-for-byte; keep their whitespace and line endings.
+os/**/*.patch -text -whitespace

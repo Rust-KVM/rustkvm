@@ -1,0 +1,65 @@
+From e1fd8a33db205ecc1b9e6d91b3b3161c25ffcc8c Mon Sep 17 00:00:00 2001
+From: foxxcn <foxxcnweb@gmail.com>
+Date: Sun, 11 Oct 2026 10:18:14 +0800
+Subject: [PATCH] package/dhcpcd, chrony: fix privsep SIGSYS and drift file
+ permissions
+
+dhcpcd 10.0.4 privsep seccomp filter lacks dup3, which glibc uses for
+dup2() on aarch64, so dhcpcd was killed with SIGSYS at boot.
+
+chronyd runs as the chrony user but /var/lib/chrony was root-owned, so
+the drift file could never be written.
+---
+ package/chrony/chrony.mk                      |  5 ++++
+ .../0002-privsep-linux-allow-dup3.patch       | 26 +++++++++++++++++++
+ 2 files changed, 31 insertions(+)
+ create mode 100755 package/dhcpcd/0002-privsep-linux-allow-dup3.patch
+
+diff --git a/package/chrony/chrony.mk b/package/chrony/chrony.mk
+index 765db00779..ce0c31836d 100644
+--- a/package/chrony/chrony.mk
++++ b/package/chrony/chrony.mk
+@@ -76,6 +76,11 @@ define CHRONY_INSTALL_TARGET_CMDS
+ 	mkdir -p $(TARGET_DIR)/var/lib/chrony
+ endef
+ 
++# chronyd drops to the chrony user and writes its drift file here.
++define CHRONY_PERMISSIONS
++	/var/lib/chrony d 755 chrony chrony - - - - -
++endef
++
+ define CHRONY_INSTALL_INIT_SYSV
+ 	$(INSTALL) -D -m 755 package/chrony/S49chrony $(TARGET_DIR)/etc/init.d/S49chrony
+ endef
+diff --git a/package/dhcpcd/0002-privsep-linux-allow-dup3.patch b/package/dhcpcd/0002-privsep-linux-allow-dup3.patch
+new file mode 100755
+index 0000000000..58015fd4cb
+--- /dev/null
++++ b/package/dhcpcd/0002-privsep-linux-allow-dup3.patch
+@@ -0,0 +1,26 @@
++From: RustKVM <noreply@rustkvm.local>
++Subject: [PATCH] privsep-linux: allow dup3
++
++aarch64 has no dup2 syscall; glibc implements dup2() with dup3(). The
++seccomp filter only allowed __NR_dup2, so the privileged helper was
++killed with SIGSYS (audit: syscall=24) when it daemonised, leaving no
++dhcpcd running to renew leases.
++
++Upstream dhcpcd allows __NR_dup3 from 10.0.5 onwards.
++---
++ src/privsep-linux.c | 3 +++
++ 1 file changed, 3 insertions(+)
++
++diff --git a/src/privsep-linux.c b/src/privsep-linux.c
++--- a/src/privsep-linux.c
+++++ b/src/privsep-linux.c
++@@ -313,6 +313,9 @@
++ #ifdef __NR_dup2
++ 	SECCOMP_ALLOW(__NR_dup2), // daemonising dups stderr to stdin(/dev/null)
++ #endif
+++#ifdef __NR_dup3
+++	SECCOMP_ALLOW(__NR_dup3), // dup2() is dup3() on aarch64
+++#endif
++ #ifdef __NR_epoll_ctl
++ 	SECCOMP_ALLOW(__NR_epoll_ctl),
++ #endif

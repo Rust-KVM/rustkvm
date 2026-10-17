@@ -63,7 +63,7 @@ jobs:
         run: |
           host="$RUNNER_TEMP/sdk/buildroot/output/rockchip_rk3588/host"
           test -x "$host/bin/aarch64-buildroot-linux-gnu-gcc"
-          cp -a "$host" ci/buildkit/rk3588-buildkit
+          cp -a "$host" "$RUNNER_TEMP/rk3588-buildkit"
       - name: Upload system images
         uses: actions/upload-artifact@v4
         with:
@@ -81,6 +81,7 @@ jobs:
       - uses: docker/build-push-action@v7
         with:
           context: ci/buildkit
+          build-contexts: rk3588-buildkit=${{ runner.temp }}/rk3588-buildkit
           push: true
           tags: |
             ${{ env.IMAGE }}:${{ inputs.sdk_tag }}

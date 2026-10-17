@@ -1,0 +1,21 @@
+diff --git a/arch/arm64/configs/nanopi6_linux_defconfig b/arch/arm64/configs/nanopi6_linux_defconfig
+index b018e5f79d02..54721ea7d254 100644
+--- a/arch/arm64/configs/nanopi6_linux_defconfig
++++ b/arch/arm64/configs/nanopi6_linux_defconfig
+@@ -638,7 +638,7 @@ CONFIG_ZRAM_WRITEBACK=y
+ CONFIG_ZRAM_MEMORY_TRACKING=y
+ CONFIG_BLK_DEV_LOOP=y
+ CONFIG_BLK_DEV_DRBD=m
+-CONFIG_BLK_DEV_NBD=m
++CONFIG_BLK_DEV_NBD=y
+ CONFIG_BLK_DEV_RAM=y
+ CONFIG_BLK_DEV_RAM_COUNT=8
+ CONFIG_ATA_OVER_ETH=m
+@@ -1423,6 +1423,7 @@ CONFIG_USB_CONFIGFS_F_FS=y
+ CONFIG_USB_CONFIGFS_F_MIDI=y
+ CONFIG_USB_CONFIGFS_F_HID=y
+ CONFIG_USB_CONFIGFS_F_UVC=y
++CONFIG_USB_CONFIGFS_F_UAC2=y
+ CONFIG_TYPEC_TCPM=y
+ CONFIG_TYPEC_TCPCI=y
+ CONFIG_TYPEC_HUSB311=y

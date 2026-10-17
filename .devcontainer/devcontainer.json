@@ -1,0 +1,16 @@
+{
+  // RustKVM devkit: frontend + aarch64 device build, no host toolchains needed.
+  // The image is built locally on first open (scripts/devkit.sh image); set
+  // RUSTKVM_DEVKIT_IMAGE to use a registry copy instead.
+  "name": "RustKVM devkit",
+  "image": "${localEnv:RUSTKVM_DEVKIT_IMAGE:rustkvm/devkit:local}",
+  "initializeCommand": "scripts/devkit.sh image --if-missing",
+  "runArgs": ["--network=host"],
+  "remoteUser": "ubuntu",
+  "updateRemoteUserUID": true,
+  "customizations": {
+    "vscode": {
+      "extensions": ["rust-lang.rust-analyzer", "tamasfe.even-better-toml"]
+    }
+  }
+}

@@ -1,0 +1,5 @@
+# RustKVM: dhcpcd (S41dhcpcd) is the only DHCP client. Running ifupdown's
+# udhcpc on the same NICs as well gave every port two DHCP clients and
+# duplicate metric-less default routes.
+auto lo
+iface lo inet loopback

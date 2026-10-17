@@ -1,0 +1,74 @@
+#!/bin/sh
+
+# rustkvm_app arms the hardware watchdog and only disarms it on a graceful
+# exit, so it is always stopped with SIGTERM. SIGKILL reboots the device.
+
+APP=/userdata/rustkvm/bin/rustkvm_app
+LOG_DIR=/userdata/rustkvm/log
+
+stop_app() {
+	pid=$(pidof rustkvm_app) || return 0
+	kill -TERM $pid 2>/dev/null || true
+	cnt=0
+	while [ $cnt -lt 100 ]; do
+		cnt=$((cnt + 1))
+		pidof rustkvm_app >/dev/null 2>&1 || return 0
+		sleep 0.1
+	done
+	echo "rustkvm_app still running after 10s" >>$LOG_DIR/rustkvm_app.log
+	return 1
+}
+
+case "$1" in
+start)
+	cnt=0
+	while [ $cnt -lt 30 ]; do
+		cnt=$((cnt + 1))
+		if mount | grep -w userdata >/dev/null 2>&1; then
+			break
+		fi
+		sleep 0.1
+	done
+
+	cnt=0
+	while [ $cnt -lt 100 ]; do
+		cnt=$((cnt + 1))
+		if [ -e /dev/video0 ] && [ -d /dev/snd ]; then
+			break
+		fi
+		sleep 0.1
+	done
+
+	sleep 2
+
+	mkdir -p $LOG_DIR
+
+	if [ ! -f "$APP" ]; then
+		echo "rustkvm_app not found!" >>$LOG_DIR/rustkvm_app.log
+		exit 1
+	fi
+
+	stop_app || exit 1
+
+	/usr/bin/dropbear.sh &
+	chmod +x $APP
+
+	nohup setsid $APP </dev/null >>$LOG_DIR/rustkvm_app.log 2>&1 &
+	;;
+
+stop)
+	stop_app
+	;;
+
+restart)
+	$0 stop || exit 1
+	$0 start
+	;;
+
+*)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
+esac
+
+exit 0

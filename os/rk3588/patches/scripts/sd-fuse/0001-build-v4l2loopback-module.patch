@@ -1,0 +1,22 @@
+diff --git a/build-kernel.sh b/build-kernel.sh
+index 696ea59..1355550 100755
+--- a/build-kernel.sh
++++ b/build-kernel.sh
+@@ -275,6 +275,17 @@ function build_kernel() {
+         })
+     })
+ 
++    # build v4l2loopback (virtual V4L2 device for UVC operator-camera passthrough)
++    (cd ${OUT} && {
++        if [ ! -d v4l2loopback ]; then
++            git clone https://github.com/umlaeute/v4l2loopback.git -b v0.13.1 --depth 1 v4l2loopback
++        fi
++        (cd v4l2loopback && {
++            make CROSS_COMPILE=${CROSS_COMPILE} ARCH=${ARCH} KERNEL_DIR=${KERNEL_SRC} -C ${KERNEL_SRC} M=$(pwd) modules
++            cp v4l2loopback.ko ${KMODULES_OUTDIR}/lib/modules/${KERNEL_VER} -afv
++        })
++    })
++
+     # build rtw_8822ce wifi driver
+     (cd ${OUT} && {
+         if [ ! -d rtw88 ]; then
