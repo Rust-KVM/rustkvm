@@ -75,12 +75,13 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: release-assets
-          path: assets
+          # Not "assets/": the checkout already has an assets/ directory.
+          path: release-assets
       - name: Checksums and signature
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
-          cd assets
+          cd release-assets
           sha256sum -- * > SHA256SUMS
           if [ -n "$RELEASE_SIGNING_KEY" ]; then
             export GNUPGHOME="$RUNNER_TEMP/gnupg"
@@ -107,4 +108,4 @@ jobs:
           body_path: ${{ steps.notes.outputs.path }}
           generate_release_notes: ${{ steps.notes.outputs.path == '' }}
           prerelease: ${{ contains(env.VERSION, '-') }}
-          files: assets/*
+          files: release-assets/*
