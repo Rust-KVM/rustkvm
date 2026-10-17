@@ -9,7 +9,8 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        bc bison build-essential ca-certificates ccache clang cmake cpio curl \
+        android-sdk-libsparse-utils bc bison btrfs-progs build-essential ca-certificates \
+        ccache clang cmake cpio curl fdisk swig \
         device-tree-compiler dosfstools dwarves e2fsprogs exfatprogs fakeroot file flex \
         gcc-arm-linux-gnueabihf git git-lfs gperf kmod libclang-dev \
         libdbus-1-dev libelf-dev libgmp-dev libmpc-dev libncurses-dev \
