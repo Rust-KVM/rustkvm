@@ -15,7 +15,8 @@ RUN apt-get update \
         gcc-arm-linux-gnueabihf git git-lfs gperf kmod libclang-dev \
         libdbus-1-dev libelf-dev libgmp-dev libmpc-dev libncurses-dev \
         libnl-3-dev libssl-dev llvm-dev lz4 openssl parted patch \
-        pkg-config python-is-python3 python3 python3-pip rsync sudo texinfo \
+        pkg-config python-is-python3 python3 python3-dev python3-pip python3-pyelftools \
+        rsync sudo texinfo \
         u-boot-tools udev unzip uuid-dev wget xz-utils zstd \
     && rm -rf /var/lib/apt/lists/*
 
