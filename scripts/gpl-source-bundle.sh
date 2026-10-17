@@ -50,6 +50,8 @@ if [ "${LEGAL_INFO:-0}" = 1 ]; then
     out_dir=$SDK/buildroot/output/rockchip_rk3588
     [ -f "$out_dir/.config" ] || { echo "error: no built Buildroot tree in $out_dir" >&2; exit 1; }
     make -C "$SDK/buildroot" O="$out_dir" legal-info
-    tar -C "$out_dir" -czf "$OUT/rustkvm-$version-legal-info.tar.gz" legal-info
+    # Host tools are not distributed, so their sources stay out of the bundle.
+    tar -C "$out_dir" --exclude=legal-info/host-sources \
+        -czf "$OUT/rustkvm-$version-legal-info.tar.gz" legal-info
     echo "==> $OUT/rustkvm-$version-legal-info.tar.gz"
 fi

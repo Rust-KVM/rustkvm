@@ -22,6 +22,7 @@ empty and is mounted over the rootfs directory; `S99rustkvm` copies it to
 | --- | --- |
 | `buildroot` | dhcpcd privsep seccomp allows `dup3` (SIGSYS at boot); chrony drift file ownership |
 | `buildroot` | RustKVM defconfig (GStreamer Opus, RGA, uvc-gadget, dropbear client, update engine); uvc-gadget builds with `-Dwerror=false` and accepts CONTINUOUS frame intervals |
+| `buildroot` | rkupdate's license points at its real `LICENSE` file, so `make legal-info` completes |
 | `kernel` | `nanopi6_linux_defconfig`: NBD built in (virtual media), USB UAC2 gadget |
 | `scripts/sd-fuse` | builds the `v4l2loopback` module (operator-camera passthrough) |
 | `external` | rockit links `librkAlgoDis.so` |
