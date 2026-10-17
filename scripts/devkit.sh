@@ -97,8 +97,9 @@ cmd_firmware_image() {
 cmd_firmware() {
     have_image "$FIRMWARE_IMAGE" || cmd_firmware_image
     mkdir -p "$SDK" "$CACHE/dl" "$CACHE/ccache"
-    # --privileged: the SDK packs SD/eMMC images through loop devices.
-    docker run --rm "${TTY[@]}" --privileged \
+    # --privileged and the host /dev: the SDK packs SD/eMMC images through loop
+    # devices, and only the host creates the loopNpM partition nodes.
+    docker run --rm "${TTY[@]}" --privileged -v /dev:/dev \
         -e RUSTKVM_SDK_DIR=/sdk -e BR2_DL_DIR=/cache/dl \
         -e RUSTKVM_ROOT_PASSWORD -e FW_VERSION -e BOARD_MK -e REPO_DEPTH \
         -v "$ROOT:/work" -v "$SDK:/sdk" -v "$CACHE:/cache" \

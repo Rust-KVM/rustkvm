@@ -10,9 +10,11 @@ checks it out at the commits pinned here and applies the rest.
 | `patches/<project>/NNNN-*.patch` | Changes to SDK projects, applied in order with `git apply` |
 | `rootfs-overlay/` | Files copied into the root filesystem (init script, network config) |
 
-The build also adds two things that are not in the tree: the `rustkvm_app` binary
-(installed to `/userdata/rustkvm/bin/`) and `/etc/rustkvm-release` with the firmware
-version.
+The build also adds two things that are not in the tree: the `rustkvm_app` binary and
+`/etc/rustkvm-release` with the firmware version. The binary ships in the rootfs as
+`/usr/lib/rustkvm/rustkvm_app`, because `/userdata` is a separate partition that starts
+empty and is mounted over the rootfs directory; `S99rustkvm` copies it to
+`/userdata/rustkvm/bin/` on first boot and whenever userdata has been wiped.
 
 ## What the patches do
 
