@@ -235,8 +235,8 @@ trunk serve                  # local dev server on :9000 (Trunk.toml)
 Only Docker is needed on a host; full guide in [`docs/building.md`](docs/building.md), shipping flow in [`docs/firmware-release.md`](docs/firmware-release.md).
 
 ```
-ci/buildkit/Dockerfile       # RK3588 cross gcc + sysroot image (Buildroot host dir as named context)
-ci/devkit/Dockerfile         # buildkit + pinned nightly/stable Rust + trunk; RUSTUP_TOOLCHAIN overrides `stage2`
+ci/buildkit/Dockerfile       # RK3588 cross gcc + sysroot image (Buildroot host dir as named context, docs/target binaries pruned)
+ci/devkit/Dockerfile         # buildkit + one pinned nightly (aarch64 + wasm32) + trunk; RUSTUP_TOOLCHAIN overrides `stage2`
 ci/firmware/Dockerfile       # Ubuntu 22.04 SDK host + repo; runs --privileged (loop devices)
 .devcontainer/               # VS Code devcontainer on the devkit image
 scripts/devkit.sh            # buildkit | image | shell | run CMD | firmware-image | firmware STEPS

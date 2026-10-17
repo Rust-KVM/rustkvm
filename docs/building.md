@@ -15,8 +15,7 @@ just pin those tools.
 
 | What | Version | Where it is pinned |
 | --- | --- | --- |
-| Rust for the device binary | `nightly-2026-06-14` (rustc 1.98.0-nightly) | `ci/devkit/Dockerfile`, `release.yml` |
-| Rust for the frontend | `1.96.0` + `wasm32-unknown-unknown` | `ci/devkit/Dockerfile` |
+| Rust (device binary and frontend) | `nightly-2026-06-14` (rustc 1.98.0-nightly) with `aarch64` and `wasm32` targets | `ci/devkit/Dockerfile`, `release.yml` |
 | Trunk | `0.21.14` | `ci/devkit/Dockerfile`, `release.yml`, `web.yml` |
 | Cross gcc + sysroot | Buildroot host dir of the firmware below | `rk3588-buildkit` image |
 | FriendlyElec Buildroot SDK | exact commit per project | `os/rk3588/manifest.xml` |
@@ -30,20 +29,26 @@ so nobody else needs to build rustc.
 ## 1. Application
 
 ```bash
-scripts/devkit.sh image                   # once: builds rustkvm/devkit:local
 scripts/devkit.sh run scripts/build-app.sh
 ```
 
-`out/app/` then holds `rustkvm_app-aarch64-unknown-linux-gnu`, its `.sha256` (the
-same pair the OTA updater installs) and `BUILD_INFO`.
+The first run pulls the published devkit image,
+`ghcr.io/rust-kvm/rustkvm-devkit:nightly-2026-06-14` (about 3 GB unpacked). `out/app/` then
+holds `rustkvm_app-aarch64-unknown-linux-gnu`, its `.sha256` (the same pair the OTA
+updater installs) and `BUILD_INFO`.
 
-`scripts/devkit.sh image` needs the `rk3588-buildkit` image (cross gcc + sysroot). It is
-built from, in order of preference:
+The devkit image sits on `ghcr.io/rust-kvm/rk3588-buildkit:20250527`, the cross gcc and
+sysroot extracted from the firmware build with documentation and target executables
+removed. To build both images yourself instead of pulling them:
 
-1. `RUSTKVM_BUILDKIT_IMAGE` pointing at a registry copy, for example
-   `ghcr.io/rust-kvm/rk3588-buildkit:20250527` (pulled automatically);
-2. `/opt/rk3588-buildkit` on this host;
-3. a firmware build: `scripts/devkit.sh buildkit ~/rustkvm-sdk/rk3588/buildroot/output/rockchip_rk3588/host`.
+```bash
+scripts/devkit.sh buildkit [HOST_DIR]   # default /opt/rk3588-buildkit, or
+                                        # ~/rustkvm-sdk/rk3588/buildroot/output/rockchip_rk3588/host
+scripts/devkit.sh image
+```
+
+Maintainers publish new images with `scripts/devkit.sh push` after bumping the tags in
+`scripts/devkit.sh`, `ci/devkit/Dockerfile` and `.devcontainer/devcontainer.json`.
 
 Day-to-day commands inside the devkit:
 

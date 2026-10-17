@@ -4,15 +4,17 @@
 #   scripts/devkit.sh buildkit [DIR]   build the RK3588 toolchain image from a Buildroot
 #                                      host dir (default /opt/rk3588-buildkit)
 #   scripts/devkit.sh image [--if-missing]
-#                                      build the devkit image (frontend + device binary)
+#                                      build the devkit image (frontend + device binary);
+#                                      --if-missing pulls the published one first
+#   scripts/devkit.sh push             publish the buildkit and devkit images (maintainers)
 #   scripts/devkit.sh shell            interactive shell in the devkit, repo at /work
 #   scripts/devkit.sh run CMD...       run CMD in the devkit, e.g. scripts/build-app.sh
 #   scripts/devkit.sh firmware-image   build the Buildroot SDK host image
 #   scripts/devkit.sh firmware ARGS... run scripts/build-firmware.sh ARGS in that image
 #
-# Images (override to use a registry copy instead of building locally):
-#   RUSTKVM_BUILDKIT_IMAGE  default rustkvm/rk3588-buildkit:local
-#   RUSTKVM_DEVKIT_IMAGE    default rustkvm/devkit:local
+# Images (published copies are pulled; override to use your own):
+#   RUSTKVM_BUILDKIT_IMAGE  default ghcr.io/rust-kvm/rk3588-buildkit:20250527
+#   RUSTKVM_DEVKIT_IMAGE    default ghcr.io/rust-kvm/rustkvm-devkit:nightly-2026-06-14
 #   RUSTKVM_FIRMWARE_IMAGE  default rustkvm/firmware-builder:local
 # Caches (cargo registry, trunk tools, Buildroot downloads, ccache):
 #   RUSTKVM_CACHE_DIR       default ~/.cache/rustkvm
@@ -20,8 +22,9 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-BUILDKIT_IMAGE=${RUSTKVM_BUILDKIT_IMAGE:-rustkvm/rk3588-buildkit:local}
-DEVKIT_IMAGE=${RUSTKVM_DEVKIT_IMAGE:-rustkvm/devkit:local}
+# Bump the tags together with the SDK snapshot / RUST_NIGHTLY in ci/devkit/Dockerfile.
+BUILDKIT_IMAGE=${RUSTKVM_BUILDKIT_IMAGE:-ghcr.io/rust-kvm/rk3588-buildkit:20250527}
+DEVKIT_IMAGE=${RUSTKVM_DEVKIT_IMAGE:-ghcr.io/rust-kvm/rustkvm-devkit:nightly-2026-06-14}
 FIRMWARE_IMAGE=${RUSTKVM_FIRMWARE_IMAGE:-rustkvm/firmware-builder:local}
 CACHE=${RUSTKVM_CACHE_DIR:-$HOME/.cache/rustkvm}
 SDK=${RUSTKVM_SDK_DIR:-$HOME/rustkvm-sdk/rk3588}
@@ -55,8 +58,10 @@ cmd_buildkit() {
 }
 
 cmd_image() {
-    if [ "${1:-}" = "--if-missing" ] && have_image "$DEVKIT_IMAGE"; then
-        return 0
+    if [ "${1:-}" = "--if-missing" ]; then
+        have_image "$DEVKIT_IMAGE" && return 0
+        docker pull "$DEVKIT_IMAGE" && return 0
+        echo "==> $DEVKIT_IMAGE not available; building it locally"
     fi
     if ! have_image "$BUILDKIT_IMAGE" && ! docker pull "$BUILDKIT_IMAGE" 2>/dev/null; then
         echo "==> $BUILDKIT_IMAGE not found; building it from /opt/rk3588-buildkit"
@@ -75,6 +80,13 @@ devkit_run() {
         -v "$ROOT:/work" -v "$CACHE:/cache" -w /work \
         --network host "${RUN_PROXY[@]}" \
         "$DEVKIT_IMAGE" "$@"
+}
+
+cmd_push() {
+    have_image "$BUILDKIT_IMAGE" || cmd_buildkit
+    have_image "$DEVKIT_IMAGE" || cmd_image
+    docker push "$BUILDKIT_IMAGE"
+    docker push "$DEVKIT_IMAGE"
 }
 
 cmd_firmware_image() {
@@ -98,9 +110,10 @@ cmd_firmware() {
 case "${1:-}" in
     buildkit) shift; cmd_buildkit "$@" ;;
     image) shift; cmd_image "$@" ;;
+    push) cmd_push ;;
     shell) devkit_run bash ;;
     run) shift; devkit_run "$@" ;;
     firmware-image) cmd_firmware_image ;;
     firmware) shift; cmd_firmware "$@" ;;
-    *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
