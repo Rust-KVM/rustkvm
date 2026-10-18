@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::i18n::{tr, use_i18n};
 use crate::rpc::RpcClient;
+use crate::settings_nav::SettingsNav;
 use crate::util::{Rpc, as_string, fire, fire_status, json_str, json_string_list};
 
 /// Extensions the device knows how to mount (`setActiveExtension`).
@@ -16,7 +17,7 @@ const EXTENSIONS: &[(&str, &str, &str)] = &[
 ];
 
 #[component]
-pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
+pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc, nav: SettingsNav) -> impl IntoView {
     let i = use_i18n();
     let dc_enabled = RwSignal::new(false);
     let dc_restore = RwSignal::new(String::new());
@@ -289,7 +290,7 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
     };
 
     view! {
-        <section>
+        <section class:off=nav.off("power")>
             <h3>{move || i.t("电源", "Power")}</h3>
             <Show when=move || power_ext.get() == "dc-power">
                 <label class="toggle">
@@ -335,7 +336,7 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             </Show>
         </section>
 
-        <section>
+        <section class:off=nav.off("cloud")>
             <h3>{move || i.t("云服务", "Cloud")}</h3>
             <dl class="kv">
                 <dt>{move || i.t("状态", "Status")}</dt>
@@ -379,7 +380,7 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             <div class="muted">{move || cloud_msg.get()}</div>
         </section>
 
-        <section>
+        <section class:off=nav.off("tailscale")>
             <h3>"Tailscale"</h3>
             <label class="field">
                 <span>{move || i.t("控制服务器", "Control server")}</span>
@@ -395,7 +396,7 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             <div class="muted">{move || ts_msg.get()}</div>
         </section>
 
-        <section>
+        <section class:off=nav.off("extension")>
             <h3>{move || i.t("扩展", "Extension")}</h3>
             <label class="field">
                 <span>{move || i.t("硬件扩展", "Hardware extension")}</span>
@@ -419,7 +420,7 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             <div class="muted">{move || ext_msg.get()}</div>
         </section>
 
-        <section>
+        <section class:off=nav.off("developer")>
             <h3>{move || i.t("开发者", "Developer")}</h3>
             <label class="toggle">
                 <input type="checkbox" prop:checked=move || dev_mode.get() on:change=toggle_dev />
@@ -435,7 +436,7 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             </label>
         </section>
 
-        <section>
+        <section class:off=nav.off("https")>
             <h3>"HTTPS"</h3>
             <label class="field">
                 <span>{move || i.t("证书", "Certificate")}</span>
@@ -463,7 +464,7 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             <div class="muted">{move || tls_msg.get()}</div>
         </section>
 
-        <section>
+        <section class:off=nav.off("serial")>
             <h3>{move || i.t("串口控制台", "Serial console")}</h3>
             // `sendCustomCommand` only logs on the device until a serial
             // adapter is supported, so don't offer a Send button that does
@@ -483,13 +484,13 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             </Show>
         </section>
 
-        <section>
+        <section class:off=nav.off("timezone")>
             <h3>{move || i.t("时区", "Time zone")}</h3>
             <div>{move || or_dash(timezone.get())}</div>
             <div class="hint">{move || i.t("暂不支持修改设备时区。", "Changing the device time zone is not supported yet.")}</div>
         </section>
 
-        <section>
+        <section class:off=nav.off("macros")>
             <h3>{move || i.t("键盘宏", "Keyboard macros")}</h3>
             <Show when=move || macros.get().is_empty()>
                 <div class="muted">{move || i.t("还没有宏。", "No macros yet.")}</div>
@@ -546,7 +547,7 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             <div class="muted">{move || macro_msg.get()}</div>
         </section>
 
-        <section>
+        <section class:off=nav.off("danger")>
             <h3>{move || i.t("危险操作", "Danger zone")}</h3>
             <div class="row">
                 <button

@@ -12,6 +12,7 @@ use crate::i18n::{I18n, tr, use_i18n};
 use crate::net::peer::Peer;
 use crate::net::{rest, upload};
 use crate::rpc::RpcClient;
+use crate::settings_nav::{SettingsHeading, SettingsNav, SettingsSidebar};
 use crate::util::{Rpc, as_string, fire, fire_status, json_str};
 
 /// Values are the codes `getKeyboardLayout` returns and `setKeyboardLayout`
@@ -500,36 +501,49 @@ pub fn Settings(
         }
     };
 
-    let drawer_ref = NodeRef::<leptos::html::Aside>::new();
-    // Take focus when the sheet opens so Esc and Tab stay in it.
+    let nav = SettingsNav::new();
+    let panel_ref = NodeRef::<leptos::html::Div>::new();
+    // Take focus when the dialog opens so Esc and Tab stay in it.
     Effect::new(move |_| {
-        if let Some(el) = drawer_ref.get() {
+        if let Some(el) = panel_ref.get() {
             let _ = el.focus();
         }
     });
 
     view! {
         <Show when=move || open.get()>
-            <div class="drawer-scrim" on:click=move |_| open.set(false)></div>
-            <aside
-                class="drawer"
+            <div class="settings-scrim"></div>
+            // Clicks on the dialog's backdrop (outside the panel) close it.
+            <div
+                class="settings-dialog"
+                on:click=move |ev: web_sys::MouseEvent| {
+                    if ev.target() == ev.current_target() {
+                        open.set(false);
+                    }
+                }
+            >
+            <div
+                class="settings"
+                role="dialog"
+                aria-modal="true"
+                aria-label=move || i.t("设置", "Settings")
                 data-modal="1"
                 tabindex="-1"
-                node_ref=drawer_ref
+                node_ref=panel_ref
                 on:keydown=move |ev: web_sys::KeyboardEvent| {
                     if ev.key() == "Escape" {
                         open.set(false);
                     }
                 }
             >
-                <header>
-                    <h2>{move || i.t("设置", "Settings")}</h2>
-                    <button class="close" title=move || i.t("关闭", "Close") aria-label=move || i.t("关闭", "Close") on:click=move |_| open.set(false)>
-                        <crate::ui::Icon name=crate::ui::IconName::Close/>
-                    </button>
-                </header>
+                <SettingsSidebar nav=nav i=i/>
+                <div class="set-body">
+                <button class="close" title=move || i.t("关闭", "Close") aria-label=move || i.t("关闭", "Close") on:click=move |_| open.set(false)>
+                    <crate::ui::Icon name=crate::ui::IconName::Close/>
+                </button>
+                <SettingsHeading nav=nav i=i/>
 
-                <section>
+                <section class:off=nav.off("codec")>
                     <h3>{move || i.t("视频编码", "Video codec")}</h3>
                     <div class="row">
                         {codec_btn("auto", "自动", "Auto")}
@@ -538,7 +552,7 @@ pub fn Settings(
                     </div>
                 </section>
 
-                <section>
+                <section class:off=nav.off("rotation")>
                     <h3>{move || i.t("屏幕旋转", "Display rotation")}</h3>
                     <div class="row">
                         {rotation_btn("0")}
@@ -548,7 +562,7 @@ pub fn Settings(
                     </div>
                 </section>
 
-                <section>
+                <section class:off=nav.off("layout")>
                     <h3>{move || i.t("键盘布局", "Keyboard layout")}</h3>
                     <select on:change=set_layout>
                         {KEYBOARD_LAYOUTS
@@ -564,7 +578,7 @@ pub fn Settings(
                     </select>
                 </section>
 
-                <section>
+                <section class:off=nav.off("brightness")>
                     <h3>{move || i.t("设备屏幕亮度", "Device screen brightness")}</h3>
                     <div class="row">
                         <input
@@ -579,7 +593,7 @@ pub fn Settings(
                     <div class="hint">{move || i.t("仅在设备连接了屏幕时生效。", "Only applies when a screen is attached to the device.")}</div>
                 </section>
 
-                <section>
+                <section class:off=nav.off("password")>
                     <h3>{move || i.t("密码", "Password")}</h3>
                     <Show when=move || !no_password.get()>
                         <input
@@ -613,7 +627,7 @@ pub fn Settings(
                     <div class="muted">{move || pw_msg.get()}</div>
                 </section>
 
-                <section>
+                <section class:off=nav.off("media")>
                     <h3>{move || i.t("虚拟媒体", "Virtual media")}</h3>
                     <div class="muted">
                         {move || {
@@ -654,7 +668,7 @@ pub fn Settings(
                     <div class="muted">{move || upload_state.get()}</div>
                 </section>
 
-                <section>
+                <section class:off=nav.off("network")>
                     <h3>{move || i.t("网络", "Network")}</h3>
                     <dl class="kv">
                         {move || {
@@ -667,7 +681,7 @@ pub fn Settings(
                     <button on:click=renew_dhcp>{move || i.t("重新获取 DHCP 地址", "Renew DHCP lease")}</button>
                 </section>
 
-                <section>
+                <section class:off=nav.off("firmware")>
                     <h3>{move || i.t("固件更新", "Firmware update")}</h3>
                     <div class="muted">{move || update_state.get()}</div>
                     <div class="row">
@@ -682,7 +696,7 @@ pub fn Settings(
                     </div>
                 </section>
 
-                <section>
+                <section class:off=nav.off("usb")>
                     <h3>{move || i.t("USB 设备", "USB devices")}</h3>
                     <label class="toggle">
                         <input
@@ -726,7 +740,7 @@ pub fn Settings(
                     </label>
                 </section>
 
-                <section>
+                <section class:off=nav.off("edid")>
                     <h3>"EDID"</h3>
                     <label class="field">
                         <span>{move || i.t("EDID（十六进制）", "EDID (hex)")}</span>
@@ -742,7 +756,7 @@ pub fn Settings(
                     <div class="muted">{move || edid_msg.get()}</div>
                 </section>
 
-                <section>
+                <section class:off=nav.off("wol")>
                     <h3>{move || i.t("网络唤醒", "Wake-on-LAN")}</h3>
                     <label class="field">
                         <span>{move || i.t("要唤醒的电脑的 MAC 地址", "MAC address of the computer to wake")}</span>
@@ -757,7 +771,7 @@ pub fn Settings(
                     <div class="muted">{move || wol_msg.get()}</div>
                 </section>
 
-                <section>
+                <section class:off=nav.off("ip")>
                     <h3>{move || i.t("IP 地址", "IP address")}</h3>
                     <label class="toggle">
                         <input
@@ -800,7 +814,7 @@ pub fn Settings(
                     <div class="muted">{move || net_msg.get()}</div>
                 </section>
 
-                <section>
+                <section class:off=nav.off("features")>
                     <h3>{move || i.t("功能", "Features")}</h3>
                     <label class="toggle">
                         <input
@@ -828,7 +842,7 @@ pub fn Settings(
                     </label>
                 </section>
 
-                <section>
+                <section class:off=nav.off("log")>
                     <h3>{move || i.t("日志级别", "Log level")}</h3>
                     <select on:change=set_log>
                         {["TRACE", "DEBUG", "INFO", "WARN", "ERROR"]
@@ -844,7 +858,7 @@ pub fn Settings(
                     </select>
                 </section>
 
-                <section>
+                <section class:off=nav.off("ssh")>
                     <h3>{move || i.t("SSH 访问", "SSH access")}</h3>
                     <label class="field">
                         <span>{move || i.t("授权公钥", "Authorized public key")}</span>
@@ -859,7 +873,7 @@ pub fn Settings(
                     <div class="muted">{move || ssh_msg.get()}</div>
                 </section>
 
-                <section>
+                <section class:off=nav.off("mqtt")>
                     <h3>"MQTT"</h3>
                     <label class="toggle">
                         <input
@@ -918,9 +932,9 @@ pub fn Settings(
                     <div class="muted">{move || mqtt_msg.get()}</div>
                 </section>
 
-                <crate::settings_advanced::AdvancedSettings open=open rpc=rpc />
+                <crate::settings_advanced::AdvancedSettings open=open rpc=rpc nav=nav />
 
-                <section>
+                <section class:off=nav.off("about")>
                     <h3>{move || i.t("关于", "About")}</h3>
                     <dl class="kv">
                         <dt>{move || i.t("设备 ID", "Device ID")}</dt>
@@ -933,7 +947,9 @@ pub fn Settings(
                         </Show>
                     </dl>
                 </section>
-            </aside>
+                </div>
+            </div>
+            </div>
         </Show>
     }
 }

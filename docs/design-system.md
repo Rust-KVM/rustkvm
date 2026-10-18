@@ -109,12 +109,17 @@ until the user picks one. `src/theme.rs` flips it from the sidebar.
 └──────┴─────────────────────────────────────────────────────┘
 ```
 
-- **Sidebar** (`shell/sidebar.rs`). Collapsed: 52px icon rail. Expanded:
-  256px, and it pushes the content as Claude Desktop does (`.app.sb-open`
-  widens the first grid column), so the titlebar chip and actions are never
-  covered. The column changes in one step with no width transition, so the
-  video rescales once. Below 720px it floats over the content with a shadow
-  and a transparent scrim closes it. Top row: logo (click to expand), brand,
+- **Sidebar** (`shell/sidebar.rs`). Collapsed: 52px icon rail.
+  - *Peek*: hovering the rail (120ms in, 300ms out) shows the 256px sidebar
+    floating over the content with a shadow; leaving hides it. It stays while
+    keyboard focus (`:focus-visible`) is inside, and Tab into the rail opens
+    it.
+  - *Pinned*: clicking the logo or the sidebar button keeps it open and
+    pushes the content as Claude Desktop does (`.app.sb-open` widens the
+    first grid column), so the titlebar chip and actions are never covered.
+    The column changes in one step, so the video rescales once. Below 720px
+    a pinned sidebar floats and a transparent scrim closes it.
+  - `.expanded` (pinned or peeking) shows labels; `.open` is pinned only. Top row: logo (click to expand), brand,
   collapse button. Nav rows (36px, radius 8, icon + label): Remote desktop,
   Device terminal, Settings. Footer: preferences, reboot, connection status
   (dot + label + host). Rows are disabled until connected.
@@ -141,10 +146,19 @@ until the user picks one. `src/theme.rs` flips it from the sidebar.
   a single `minmax(0, 1fr)` track: a hidden grid item frees its track, so
   keeping the two-column template would auto-place `.main` into the 0px
   column and collapse the whole stage into the top-left corner.
-- **Sheets over the shell**: scrims start right of the 52px rail and the
-  sidebar sits above them (z 45), so theme, language and nav work on the
-  first click while settings is open.
-- **Sheets and dialogs** (settings, OCR) sit above everything on a scrim.
+- **Settings is a modal dialog** (`settings.rs`, `settings_nav.rs`), as in
+  Claude Desktop: centered panel (max 960×720, radius 16) over a scrim that
+  covers the whole app, sidebar included (z 50/51). Left column (240px,
+  sidebar color): search box, then the pages (视频, 键盘与鼠标, 虚拟媒体,
+  网络, 访问与安全, 硬件, 系统). Right column: page title and that page's
+  sections; close button top right. Esc, the close button and a click on
+  the backdrop close it. Search matches section and page titles and lists
+  every hit across pages. Sections stay mounted and are hidden with
+  `section.off`; a new section is added to `SECTIONS` in `settings_nav.rs`.
+  Below 720px the dialog is full screen and the pages become a horizontal
+  strip.
+- **Other dialogs** (OCR) sit above the content on a scrim that starts right
+  of the rail.
 
 Remote-desktop titlebar actions, in order: Num/Caps/Scroll LED badges |
 mouse mode (absolute/relative) · quality − % + · audio | Ctrl+Alt+Del · OCR |
@@ -157,7 +171,7 @@ While connected every key goes to the host (Tab, Esc and shortcuts
 included), except when the page owns it (`hid::ui_owns_keyboard`):
 
 - a text field, select, the terminal, or anything inside `[data-modal]`
-  (settings sheet, OCR dialog);
+  (settings dialog, OCR dialog);
 - chrome (`[data-chrome]`: sidebar, titlebar) focused with the keyboard
   (`:focus-visible`). A button that was only clicked keeps focus but not
   `:focus-visible`, so typing after a click still reaches the host.
@@ -227,7 +241,7 @@ Rules:
 - **Phase 1** (this spec's first PR): tokens, base components, the shell
   (sidebar, titlebar, stage, gates, toast, focus mode), zh/en for the shell,
   token restyle of settings sheet, terminal and OCR dialog.
-- **Phase 2**: settings as a Claude-style page (section list on the left,
-  content on the right) built from `Field`, `Button` and a `Switch` component.
-  (zh/en for all settings landed in phase 1.)
+- **Phase 2**: settings rows in the Claude style (label and hint left,
+  control right, hairline between rows) built from `Field`, `Button` and a
+  `Switch` component. (zh/en and the settings dialog landed in phase 1.)
 - **Phase 3**: virtual media page, terminal and OCR polish, remaining copy.

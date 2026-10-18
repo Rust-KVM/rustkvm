@@ -6,6 +6,7 @@ mod ocr;
 mod rpc;
 mod settings;
 mod settings_advanced;
+mod settings_nav;
 mod shell;
 mod terminal;
 mod theme;

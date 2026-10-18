@@ -1,9 +1,10 @@
 /* App shell: Claude Desktop layout. A 52px sidebar rail on the left, a 48px
    titlebar over the content, and the video stage filling the rest. The
-   expanded sidebar (256px) pushes the content, as in Claude Desktop, so the
-   titlebar chip and actions are never covered. The column switches in one
-   step (no width transition), so the video rescales once, not every frame.
-   Below 720px it floats over the content instead. */
+   pinned sidebar (256px, logo click) pushes the content, as in Claude
+   Desktop, so the titlebar chip and actions are never covered; the column
+   switches in one step, so the video rescales once, not every frame.
+   Hovering the rail peeks the sidebar over the content without moving it.
+   Below 720px a pinned sidebar floats too. */
 
 .app { position: fixed; inset: 0; display: grid; grid-template-columns: var(--sidebar-rail) minmax(0, 1fr); }
 /* The sidebar leaves the grid entirely, so main must be the only track. */
@@ -15,11 +16,13 @@
    clickable while settings is open. */
 .sidebar { position: relative; z-index: 45; min-width: 0; }
 .app.focus .sidebar { display: none; }
-.app.focus .drawer-scrim, .app.focus .scrim { left: 0; }
+.app.focus .scrim { left: 0; }
 .sb-panel { position: absolute; inset: 0 auto 0 0; width: var(--sidebar-rail); display: flex; flex-direction: column;
   padding: 0 var(--space-2) var(--space-3); background: var(--bg-sidebar);
   border-right: var(--hairline) solid var(--border-secondary); overflow: hidden; }
-.sidebar.open .sb-panel { width: var(--sidebar-open); }
+.sidebar.expanded .sb-panel { width: var(--sidebar-open); }
+/* Hover peek: floats over the content and never moves the grid. */
+.sidebar.peek .sb-panel { box-shadow: var(--shadow-lg); transition: width .18s var(--ease), box-shadow .18s var(--ease); }
 .sb-scrim { display: none; }
 @media (max-width: 720px) {
   .app.sb-open { grid-template-columns: var(--sidebar-rail) minmax(0, 1fr); }
@@ -63,10 +66,10 @@
   transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
 .seg button:hover { color: var(--text-primary); }
 .seg button.on { background: var(--bg-primary); color: var(--text-primary); font-weight: 500; }
-.sidebar.open .sb-rail-only { display: none; }
-.sidebar:not(.open) .sb-label { display: none; }
-.sidebar:not(.open) .sb-group { visibility: hidden; height: 0; margin: var(--space-2) 0 0; }
-.sidebar:not(.open) .sb-top .icon-btn { display: none; }
+.sidebar.expanded .sb-rail-only { display: none; }
+.sidebar:not(.expanded) .sb-label { display: none; }
+.sidebar:not(.expanded) .sb-group { visibility: hidden; height: 0; margin: var(--space-2) 0 0; }
+.sidebar:not(.expanded) .sb-top .icon-btn { display: none; }
 
 /* Main column */
 .main { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }

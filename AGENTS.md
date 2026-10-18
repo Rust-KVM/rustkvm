@@ -203,7 +203,8 @@ main.rs                  # WASM entry: panic hook + tracing-wasm + mount Leptos 
 ├── hid/                 # keymap.rs (re-exports rkvm_proto::keymap) + mod.rs (keyboard/mouse → hidrpc via rkvm-proto)
 ├── terminal.rs          # vt100 terminal view
 ├── ocr.rs               # screen OCR via Tesseract.js (JS interop, CDN-loaded)
-├── settings.rs / settings_advanced.rs  # settings drawer
+├── settings.rs / settings_advanced.rs  # settings dialog sections
+├── settings_nav.rs                      # settings dialog pages, search
 └── util.rs
 ```
 

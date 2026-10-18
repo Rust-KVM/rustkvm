@@ -1,6 +1,4 @@
-/* Overlays that phase 1 restyles onto the tokens: the settings sheet, the
-   device terminal and the OCR dialog. Phase 2 replaces the sheet with a
-   Claude-style settings page. */
+/* Overlays: the settings dialog, the device terminal and the OCR dialog. */
 
 .scrim { position: fixed; inset: 0 0 0 var(--sidebar-rail); z-index: 40; background: var(--bg-scrim); animation: fade .18s var(--ease); }
 .dialog { position: fixed; inset: 0; z-index: 41; display: grid; place-items: center; padding: var(--space-4); }
@@ -10,54 +8,84 @@
   resize: vertical; }
 .dialog textarea:focus { outline: none; box-shadow: var(--focus-ring); }
 
-/* Settings sheet */
-.drawer-scrim { position: fixed; inset: 0 0 0 var(--sidebar-rail); z-index: 40; background: var(--bg-scrim); animation: fade .18s var(--ease); }
-.drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 41; width: min(420px, 100vw); overflow-y: auto;
-  padding: 0 var(--space-6) var(--space-8); background: var(--bg-primary);
-  border-left: var(--hairline) solid var(--border-secondary); box-shadow: var(--shadow-lg);
-  animation: slideInRight .22s var(--ease); }
-.drawer header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between;
-  height: var(--titlebar-h); margin: 0 calc(-1 * var(--space-6)); padding: 0 var(--space-3) 0 var(--space-6);
-  background: var(--bg-primary); border-bottom: var(--hairline) solid var(--border-tertiary); }
-.drawer h2 { margin: 0; font-size: var(--text-md); font-weight: 600; }
-.drawer h3 { margin: 0 0 var(--space-3); font-size: var(--text-sm); font-weight: 600; color: var(--text-primary); }
-.drawer section { padding: var(--space-5) 0; border-top: var(--hairline) solid var(--border-tertiary); }
-.drawer header + section, .drawer section:first-of-type { border-top: 0; }
-.drawer .close { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0;
-  border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 14px; }
-.drawer .close:hover { background: var(--bg-hover); color: var(--text-primary); }
-.drawer .row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin: var(--space-2) 0; }
-.drawer button:not(.close) { height: 32px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius-sm);
+/* Settings dialog (Claude Desktop): a centered panel over a scrim that also
+   covers the sidebar. Left column: search and page list; right column: the
+   page's sections, close button top right. Full screen below 720px. */
+.settings-scrim { position: fixed; inset: 0; z-index: 50; background: var(--bg-scrim); animation: fade .18s var(--ease); }
+.settings-dialog { position: fixed; inset: 0; z-index: 51; display: grid; place-items: center; padding: var(--space-6); }
+.settings { display: grid; grid-template-columns: 240px minmax(0, 1fr); width: min(960px, 100%); height: min(720px, 100%);
+  overflow: hidden; background: var(--bg-primary); border-radius: var(--radius-2xl); box-shadow: var(--shadow-lg);
+  animation: pop .2s var(--ease); }
+.settings:focus { outline: none; }
+.set-nav { display: flex; flex-direction: column; gap: 2px; padding: var(--space-4) var(--space-3); overflow-y: auto;
+  background: var(--bg-sidebar); border-right: var(--hairline) solid var(--border-tertiary); }
+.set-search { display: flex; align-items: center; gap: var(--space-2); height: 36px; padding: 0 var(--space-3);
+  margin-bottom: var(--space-2); border-radius: var(--radius-md); background: var(--bg-primary);
+  box-shadow: inset 0 0 0 var(--hairline) var(--border-secondary); color: var(--text-tertiary); }
+.set-search:focus-within { box-shadow: var(--focus-ring); }
+.set-search input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: transparent;
+  color: var(--text-primary); font-size: var(--text-sm); outline: none; }
+.set-group { margin: var(--space-3) var(--space-2) var(--space-1); font-size: var(--text-xs); color: var(--text-tertiary); }
+.set-item { display: flex; align-items: center; gap: var(--space-3); flex: none; height: 36px; padding: 0 var(--space-2);
+  border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-secondary);
+  font-size: var(--text-sm); text-align: left; white-space: nowrap; cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
+.set-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.set-item.on { background: var(--bg-selected); color: var(--text-primary); font-weight: 500; }
+.set-body { position: relative; overflow-y: auto; padding: var(--space-6) var(--space-8) var(--space-8); }
+.set-title { margin: var(--space-1) 0 var(--space-2); font-size: var(--text-md); font-weight: 600; }
+.set-empty { color: var(--text-tertiary); font-size: var(--text-sm); }
+.settings .close { position: absolute; top: var(--space-4); right: var(--space-4); }
+.settings h3 { margin: 0 0 var(--space-3); font-size: var(--text-sm); font-weight: 600; color: var(--text-primary); }
+.settings section { padding: var(--space-3) 0; }
+.settings section.off { display: none; }
+.settings .close { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0;
+  border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); cursor: pointer; }
+.settings .close:hover { background: var(--bg-hover); color: var(--text-primary); }
+@media (max-width: 720px) {
+  .settings-dialog { padding: 0; }
+  .settings { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); width: 100%; height: 100%;
+    border-radius: 0; }
+  .set-nav { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; padding: var(--space-2);
+    padding-right: 52px; border-right: 0; border-bottom: var(--hairline) solid var(--border-tertiary); }
+  .set-search { flex: none; width: 150px; margin: 0; }
+  .set-search input { width: 100%; }
+  .set-group { display: none; }
+  .set-body { padding: var(--space-4); }
+  .settings .close { position: fixed; top: var(--space-2); right: var(--space-2); z-index: 1; background: var(--bg-sidebar); }
+}
+.settings .row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin: var(--space-2) 0; }
+.settings .set-body button:not(.close) { height: 32px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius-sm);
   background: transparent; color: var(--text-primary); font-size: var(--text-xs); font-weight: 600; cursor: pointer;
   box-shadow: inset 0 0 0 var(--hairline) var(--border-primary);
   transition: background var(--dur) var(--ease), transform var(--dur) var(--ease); }
-.drawer button:not(.close):not(:disabled):hover { background: var(--bg-hover); }
-.drawer button:not(.close):not(:disabled):active { transform: scale(.98); }
-.drawer button:disabled { opacity: .5; cursor: default; }
-.drawer button.active { background: var(--bg-inverse); color: var(--text-inverse); box-shadow: none; }
-.drawer button.active:hover { background: var(--bg-inverse); opacity: .9; }
-.drawer button.tb-danger { color: var(--text-danger-strong); box-shadow: inset 0 0 0 var(--hairline) var(--border-danger); }
-.drawer button.tb-danger:not(:disabled):hover { background: var(--bg-danger-soft); }
-.drawer select, .drawer input[type=text], .drawer input[type=password], .drawer input[type=url],
-.drawer input[type=number], .drawer textarea {
+.settings .set-body button:not(.close):not(:disabled):hover { background: var(--bg-hover); }
+.settings .set-body button:not(.close):not(:disabled):active { transform: scale(.98); }
+.settings button:disabled { opacity: .5; cursor: default; }
+.settings button.active { background: var(--bg-inverse); color: var(--text-inverse); box-shadow: none; }
+.settings button.active:hover { background: var(--bg-inverse); opacity: .9; }
+.settings button.tb-danger { color: var(--text-danger-strong); box-shadow: inset 0 0 0 var(--hairline) var(--border-danger); }
+.settings button.tb-danger:not(:disabled):hover { background: var(--bg-danger-soft); }
+.settings select, .settings input[type=text], .settings input[type=password], .settings input[type=url],
+.settings input[type=number], .settings textarea {
   display: block; width: 100%; min-height: 32px; padding: 6px var(--space-3); margin: 6px 0;
   background: var(--bg-primary); border: 1px solid var(--border-secondary); border-radius: var(--radius-md);
   font-size: var(--text-sm); transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
-.drawer textarea { font-family: var(--font-mono); font-size: var(--text-xs); resize: vertical; }
-.drawer select:focus, .drawer input:focus, .drawer textarea:focus { outline: none; border-color: var(--border-primary);
+.settings textarea { font-family: var(--font-mono); font-size: var(--text-xs); resize: vertical; }
+.settings select:focus, .settings input:focus, .settings textarea:focus { outline: none; border-color: var(--border-primary);
   box-shadow: var(--focus-ring); }
-.drawer input[type=range] { flex: 1; width: auto; accent-color: var(--border-info); margin: 0; }
-.drawer input[type=file] { font-size: var(--text-xs); }
-.drawer .field { display: block; margin: var(--space-2) 0 0; }
-.drawer .field > span { display: block; font-size: var(--text-xs); color: var(--text-secondary); font-weight: 500; }
-.drawer .hint { color: var(--text-tertiary); font-size: var(--text-xs); line-height: var(--lh-xs); margin: 2px 0 6px; }
-.drawer .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px var(--space-4); margin: 0 0 var(--space-2);
+.settings input[type=range] { flex: 1; width: auto; accent-color: var(--border-info); margin: 0; }
+.settings input[type=file] { font-size: var(--text-xs); }
+.settings .field { display: block; margin: var(--space-2) 0 0; }
+.settings .field > span { display: block; font-size: var(--text-xs); color: var(--text-secondary); font-weight: 500; }
+.settings .hint { color: var(--text-tertiary); font-size: var(--text-xs); line-height: var(--lh-xs); margin: 2px 0 6px; }
+.settings .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px var(--space-4); margin: 0 0 var(--space-2);
   font-size: var(--text-xs); }
-.drawer .kv dt { color: var(--text-tertiary); }
-.drawer .kv dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.drawer .dot { margin-right: 6px; vertical-align: 0; }
-.drawer ul.plain { margin: var(--space-1) 0; padding: 0; list-style: none; font: 400 var(--text-xs) var(--font-mono); }
-.drawer ul.plain li { padding: 2px 0; overflow-wrap: anywhere; }
+.settings .kv dt { color: var(--text-tertiary); }
+.settings .kv dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.settings .dot { margin-right: 6px; vertical-align: 0; }
+.settings ul.plain { margin: var(--space-1) 0; padding: 0; list-style: none; font: 400 var(--text-xs) var(--font-mono); }
+.settings ul.plain li { padding: 2px 0; overflow-wrap: anywhere; }
 
 /* Device terminal: docked to the bottom of the stage, always dark. */
 .term { position: absolute; left: 0; right: 0; bottom: 0; z-index: 18; height: min(340px, 60%);
@@ -77,4 +105,4 @@
   box-shadow: inset 0 0 0 1px var(--accent-soft); }
 @keyframes termblink { 0%, 50% { background: var(--accent-soft); color: #141413; }
   50.01%, 100% { background: transparent; color: inherit; } }
-.term header .icon, .drawer .close .icon { width: 16px; height: 16px; }
+.term header .icon, .settings .close .icon { width: 16px; height: 16px; }
