@@ -20,6 +20,28 @@ pub fn fire(rpc: Rpc, method: &'static str, params: Value) {
     }
 }
 
+/// Like `fire`, but writes the outcome into `status` so the user can see
+/// whether the device accepted the change.
+pub fn fire_status(
+    rpc: Rpc,
+    method: &'static str,
+    params: Value,
+    status: RwSignal<String>,
+    ok: &'static str,
+) {
+    let Some(client) = rpc.get_value() else {
+        status.set("Not connected to the device".to_string());
+        return;
+    };
+    status.set("Saving…".to_string());
+    spawn_local(async move {
+        match client.call(method, params).await {
+            Ok(_) => status.set(ok.to_string()),
+            Err(e) => status.set(format!("Failed: {e}")),
+        }
+    });
+}
+
 pub fn json_str(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_str).unwrap_or_default().to_string()
 }

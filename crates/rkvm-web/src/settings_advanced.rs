@@ -1,8 +1,15 @@
+use std::rc::Rc;
+
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde_json::{Value, json};
 
-use crate::util::{Rpc, as_string, fire, json_str, json_string_list};
+use crate::rpc::RpcClient;
+use crate::util::{Rpc, as_string, fire, fire_status, json_str, json_string_list};
+
+/// Extensions the device knows how to mount (`setActiveExtension`).
+const EXTENSIONS: &[(&str, &str)] =
+    &[("", "None"), ("atx-power", "ATX power board"), ("dc-power", "DC power board")];
 
 #[component]
 pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
@@ -12,24 +19,65 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
     let atx_state = RwSignal::new(String::new());
     // "dc-power", "atx-power" or "" (no power extension mounted).
     let power_ext = RwSignal::new(String::new());
-    let cloud_state = RwSignal::new(String::new());
+    let cloud = RwSignal::new(CloudState::default());
     let cloud_api = RwSignal::new(String::new());
     let cloud_app = RwSignal::new(String::new());
+    let cloud_msg = RwSignal::new(String::new());
     let ts_url = RwSignal::new(String::new());
+    let ts_msg = RwSignal::new(String::new());
     let active_ext = RwSignal::new(String::new());
+    let ext_msg = RwSignal::new(String::new());
     let dev_mode = RwSignal::new(false);
     let dev_channel = RwSignal::new(false);
     let tls_mode = RwSignal::new(String::new());
     let tls_cert = RwSignal::new(String::new());
     let tls_key = RwSignal::new(String::new());
-    let serial_cmd = RwSignal::new(String::new());
+    let tls_msg = RwSignal::new(String::new());
     let serial_history = RwSignal::new(Vec::<String>::new());
-    let timezones = RwSignal::new(Vec::<String>::new());
     let timezone = RwSignal::new(String::new());
     let macros = RwSignal::new(Vec::<MacroItem>::new());
     let edit_id = RwSignal::new(Option::<String>::None);
     let edit_name = RwSignal::new(String::new());
     let edit_steps = RwSignal::new(String::new());
+    let macro_msg = RwSignal::new(String::new());
+
+    // Power controls depend on which extension is mounted. Asking for ATX
+    // state while it is not mounted only logs an error on the device.
+    let load_power = move |c: Rc<RpcClient>, ext: String| async move {
+        match ext.as_str() {
+            "dc-power" => {
+                if let Ok(v) = c.call("getDCPowerState", Value::Null).await {
+                    dc_enabled.set(v.get("isOn").and_then(Value::as_bool).unwrap_or(false));
+                    dc_restore.set(
+                        v.get("restoreState")
+                            .and_then(Value::as_i64)
+                            .map(|s| s.to_string())
+                            .unwrap_or_default(),
+                    );
+                    let num = |k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(0.0);
+                    dc_reading.set(format!(
+                        "{:.2} V · {:.2} A · {:.2} W",
+                        num("voltage"),
+                        num("current"),
+                        num("power")
+                    ));
+                }
+            }
+            "atx-power" => match c.call("getATXState", Value::Null).await {
+                Ok(v) => {
+                    let on = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
+                    atx_state.set(format!(
+                        "Power LED {} · HDD LED {}",
+                        if on("power") { "on" } else { "off" },
+                        if on("hdd") { "on" } else { "off" }
+                    ));
+                }
+                Err(e) => atx_state.set(format!("State unavailable: {e}")),
+            },
+            _ => {}
+        }
+        power_ext.set(ext);
+    };
 
     Effect::new(move |_| {
         if !open.get() {
@@ -37,48 +85,17 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
         }
         let Some(c) = rpc.get_value() else { return };
         spawn_local(async move {
-            // Power controls depend on which extension is mounted. Asking for
-            // ATX state while it is not mounted only logs an error on the device.
             let ext = match c.call("getActiveExtension", Value::Null).await {
                 Ok(v) => as_string(&v),
                 Err(_) => String::new(),
             };
-            match ext.as_str() {
-                "dc-power" => {
-                    if let Ok(v) = c.call("getDCPowerState", Value::Null).await {
-                        dc_enabled.set(v.get("isOn").and_then(Value::as_bool).unwrap_or(false));
-                        dc_restore.set(
-                            v.get("restoreState")
-                                .and_then(Value::as_i64)
-                                .map(|s| s.to_string())
-                                .unwrap_or_default(),
-                        );
-                        let num = |k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(0.0);
-                        dc_reading.set(format!(
-                            "{:.2} V · {:.2} A · {:.2} W",
-                            num("voltage"),
-                            num("current"),
-                            num("power")
-                        ));
-                    }
-                }
-                "atx-power" => match c.call("getATXState", Value::Null).await {
-                    Ok(v) => {
-                        let on = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
-                        atx_state.set(format!(
-                            "power LED {} · HDD LED {}",
-                            if on("power") { "on" } else { "off" },
-                            if on("hdd") { "on" } else { "off" }
-                        ));
-                    }
-                    Err(e) => atx_state.set(e.to_string()),
-                },
-                _ => {}
-            }
             active_ext.set(ext.clone());
-            power_ext.set(ext);
+            load_power(c.clone(), ext).await;
             if let Ok(v) = c.call("getCloudState", Value::Null).await {
-                cloud_state.set(compact_json(&v));
+                let state = CloudState::from_value(&v);
+                cloud_api.set(state.api_url.clone());
+                cloud_app.set(state.app_url.clone());
+                cloud.set(state);
             }
             if let Ok(v) = c.call("getTailscaleControlURL", Value::Null).await {
                 ts_url.set(as_string(&v));
@@ -95,18 +112,9 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             if let Ok(v) = c.call("getSerialCommandHistory", Value::Null).await {
                 serial_history.set(json_string_list(&v));
             }
-            let current = match c.call("getTimezone", Value::Null).await {
-                Ok(v) => as_string(&v),
-                Err(_) => String::new(),
-            };
-            if let Ok(v) = c.call("getTimezones", Value::Null).await {
-                let mut list = json_string_list(&v);
-                if !current.is_empty() && !list.contains(&current) {
-                    list.insert(0, current.clone());
-                }
-                timezones.set(list);
+            if let Ok(v) = c.call("getTimezone", Value::Null).await {
+                timezone.set(as_string(&v));
             }
-            timezone.set(current);
             if let Ok(v) = c.call("getKeyboardMacros", Value::Null).await {
                 macros.set(MacroItem::list_from(&v));
             }
@@ -126,18 +134,62 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
         move |action: &'static str| fire(rpc, "setATXPowerAction", json!({ "action": action }));
 
     let save_cloud_url = move |_| {
-        fire(rpc, "setCloudUrl", json!({ "apiUrl": cloud_api.get(), "appUrl": cloud_app.get() }))
+        let Some(c) = rpc.get_value() else { return };
+        let (api, app) = (cloud_api.get().trim().to_string(), cloud_app.get().trim().to_string());
+        cloud_msg.set("Saving…".to_string());
+        spawn_local(async move {
+            match c.call("setCloudUrl", json!({ "apiUrl": api, "appUrl": app })).await {
+                Ok(_) => {
+                    cloud_msg.set("Cloud URLs saved".to_string());
+                    if let Ok(v) = c.call("getCloudState", Value::Null).await {
+                        cloud.set(CloudState::from_value(&v));
+                    }
+                }
+                Err(e) => cloud_msg.set(format!("Failed: {e}")),
+            }
+        });
     };
     let deregister = move |_| {
-        if confirm("Deregister this device from the cloud?") {
-            fire(rpc, "deregisterDevice", Value::Null);
+        if !confirm("Remove this device from the cloud account?") {
+            return;
         }
+        let Some(c) = rpc.get_value() else { return };
+        spawn_local(async move {
+            match c.call("deregisterDevice", Value::Null).await {
+                Ok(_) => {
+                    cloud_msg.set("Device removed from the cloud".to_string());
+                    if let Ok(v) = c.call("getCloudState", Value::Null).await {
+                        cloud.set(CloudState::from_value(&v));
+                    }
+                }
+                Err(e) => cloud_msg.set(format!("Failed: {e}")),
+            }
+        });
     };
-    let save_ts =
-        move |_| fire(rpc, "setTailscaleControlURL", json!({ "controlURL": ts_url.get() }));
+    let save_ts = move |_| {
+        fire_status(
+            rpc,
+            "setTailscaleControlURL",
+            json!({ "controlURL": ts_url.get().trim() }),
+            ts_msg,
+            "Control server saved",
+        )
+    };
 
-    let save_ext =
-        move |_| fire(rpc, "setActiveExtension", json!({ "extensionId": active_ext.get() }));
+    let save_ext = move |_| {
+        let Some(c) = rpc.get_value() else { return };
+        let ext = active_ext.get();
+        ext_msg.set("Applying…".to_string());
+        spawn_local(async move {
+            match c.call("setActiveExtension", json!({ "extensionId": ext })).await {
+                Ok(_) => {
+                    ext_msg.set("Extension applied".to_string());
+                    load_power(c, ext).await;
+                }
+                Err(e) => ext_msg.set(format!("Failed: {e}")),
+            }
+        });
+    };
     let toggle_dev = move |ev: web_sys::Event| {
         let on = event_target_checked(&ev);
         dev_mode.set(on);
@@ -155,20 +207,15 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             state["certificate"] = json!(tls_cert.get());
             state["privateKey"] = json!(tls_key.get());
         }
-        fire(rpc, "setTLSState", json!({ "state": state }));
+        fire_status(
+            rpc,
+            "setTLSState",
+            json!({ "state": state }),
+            tls_msg,
+            "HTTPS settings applied",
+        );
     };
 
-    let send_serial = move |_| {
-        let cmd = serial_cmd.get();
-        if cmd.is_empty() {
-            return;
-        }
-        fire(rpc, "sendCustomCommand", json!({ "command": cmd }));
-        serial_history.update(|h| h.push(cmd.clone()));
-        let hist = serial_history.get_untracked();
-        fire(rpc, "setSerialCommandHistory", json!({ "commandHistory": hist }));
-        serial_cmd.set(String::new());
-    };
     let clear_serial = move |_| {
         serial_history.set(Vec::new());
         fire(rpc, "deleteSerialCommandHistory", Value::Null);
@@ -183,20 +230,31 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
         edit_id.set(Some(m.id.clone()));
         edit_name.set(m.name.clone());
         edit_steps.set(m.steps_text.clone());
+        macro_msg.set(String::new());
     };
-    let delete_macro = move |id: String| {
+    let delete_macro = move |id: String, name: String| {
+        if !confirm(&format!("Delete macro \"{name}\"?")) {
+            return;
+        }
         let kept: Vec<Value> = macros
             .get_untracked()
             .into_iter()
             .filter(|m| m.id != id)
             .map(|m| m.to_value())
             .collect();
-        fire(rpc, "setKeyboardMacros", json!({ "macros": kept }));
+        fire_status(
+            rpc,
+            "setKeyboardMacros",
+            json!({ "macros": kept }),
+            macro_msg,
+            "Macro deleted",
+        );
         macros.update(|list| list.retain(|m| m.id != id));
     };
     let save_macro = move |_| {
-        let name = edit_name.get();
+        let name = edit_name.get().trim().to_string();
         if name.is_empty() {
+            macro_msg.set("Give the macro a name first".to_string());
             return;
         }
         let id = edit_id.get().unwrap_or_else(|| format!("macro-{}", js_now()));
@@ -208,9 +266,17 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             list.push(item.clone());
         }
         let payload: Vec<Value> = list.iter().map(MacroItem::to_value).collect();
-        fire(rpc, "setKeyboardMacros", json!({ "macros": payload }));
+        fire_status(
+            rpc,
+            "setKeyboardMacros",
+            json!({ "macros": payload }),
+            macro_msg,
+            "Macro saved",
+        );
         macros.set(list);
-        new_macro(());
+        edit_id.set(None);
+        edit_name.set(String::new());
+        edit_steps.set(String::new());
     };
 
     view! {
@@ -219,71 +285,104 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             <Show when=move || power_ext.get() == "dc-power">
                 <label class="toggle">
                     <input type="checkbox" prop:checked=move || dc_enabled.get() on:change=toggle_dc />
-                    "DC power"
+                    "DC power output"
                 </label>
                 <div class="muted">{move || dc_reading.get()}</div>
-                <select on:change=set_restore prop:value=move || dc_restore.get()>
-                    <option value="0">"Restore: off"</option>
-                    <option value="1">"Restore: on"</option>
-                    <option value="2">"Restore: last"</option>
-                </select>
+                <label class="field">
+                    <span>"After a power loss"</span>
+                    <select on:change=set_restore prop:value=move || dc_restore.get()>
+                        <option value="0">"Stay off"</option>
+                        <option value="1">"Turn on"</option>
+                        <option value="2">"Restore last state"</option>
+                    </select>
+                </label>
             </Show>
             <Show when=move || power_ext.get() == "atx-power">
-                <div class="muted">"ATX: "{move || atx_state.get()}</div>
+                <div class="muted">{move || atx_state.get()}</div>
                 <div class="row">
-                    <button on:click=move |_| atx("power-short")>"Power"</button>
+                    <button on:click=move |_| atx("power-short")>"Power button"</button>
                     <button on:click=move |_| atx("power-long")>"Force off"</button>
                     <button on:click=move |_| atx("reset")>"Reset"</button>
                 </div>
             </Show>
             <Show when=move || power_ext.get().is_empty()>
                 <div class="muted">
-                    "No power extension active. Choose atx-power or dc-power under Extension to control host power."
+                    "No power board is active. Pick the ATX or DC power board under Extension to control host power from here."
                 </div>
             </Show>
         </section>
 
         <section>
             <h3>"Cloud"</h3>
-            <div class="muted">{move || cloud_state.get()}</div>
-            <input
-                type="text"
-                placeholder="API URL"
-                prop:value=move || cloud_api.get()
-                on:input=move |ev| cloud_api.set(event_target_value(&ev))
-            />
-            <input
-                type="text"
-                placeholder="App URL"
-                prop:value=move || cloud_app.get()
-                on:input=move |ev| cloud_app.set(event_target_value(&ev))
-            />
+            <dl class="kv">
+                <dt>"Status"</dt>
+                <dd>
+                    <span class="dot" class:on=move || cloud.get().connected></span>
+                    {move || if cloud.get().connected { "Connected" } else { "Not connected" }}
+                </dd>
+                <dt>"API"</dt>
+                <dd>{move || or_dash(cloud.get().api_url)}</dd>
+                <dt>"App"</dt>
+                <dd>{move || or_dash(cloud.get().app_url)}</dd>
+            </dl>
+            <label class="field">
+                <span>"API URL"</span>
+                <input
+                    type="url"
+                    placeholder="https://api.example.com"
+                    prop:value=move || cloud_api.get()
+                    on:input=move |ev| cloud_api.set(event_target_value(&ev))
+                />
+            </label>
+            <label class="field">
+                <span>"App URL"</span>
+                <input
+                    type="url"
+                    placeholder="https://app.example.com"
+                    prop:value=move || cloud_app.get()
+                    on:input=move |ev| cloud_app.set(event_target_value(&ev))
+                />
+            </label>
             <div class="row">
-                <button on:click=save_cloud_url>"Set cloud URLs"</button>
+                <button on:click=save_cloud_url>"Save URLs"</button>
                 <button class="tb-danger" on:click=deregister>"Deregister"</button>
             </div>
+            <div class="muted">{move || cloud_msg.get()}</div>
         </section>
 
         <section>
             <h3>"Tailscale"</h3>
-            <input
-                type="text"
-                placeholder="Control URL"
-                prop:value=move || ts_url.get()
-                on:input=move |ev| ts_url.set(event_target_value(&ev))
-            />
-            <button on:click=save_ts>"Set control URL"</button>
+            <label class="field">
+                <span>"Control server"</span>
+                <input
+                    type="url"
+                    placeholder="https://controlplane.tailscale.com"
+                    prop:value=move || ts_url.get()
+                    on:input=move |ev| ts_url.set(event_target_value(&ev))
+                />
+            </label>
+            <div class="hint">"Change only if you run your own server, such as Headscale."</div>
+            <button on:click=save_ts>"Save"</button>
+            <div class="muted">{move || ts_msg.get()}</div>
         </section>
 
         <section>
             <h3>"Extension"</h3>
-            <input
-                type="text"
-                placeholder="extension id (empty = none)"
-                prop:value=move || active_ext.get()
-                on:input=move |ev| active_ext.set(event_target_value(&ev))
-            />
-            <button on:click=save_ext>"Set extension"</button>
+            <label class="field">
+                <span>"Hardware extension"</span>
+                <select
+                    prop:value=move || active_ext.get()
+                    on:change=move |ev| active_ext.set(event_target_value(&ev))
+                >
+                    {EXTENSIONS
+                        .iter()
+                        .map(|(id, name)| view! { <option value=*id>{*name}</option> })
+                        .collect_view()}
+                </select>
+            </label>
+            <div class="hint">"A power board adds its controls to the Power section."</div>
+            <button on:click=save_ext>"Apply"</button>
+            <div class="muted">{move || ext_msg.get()}</div>
         </section>
 
         <section>
@@ -298,107 +397,114 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
                     prop:checked=move || dev_channel.get()
                     on:change=toggle_devchan
                 />
-                "Pre-release channel"
+                "Pre-release updates"
             </label>
         </section>
 
         <section>
-            <h3>"TLS"</h3>
-            <select prop:value=move || tls_mode.get() on:change=move |ev| tls_mode.set(event_target_value(&ev))>
-                <option value="">"Disabled"</option>
-                <option value="self-signed">"Self-signed"</option>
-                <option value="custom">"Custom"</option>
-            </select>
+            <h3>"HTTPS"</h3>
+            <label class="field">
+                <span>"Certificate"</span>
+                <select
+                    prop:value=move || tls_mode.get()
+                    on:change=move |ev| tls_mode.set(event_target_value(&ev))
+                >
+                    <option value="">"Off (plain HTTP)"</option>
+                    <option value="self-signed">"Self-signed"</option>
+                    <option value="custom">"Custom certificate"</option>
+                </select>
+            </label>
             <Show when=move || tls_mode.get() == "custom">
                 <textarea
                     rows="3"
-                    placeholder="Certificate (PEM)"
+                    placeholder="-----BEGIN CERTIFICATE-----"
                     on:input=move |ev| tls_cert.set(event_target_value(&ev))
                 ></textarea>
                 <textarea
                     rows="3"
-                    placeholder="Private key (PEM)"
+                    placeholder="-----BEGIN PRIVATE KEY-----"
                     on:input=move |ev| tls_key.set(event_target_value(&ev))
                 ></textarea>
             </Show>
-            <button on:click=save_tls>"Apply TLS"</button>
+            <button on:click=save_tls>"Apply"</button>
+            <div class="muted">{move || tls_msg.get()}</div>
         </section>
 
         <section>
             <h3>"Serial console"</h3>
-            <div class="row">
-                <input
-                    type="text"
-                    placeholder="command"
-                    prop:value=move || serial_cmd.get()
-                    on:input=move |ev| serial_cmd.set(event_target_value(&ev))
-                />
-                <button on:click=send_serial>"Send"</button>
-            </div>
-            <div class="muted">
-                {move || {
-                    let h = serial_history.get();
-                    if h.is_empty() { "no history".to_string() } else { h.join(" · ") }
-                }}
-            </div>
-            <button on:click=clear_serial>"Clear history"</button>
+            // `sendCustomCommand` only logs on the device until a serial
+            // adapter is supported, so don't offer a Send button that does
+            // nothing. Earlier history stays visible and can be cleared.
+            <div class="muted">"Serial console is not supported on this device yet."</div>
+            <Show when=move || !serial_history.get().is_empty()>
+                <ul class="plain">
+                    {move || {
+                        serial_history
+                            .get()
+                            .into_iter()
+                            .map(|cmd| view! { <li>{cmd}</li> })
+                            .collect_view()
+                    }}
+                </ul>
+                <button on:click=clear_serial>"Clear history"</button>
+            </Show>
         </section>
 
         <section>
-            <h3>"Timezone"</h3>
-            // The device has no RPC to change its zone yet, so show the current
-            // one without pretending the select does something.
-            <select disabled=true prop:value=move || timezone.get()>
-                {move || {
-                    timezones
-                        .get()
-                        .into_iter()
-                        .map(|tz| view! { <option value=tz.clone()>{tz.clone()}</option> })
-                        .collect_view()
-                }}
-            </select>
-            <div class="muted">"Current device time zone. Changing it is not supported yet."</div>
+            <h3>"Time zone"</h3>
+            <div>{move || or_dash(timezone.get())}</div>
+            <div class="hint">"Changing the device time zone is not supported yet."</div>
         </section>
 
         <section>
             <h3>"Keyboard macros"</h3>
+            <Show when=move || macros.get().is_empty()>
+                <div class="muted">"No macros yet."</div>
+            </Show>
             <For
                 each=move || macros.get()
                 key=|m| m.id.clone()
                 children=move |m: MacroItem| {
-                    let (m_edit, m_run, m_del) = (m.clone(), m.clone(), m.id.clone());
+                    let (m_edit, m_run) = (m.clone(), m.clone());
+                    let (del_id, del_name) = (m.id.clone(), m.name.clone());
                     view! {
                         <div class="row">
-                            <span class="muted">{m.name.clone()}</span>
+                            <span>{m.name.clone()}</span>
                             <button on:click=move |_| {
                                 let steps = m_run.to_value().get("steps").cloned().unwrap_or(json!([]));
                                 fire(rpc, "executeKeyboardMacro", steps);
                             }>"Run"</button>
                             <button on:click=move |_| load_macro(m_edit.clone())>"Edit"</button>
-                            <button on:click={
-                                let id = m_del.clone();
-                                move |_| delete_macro(id.clone())
-                            }>"Del"</button>
+                            <button class="tb-danger" on:click=move |_| {
+                                delete_macro(del_id.clone(), del_name.clone())
+                            }>"Delete"</button>
                         </div>
                     }
                 }
             />
-            <input
-                type="text"
-                placeholder="Macro name"
-                prop:value=move || edit_name.get()
-                on:input=move |ev| edit_name.set(event_target_value(&ev))
-            />
+            <label class="field">
+                <span>{move || if edit_id.get().is_some() { "Edit macro" } else { "New macro" }}</span>
+                <input
+                    type="text"
+                    placeholder="Name"
+                    prop:value=move || edit_name.get()
+                    on:input=move |ev| edit_name.set(event_target_value(&ev))
+                />
+            </label>
             <textarea
                 rows="4"
-                placeholder="One step per line: modifiers | keys | delayMs\ne.g. ControlLeft,AltLeft | Delete | 50"
+                placeholder="ControlLeft,AltLeft | Delete | 50"
                 prop:value=move || edit_steps.get()
                 on:input=move |ev| edit_steps.set(event_target_value(&ev))
             ></textarea>
+            <div class="hint">"One step per line: modifiers | keys | delay in ms"</div>
             <div class="row">
                 <button on:click=save_macro>"Save macro"</button>
-                <button on:click=move |_| new_macro(())>"New"</button>
+                <Show when=move || edit_id.get().is_some()>
+                    <button on:click=move |_| new_macro(())>"Cancel edit"</button>
+                </Show>
             </div>
+            <div class="muted">{move || macro_msg.get()}</div>
         </section>
 
         <section>
@@ -407,17 +513,17 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
                 <button
                     class="tb-danger"
                     on:click=move |_| {
-                        if confirm("Reset configuration to defaults?") {
+                        if confirm("Reset all settings to their defaults?") {
                             fire(rpc, "resetConfig", Value::Null);
                         }
                     }
                 >
-                    "Reset config"
+                    "Reset settings"
                 </button>
                 <button
                     class="tb-danger"
                     on:click=move |_| {
-                        if confirm("FACTORY RESET — erase all data and reboot?") {
+                        if confirm("Factory reset: erase all data on the device and reboot?") {
                             fire(rpc, "factoryReset", Value::Null);
                         }
                     }
@@ -427,6 +533,28 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             </div>
         </section>
     }
+}
+
+/// `getCloudState` reply: `{ connected, url, appUrl }`.
+#[derive(Clone, Default, PartialEq)]
+struct CloudState {
+    connected: bool,
+    api_url: String,
+    app_url: String,
+}
+
+impl CloudState {
+    fn from_value(v: &Value) -> Self {
+        Self {
+            connected: v.get("connected").and_then(Value::as_bool).unwrap_or(false),
+            api_url: json_str(v, "url"),
+            app_url: json_str(v, "appUrl"),
+        }
+    }
+}
+
+fn or_dash(s: String) -> String {
+    if s.is_empty() { "—".to_string() } else { s }
 }
 
 #[derive(Clone, PartialEq)]
@@ -495,10 +623,6 @@ fn join_strs(v: Option<&Value>) -> String {
     v.and_then(Value::as_array)
         .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(","))
         .unwrap_or_default()
-}
-
-fn compact_json(v: &Value) -> String {
-    serde_json::to_string(v).unwrap_or_default()
 }
 
 fn confirm(msg: &str) -> bool {
