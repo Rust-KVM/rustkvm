@@ -4,19 +4,25 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde_json::{Value, json};
 
+use crate::i18n::{tr, use_i18n};
 use crate::rpc::RpcClient;
 use crate::util::{Rpc, as_string, fire, fire_status, json_str, json_string_list};
 
 /// Extensions the device knows how to mount (`setActiveExtension`).
-const EXTENSIONS: &[(&str, &str)] =
-    &[("", "None"), ("atx-power", "ATX power board"), ("dc-power", "DC power board")];
+const EXTENSIONS: &[(&str, &str, &str)] = &[
+    ("", "无", "None"),
+    ("atx-power", "ATX 电源板", "ATX power board"),
+    ("dc-power", "DC 电源板", "DC power board"),
+];
 
 #[component]
 pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
+    let i = use_i18n();
     let dc_enabled = RwSignal::new(false);
     let dc_restore = RwSignal::new(String::new());
     let dc_reading = RwSignal::new(String::new());
-    let atx_state = RwSignal::new(String::new());
+    // (power LED, HDD LED), or the error from the last read.
+    let atx_state = RwSignal::new(Ok::<(bool, bool), String>((false, false)));
     // "dc-power", "atx-power" or "" (no power extension mounted).
     let power_ext = RwSignal::new(String::new());
     let cloud = RwSignal::new(CloudState::default());
@@ -66,13 +72,9 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             "atx-power" => match c.call("getATXState", Value::Null).await {
                 Ok(v) => {
                     let on = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
-                    atx_state.set(format!(
-                        "Power LED {} · HDD LED {}",
-                        if on("power") { "on" } else { "off" },
-                        if on("hdd") { "on" } else { "off" }
-                    ));
+                    atx_state.set(Ok((on("power"), on("hdd"))));
                 }
-                Err(e) => atx_state.set(format!("State unavailable: {e}")),
+                Err(e) => atx_state.set(Err(e.to_string())),
             },
             _ => {}
         }
@@ -136,33 +138,37 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
     let save_cloud_url = move |_| {
         let Some(c) = rpc.get_value() else { return };
         let (api, app) = (cloud_api.get().trim().to_string(), cloud_app.get().trim().to_string());
-        cloud_msg.set("Saving…".to_string());
+        cloud_msg.set(tr("正在保存…", "Saving…").to_string());
         spawn_local(async move {
             match c.call("setCloudUrl", json!({ "apiUrl": api, "appUrl": app })).await {
                 Ok(_) => {
-                    cloud_msg.set("Cloud URLs saved".to_string());
+                    cloud_msg.set(tr("云服务地址已保存", "Cloud URLs saved").to_string());
                     if let Ok(v) = c.call("getCloudState", Value::Null).await {
                         cloud.set(CloudState::from_value(&v));
                     }
                 }
-                Err(e) => cloud_msg.set(format!("Failed: {e}")),
+                Err(e) => cloud_msg.set(format!("{}{e}", tr("失败：", "Failed: "))),
             }
         });
     };
     let deregister = move |_| {
-        if !confirm("Remove this device from the cloud account?") {
+        if !confirm(tr(
+            "要从云账号中移除这台设备吗？",
+            "Remove this device from the cloud account?",
+        )) {
             return;
         }
         let Some(c) = rpc.get_value() else { return };
         spawn_local(async move {
             match c.call("deregisterDevice", Value::Null).await {
                 Ok(_) => {
-                    cloud_msg.set("Device removed from the cloud".to_string());
+                    cloud_msg
+                        .set(tr("设备已从云服务移除", "Device removed from the cloud").to_string());
                     if let Ok(v) = c.call("getCloudState", Value::Null).await {
                         cloud.set(CloudState::from_value(&v));
                     }
                 }
-                Err(e) => cloud_msg.set(format!("Failed: {e}")),
+                Err(e) => cloud_msg.set(format!("{}{e}", tr("失败：", "Failed: "))),
             }
         });
     };
@@ -172,21 +178,21 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             "setTailscaleControlURL",
             json!({ "controlURL": ts_url.get().trim() }),
             ts_msg,
-            "Control server saved",
+            tr("控制服务器已保存", "Control server saved"),
         )
     };
 
     let save_ext = move |_| {
         let Some(c) = rpc.get_value() else { return };
         let ext = active_ext.get();
-        ext_msg.set("Applying…".to_string());
+        ext_msg.set(tr("正在应用…", "Applying…").to_string());
         spawn_local(async move {
             match c.call("setActiveExtension", json!({ "extensionId": ext })).await {
                 Ok(_) => {
-                    ext_msg.set("Extension applied".to_string());
+                    ext_msg.set(tr("扩展已应用", "Extension applied").to_string());
                     load_power(c, ext).await;
                 }
-                Err(e) => ext_msg.set(format!("Failed: {e}")),
+                Err(e) => ext_msg.set(format!("{}{e}", tr("失败：", "Failed: "))),
             }
         });
     };
@@ -212,7 +218,7 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             "setTLSState",
             json!({ "state": state }),
             tls_msg,
-            "HTTPS settings applied",
+            tr("HTTPS 设置已应用", "HTTPS settings applied"),
         );
     };
 
@@ -233,7 +239,10 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
         macro_msg.set(String::new());
     };
     let delete_macro = move |id: String, name: String| {
-        if !confirm(&format!("Delete macro \"{name}\"?")) {
+        if !confirm(&match crate::i18n::lang_now() {
+            crate::i18n::Lang::Zh => format!("删除宏“{name}”？"),
+            crate::i18n::Lang::En => format!("Delete macro \"{name}\"?"),
+        }) {
             return;
         }
         let kept: Vec<Value> = macros
@@ -247,14 +256,14 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             "setKeyboardMacros",
             json!({ "macros": kept }),
             macro_msg,
-            "Macro deleted",
+            tr("宏已删除", "Macro deleted"),
         );
         macros.update(|list| list.retain(|m| m.id != id));
     };
     let save_macro = move |_| {
         let name = edit_name.get().trim().to_string();
         if name.is_empty() {
-            macro_msg.set("Give the macro a name first".to_string());
+            macro_msg.set(tr("请先给宏起个名字", "Give the macro a name first").to_string());
             return;
         }
         let id = edit_id.get().unwrap_or_else(|| format!("macro-{}", js_now()));
@@ -271,7 +280,7 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             "setKeyboardMacros",
             json!({ "macros": payload }),
             macro_msg,
-            "Macro saved",
+            tr("宏已保存", "Macro saved"),
         );
         macros.set(list);
         edit_id.set(None);
@@ -281,52 +290,72 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
 
     view! {
         <section>
-            <h3>"Power"</h3>
+            <h3>{move || i.t("电源", "Power")}</h3>
             <Show when=move || power_ext.get() == "dc-power">
                 <label class="toggle">
                     <input type="checkbox" prop:checked=move || dc_enabled.get() on:change=toggle_dc />
-                    "DC power output"
+                    {move || i.t("DC 电源输出", "DC power output")}
                 </label>
                 <div class="muted">{move || dc_reading.get()}</div>
                 <label class="field">
-                    <span>"After a power loss"</span>
+                    <span>{move || i.t("来电后", "After a power loss")}</span>
                     <select on:change=set_restore>
-                        <option value="0" prop:selected=move || dc_restore.get() == "0">"Stay off"</option>
-                        <option value="1" prop:selected=move || dc_restore.get() == "1">"Turn on"</option>
-                        <option value="2" prop:selected=move || dc_restore.get() == "2">"Restore last state"</option>
+                        <option value="0" prop:selected=move || dc_restore.get() == "0">{move || i.t("保持关闭", "Stay off")}</option>
+                        <option value="1" prop:selected=move || dc_restore.get() == "1">{move || i.t("自动开机", "Turn on")}</option>
+                        <option value="2" prop:selected=move || dc_restore.get() == "2">{move || i.t("恢复断电前的状态", "Restore last state")}</option>
                     </select>
                 </label>
             </Show>
             <Show when=move || power_ext.get() == "atx-power">
-                <div class="muted">{move || atx_state.get()}</div>
+                <div class="muted">
+                    {move || match atx_state.get() {
+                        Ok((power, hdd)) => {
+                            let led = |on: bool| if on { i.t("亮", "on") } else { i.t("灭", "off") };
+                            format!(
+                                "{} {} · {} {}",
+                                i.t("电源灯", "Power LED"),
+                                led(power),
+                                i.t("硬盘灯", "HDD LED"),
+                                led(hdd)
+                            )
+                        }
+                        Err(e) => format!("{}{e}", i.t("无法读取状态：", "State unavailable: ")),
+                    }}
+                </div>
                 <div class="row">
-                    <button on:click=move |_| atx("power-short")>"Power button"</button>
-                    <button on:click=move |_| atx("power-long")>"Force off"</button>
-                    <button on:click=move |_| atx("reset")>"Reset"</button>
+                    <button on:click=move |_| atx("power-short")>{move || i.t("按电源键", "Power button")}</button>
+                    <button on:click=move |_| atx("power-long")>{move || i.t("强制关机", "Force off")}</button>
+                    <button on:click=move |_| atx("reset")>{move || i.t("复位", "Reset")}</button>
                 </div>
             </Show>
             <Show when=move || power_ext.get().is_empty()>
                 <div class="muted">
-                    "No power board is active. Pick the ATX or DC power board under Extension to control host power from here."
+                    {move || i.t("没有启用电源扩展板。在「扩展」里选择 ATX 或 DC 电源板后，就能在这里控制主机电源。", "No power board is active. Pick the ATX or DC power board under Extension to control host power from here.")}
                 </div>
             </Show>
         </section>
 
         <section>
-            <h3>"Cloud"</h3>
+            <h3>{move || i.t("云服务", "Cloud")}</h3>
             <dl class="kv">
-                <dt>"Status"</dt>
+                <dt>{move || i.t("状态", "Status")}</dt>
                 <dd>
                     <span class="dot" class:on=move || cloud.get().connected></span>
-                    {move || if cloud.get().connected { "Connected" } else { "Not connected" }}
+                    {move || {
+                        if cloud.get().connected {
+                            i.t("已连接", "Connected")
+                        } else {
+                            i.t("未连接", "Not connected")
+                        }
+                    }}
                 </dd>
-                <dt>"API"</dt>
+                <dt>{move || i.t("API", "API")}</dt>
                 <dd>{move || or_dash(cloud.get().api_url)}</dd>
-                <dt>"App"</dt>
+                <dt>{move || i.t("应用", "App")}</dt>
                 <dd>{move || or_dash(cloud.get().app_url)}</dd>
             </dl>
             <label class="field">
-                <span>"API URL"</span>
+                <span>{move || i.t("API 地址", "API URL")}</span>
                 <input
                     type="url"
                     placeholder="https://api.example.com"
@@ -335,7 +364,7 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
                 />
             </label>
             <label class="field">
-                <span>"App URL"</span>
+                <span>{move || i.t("应用地址", "App URL")}</span>
                 <input
                     type="url"
                     placeholder="https://app.example.com"
@@ -344,8 +373,8 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
                 />
             </label>
             <div class="row">
-                <button on:click=save_cloud_url>"Save URLs"</button>
-                <button class="tb-danger" on:click=deregister>"Deregister"</button>
+                <button on:click=save_cloud_url>{move || i.t("保存地址", "Save URLs")}</button>
+                <button class="tb-danger" on:click=deregister>{move || i.t("解除绑定", "Deregister")}</button>
             </div>
             <div class="muted">{move || cloud_msg.get()}</div>
         </section>
@@ -353,7 +382,7 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
         <section>
             <h3>"Tailscale"</h3>
             <label class="field">
-                <span>"Control server"</span>
+                <span>{move || i.t("控制服务器", "Control server")}</span>
                 <input
                     type="url"
                     placeholder="https://controlplane.tailscale.com"
@@ -361,40 +390,40 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
                     on:input=move |ev| ts_url.set(event_target_value(&ev))
                 />
             </label>
-            <div class="hint">"Change only if you run your own server, such as Headscale."</div>
-            <button on:click=save_ts>"Save"</button>
+            <div class="hint">{move || i.t("仅在你自建服务器（如 Headscale）时修改。", "Change only if you run your own server, such as Headscale.")}</div>
+            <button on:click=save_ts>{move || i.t("保存", "Save")}</button>
             <div class="muted">{move || ts_msg.get()}</div>
         </section>
 
         <section>
-            <h3>"Extension"</h3>
+            <h3>{move || i.t("扩展", "Extension")}</h3>
             <label class="field">
-                <span>"Hardware extension"</span>
+                <span>{move || i.t("硬件扩展", "Hardware extension")}</span>
                 <select
                     on:change=move |ev| active_ext.set(event_target_value(&ev))
                 >
                     {EXTENSIONS
                         .iter()
-                        .map(|(id, name)| {
+                        .map(|(id, zh, en)| {
                         view! {
                             <option value=*id prop:selected=move || active_ext.get() == *id>
-                                {*name}
+                                {move || i.t(zh, en)}
                             </option>
                         }
                     })
                         .collect_view()}
                 </select>
             </label>
-            <div class="hint">"A power board adds its controls to the Power section."</div>
-            <button on:click=save_ext>"Apply"</button>
+            <div class="hint">{move || i.t("启用电源板后，它的控制项会出现在「电源」里。", "A power board adds its controls to the Power section.")}</div>
+            <button on:click=save_ext>{move || i.t("应用", "Apply")}</button>
             <div class="muted">{move || ext_msg.get()}</div>
         </section>
 
         <section>
-            <h3>"Developer"</h3>
+            <h3>{move || i.t("开发者", "Developer")}</h3>
             <label class="toggle">
                 <input type="checkbox" prop:checked=move || dev_mode.get() on:change=toggle_dev />
-                "Developer mode"
+                {move || i.t("开发者模式", "Developer mode")}
             </label>
             <label class="toggle">
                 <input
@@ -402,20 +431,20 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
                     prop:checked=move || dev_channel.get()
                     on:change=toggle_devchan
                 />
-                "Pre-release updates"
+                {move || i.t("接收预发布更新", "Pre-release updates")}
             </label>
         </section>
 
         <section>
             <h3>"HTTPS"</h3>
             <label class="field">
-                <span>"Certificate"</span>
+                <span>{move || i.t("证书", "Certificate")}</span>
                 <select
                     on:change=move |ev| tls_mode.set(event_target_value(&ev))
                 >
-                    <option value="" prop:selected=move || tls_mode.get() == "">"Off (plain HTTP)"</option>
-                    <option value="self-signed" prop:selected=move || tls_mode.get() == "self-signed">"Self-signed"</option>
-                    <option value="custom" prop:selected=move || tls_mode.get() == "custom">"Custom certificate"</option>
+                    <option value="" prop:selected=move || tls_mode.get() == "">{move || i.t("关闭（使用 HTTP）", "Off (plain HTTP)")}</option>
+                    <option value="self-signed" prop:selected=move || tls_mode.get() == "self-signed">{move || i.t("自签名证书", "Self-signed")}</option>
+                    <option value="custom" prop:selected=move || tls_mode.get() == "custom">{move || i.t("自定义证书", "Custom certificate")}</option>
                 </select>
             </label>
             <Show when=move || tls_mode.get() == "custom">
@@ -430,16 +459,16 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
                     on:input=move |ev| tls_key.set(event_target_value(&ev))
                 ></textarea>
             </Show>
-            <button on:click=save_tls>"Apply"</button>
+            <button on:click=save_tls>{move || i.t("应用", "Apply")}</button>
             <div class="muted">{move || tls_msg.get()}</div>
         </section>
 
         <section>
-            <h3>"Serial console"</h3>
+            <h3>{move || i.t("串口控制台", "Serial console")}</h3>
             // `sendCustomCommand` only logs on the device until a serial
             // adapter is supported, so don't offer a Send button that does
             // nothing. Earlier history stays visible and can be cleared.
-            <div class="muted">"Serial console is not supported on this device yet."</div>
+            <div class="muted">{move || i.t("这台设备暂不支持串口控制台。", "Serial console is not supported on this device yet.")}</div>
             <Show when=move || !serial_history.get().is_empty()>
                 <ul class="plain">
                     {move || {
@@ -450,20 +479,20 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
                             .collect_view()
                     }}
                 </ul>
-                <button on:click=clear_serial>"Clear history"</button>
+                <button on:click=clear_serial>{move || i.t("清除历史", "Clear history")}</button>
             </Show>
         </section>
 
         <section>
-            <h3>"Time zone"</h3>
+            <h3>{move || i.t("时区", "Time zone")}</h3>
             <div>{move || or_dash(timezone.get())}</div>
-            <div class="hint">"Changing the device time zone is not supported yet."</div>
+            <div class="hint">{move || i.t("暂不支持修改设备时区。", "Changing the device time zone is not supported yet.")}</div>
         </section>
 
         <section>
-            <h3>"Keyboard macros"</h3>
+            <h3>{move || i.t("键盘宏", "Keyboard macros")}</h3>
             <Show when=move || macros.get().is_empty()>
-                <div class="muted">"No macros yet."</div>
+                <div class="muted">{move || i.t("还没有宏。", "No macros yet.")}</div>
             </Show>
             <For
                 each=move || macros.get()
@@ -477,20 +506,26 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
                             <button on:click=move |_| {
                                 let steps = m_run.to_value().get("steps").cloned().unwrap_or(json!([]));
                                 fire(rpc, "executeKeyboardMacro", steps);
-                            }>"Run"</button>
-                            <button on:click=move |_| load_macro(m_edit.clone())>"Edit"</button>
+                            }>{move || i.t("运行", "Run")}</button>
+                            <button on:click=move |_| load_macro(m_edit.clone())>{move || i.t("编辑", "Edit")}</button>
                             <button class="tb-danger" on:click=move |_| {
                                 delete_macro(del_id.clone(), del_name.clone())
-                            }>"Delete"</button>
+                            }>{move || i.t("删除", "Delete")}</button>
                         </div>
                     }
                 }
             />
             <label class="field">
-                <span>{move || if edit_id.get().is_some() { "Edit macro" } else { "New macro" }}</span>
+                <span>{move || {
+                    if edit_id.get().is_some() {
+                        i.t("编辑宏", "Edit macro")
+                    } else {
+                        i.t("新建宏", "New macro")
+                    }
+                }}</span>
                 <input
                     type="text"
-                    placeholder="Name"
+                    placeholder=move || i.t("名称", "Name")
                     prop:value=move || edit_name.get()
                     on:input=move |ev| edit_name.set(event_target_value(&ev))
                 />
@@ -501,38 +536,41 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
                 prop:value=move || edit_steps.get()
                 on:input=move |ev| edit_steps.set(event_target_value(&ev))
             ></textarea>
-            <div class="hint">"One step per line: modifiers | keys | delay in ms"</div>
+            <div class="hint">{move || i.t("每行一步：修饰键 | 按键 | 延迟（毫秒）", "One step per line: modifiers | keys | delay in ms")}</div>
             <div class="row">
-                <button on:click=save_macro>"Save macro"</button>
+                <button on:click=save_macro>{move || i.t("保存宏", "Save macro")}</button>
                 <Show when=move || edit_id.get().is_some()>
-                    <button on:click=move |_| new_macro(())>"Cancel edit"</button>
+                    <button on:click=move |_| new_macro(())>{move || i.t("取消编辑", "Cancel edit")}</button>
                 </Show>
             </div>
             <div class="muted">{move || macro_msg.get()}</div>
         </section>
 
         <section>
-            <h3>"Danger zone"</h3>
+            <h3>{move || i.t("危险操作", "Danger zone")}</h3>
             <div class="row">
                 <button
                     class="tb-danger"
                     on:click=move |_| {
-                        if confirm("Reset all settings to their defaults?") {
+                        if confirm(tr("要把所有设置恢复为默认值吗？", "Reset all settings to their defaults?")) {
                             fire(rpc, "resetConfig", Value::Null);
                         }
                     }
                 >
-                    "Reset settings"
+                    {move || i.t("恢复默认设置", "Reset settings")}
                 </button>
                 <button
                     class="tb-danger"
                     on:click=move |_| {
-                        if confirm("Factory reset: erase all data on the device and reboot?") {
+                        if confirm(tr(
+                            "恢复出厂设置会清除设备上的所有数据并重启，确定吗？",
+                            "Factory reset: erase all data on the device and reboot?",
+                        )) {
                             fire(rpc, "factoryReset", Value::Null);
                         }
                     }
                 >
-                    "Factory reset"
+                    {move || i.t("恢复出厂设置", "Factory reset")}
                 </button>
             </div>
         </section>

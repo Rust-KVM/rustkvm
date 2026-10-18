@@ -8,6 +8,7 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::HtmlTextAreaElement;
 
+use crate::i18n::tr;
 use crate::rpc::RpcClient;
 
 pub type Rpc = StoredValue<Option<Rc<RpcClient>>, LocalStorage>;
@@ -30,14 +31,14 @@ pub fn fire_status(
     ok: &'static str,
 ) {
     let Some(client) = rpc.get_value() else {
-        status.set("Not connected to the device".to_string());
+        status.set(tr("未连接设备", "Not connected to the device").to_string());
         return;
     };
-    status.set("Saving…".to_string());
+    status.set(tr("正在保存…", "Saving…").to_string());
     spawn_local(async move {
         match client.call(method, params).await {
             Ok(_) => status.set(ok.to_string()),
-            Err(e) => status.set(format!("Failed: {e}")),
+            Err(e) => status.set(format!("{}{e}", tr("失败：", "Failed: "))),
         }
     });
 }
@@ -83,11 +84,17 @@ pub async fn toggle_fullscreen() -> Result<(), String> {
         let el = doc.document_element().ok_or("no document element")?;
         call_method(el.as_ref(), "requestFullscreen", &Array::new())
     };
-    let value = result.map_err(|e| format!("Fullscreen unavailable: {}", js_message(&e)))?;
+    let value = result.map_err(|e| {
+        format!("{}{}", tr("无法全屏：", "Fullscreen unavailable: "), js_message(&e))
+    })?;
     if let Ok(promise) = value.dyn_into::<Promise>() {
-        JsFuture::from(promise)
-            .await
-            .map_err(|e| format!("Fullscreen blocked by the browser: {}", js_message(&e)))?;
+        JsFuture::from(promise).await.map_err(|e| {
+            format!(
+                "{}{}",
+                tr("浏览器阻止了全屏：", "Fullscreen blocked by the browser: "),
+                js_message(&e)
+            )
+        })?;
     }
     Ok(())
 }
@@ -124,7 +131,11 @@ pub async fn copy_text(text: &str) -> Result<(), String> {
     if copied {
         Ok(())
     } else {
-        Err("Copy failed: select the text and copy it manually".to_string())
+        Err(tr(
+            "复制失败：请选中文字后手动复制",
+            "Copy failed: select the text and copy it manually",
+        )
+        .to_string())
     }
 }
 

@@ -3,9 +3,30 @@
 //! nothing can fall out of a lookup table. Chinese is the default unless the
 //! browser asks for another language; the choice is kept in localStorage.
 
+use std::cell::Cell;
+
 use leptos::prelude::*;
 
 const STORAGE_KEY: &str = "rkvm.lang";
+
+thread_local! {
+    // Mirror of the signal for code without a reactive owner (async results,
+    // helpers in util.rs). Views use `I18n::t` so they re-render on switch.
+    static CURRENT: Cell<Lang> = const { Cell::new(Lang::Zh) };
+}
+
+/// The current language, read once (not reactive).
+pub fn lang_now() -> Lang {
+    CURRENT.with(Cell::get)
+}
+
+/// The string for the current language, read once (not reactive).
+pub fn tr(zh: &'static str, en: &'static str) -> &'static str {
+    match CURRENT.with(Cell::get) {
+        Lang::Zh => zh,
+        Lang::En => en,
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
@@ -31,10 +52,7 @@ impl I18n {
     /// [`I18n::t`] without tracking, for event handlers and async tasks
     /// that build a message once.
     pub fn t_now(self, zh: &'static str, en: &'static str) -> &'static str {
-        match self.0.get_untracked() {
-            Lang::Zh => zh,
-            Lang::En => en,
-        }
+        tr(zh, en)
     }
 
     pub fn lang(self) -> Lang {
@@ -84,6 +102,7 @@ fn browser_lang() -> Lang {
 }
 
 fn apply(lang: Lang) {
+    CURRENT.with(|c| c.set(lang));
     if let Some(root) =
         web_sys::window().and_then(|w| w.document()).and_then(|d| d.document_element())
     {

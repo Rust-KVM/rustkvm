@@ -30,7 +30,8 @@ code taken).
    rebuild a subtree for a value that changes often (video stats, LEDs,
    quality).
 6. **Bilingual by construction.** Every visible string is a
-   `i18n.t("中文", "English")` pair at the place it is used.
+   `i18n.t("中文", "English")` pair at the place it is used, and the UI never
+   mixes the two languages.
 
 ## Tokens
 
@@ -125,7 +126,13 @@ until the user picks one. `src/theme.rs` flips it from the sidebar.
   `--bg-secondary` over the stage, so the video element stays mounted.
 - **Focus mode** hides sidebar and titlebar. A small handle at the top center
   peeks the titlebar back in as a floating bar; it hides 600ms after the
-  pointer leaves.
+  pointer leaves. When the sidebar is hidden, `.app.focus` switches the grid to
+  a single `minmax(0, 1fr)` track: a hidden grid item frees its track, so
+  keeping the two-column template would auto-place `.main` into the 0px
+  column and collapse the whole stage into the top-left corner.
+- **Sheets over the shell**: scrims start right of the 52px rail and the
+  sidebar sits above them (z 45), so theme, language and nav work on the
+  first click while settings is open.
 - **Sheets and dialogs** (settings, OCR) sit above everything on a scrim.
 
 Remote-desktop titlebar actions, in order: Num/Caps/Scroll LED badges · mouse
@@ -157,7 +164,15 @@ Rules:
 
 ## Copy
 
-- Chinese first; English is the alternative, never mixed in one string.
+- One language at a time: with 中文 selected every visible string is Chinese,
+  with English every string is English. That includes settings, option
+  labels (keyboard layouts, extensions), status lines built from device
+  replies, confirm dialogs and error messages. Only proper nouns and
+  protocol names stay as they are (H.264, EDID, MQTT, HTTPS, NUM/CAPS/SCR).
+- Views use `i18n.t(zh, en)` inside a closure so text switches live. Code
+  without a reactive owner (async results, `util::fire_status`, `net/`
+  errors) uses `i18n::tr(zh, en)`. Device replies are stored as data and
+  described at render time, so they follow a language switch too.
 - Short, plain, sentence case. Name the action on the button ("连接", "完成设置",
   "复制").
 - Warnings say what can happen and what to do: "未设置密码：…请在 设置 → 密码 中设置。"
@@ -180,6 +195,6 @@ Rules:
   (sidebar, titlebar, stage, gates, toast, focus mode), zh/en for the shell,
   token restyle of settings sheet, terminal and OCR dialog.
 - **Phase 2**: settings as a Claude-style page (section list on the left,
-  content on the right) built from `Field`, `Button` and a `Switch` component;
-  zh/en for all settings.
+  content on the right) built from `Field`, `Button` and a `Switch` component.
+  (zh/en for all settings landed in phase 1.)
 - **Phase 3**: virtual media page, terminal and OCR polish, remaining copy.

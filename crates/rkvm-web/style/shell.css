@@ -4,7 +4,8 @@
    video never reflows or rescales when the sidebar opens. */
 
 .app { position: fixed; inset: 0; display: grid; grid-template-columns: var(--sidebar-rail) minmax(0, 1fr); }
-.app.focus { grid-template-columns: 0 minmax(0, 1fr); }
+/* The sidebar leaves the grid entirely, so main must be the only track. */
+.app.focus { grid-template-columns: minmax(0, 1fr); }
 
 /* Sidebar */
 /* Above the sheets' scrims (z 40-41) so theme, language and nav stay
