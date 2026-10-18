@@ -489,11 +489,15 @@ pub fn Settings(
 
                 <section>
                     <h3>"Keyboard layout"</h3>
-                    <select on:change=set_layout prop:value=move || layout.get()>
+                    <select on:change=set_layout>
                         {KEYBOARD_LAYOUTS
                             .iter()
                             .map(|(code, name)| {
-                                view! { <option value=*code>{*name}</option> }
+                                view! {
+                                    <option value=*code prop:selected=move || layout.get() == *code>
+                                        {*name}
+                                    </option>
+                                }
                             })
                             .collect_view()}
                     </select>
@@ -557,11 +561,14 @@ pub fn Settings(
                     <label class="field">
                         <span>"Present to the host as"</span>
                         <select
-                            prop:value=move || mount_mode.get()
                             on:change=move |ev| mount_mode.set(event_target_value(&ev))
                         >
-                            <option value="CDROM">"CD-ROM"</option>
-                            <option value="DISK">"USB disk"</option>
+                            <option value="CDROM" prop:selected=move || mount_mode.get() == "CDROM">
+                                "CD-ROM"
+                            </option>
+                            <option value="DISK" prop:selected=move || mount_mode.get() == "DISK">
+                                "USB disk"
+                            </option>
                         </select>
                     </label>
                     <div class="row">
@@ -752,10 +759,16 @@ pub fn Settings(
 
                 <section>
                     <h3>"Log level"</h3>
-                    <select prop:value=move || log_level.get() on:change=set_log>
+                    <select on:change=set_log>
                         {["TRACE", "DEBUG", "INFO", "WARN", "ERROR"]
                             .iter()
-                            .map(|l| view! { <option value=*l>{*l}</option> })
+                            .map(|l| {
+                                view! {
+                                    <option value=*l prop:selected=move || log_level.get() == *l>
+                                        {*l}
+                                    </option>
+                                }
+                            })
                             .collect_view()}
                     </select>
                 </section>

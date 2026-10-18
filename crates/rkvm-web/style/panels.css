@@ -2,7 +2,7 @@
    device terminal and the OCR dialog. Phase 2 replaces the sheet with a
    Claude-style settings page. */
 
-.scrim { position: fixed; inset: 0; z-index: 40; background: var(--bg-scrim); animation: fade .18s var(--ease); }
+.scrim { position: fixed; inset: 0 0 0 var(--sidebar-rail); z-index: 40; background: var(--bg-scrim); animation: fade .18s var(--ease); }
 .dialog { position: fixed; inset: 0; z-index: 41; display: grid; place-items: center; padding: var(--space-4); }
 .dialog .card { width: min(560px, 100%); }
 .dialog textarea { width: 100%; min-height: 220px; padding: var(--space-3); border-radius: var(--radius-md);
@@ -11,7 +11,7 @@
 .dialog textarea:focus { outline: none; box-shadow: var(--focus-ring); }
 
 /* Settings sheet */
-.drawer-scrim { position: fixed; inset: 0; z-index: 40; background: var(--bg-scrim); animation: fade .18s var(--ease); }
+.drawer-scrim { position: fixed; inset: 0 0 0 var(--sidebar-rail); z-index: 40; background: var(--bg-scrim); animation: fade .18s var(--ease); }
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 41; width: min(420px, 100vw); overflow-y: auto;
   padding: 0 var(--space-6) var(--space-8); background: var(--bg-primary);
   border-left: var(--hairline) solid var(--border-secondary); box-shadow: var(--shadow-lg);

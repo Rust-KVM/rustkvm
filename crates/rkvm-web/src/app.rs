@@ -571,13 +571,12 @@ pub fn App() -> impl IntoView {
                                             </p>
                                             <Field label=Signal::derive(move || i.t("登录方式", "Sign-in"))>
                                                 <select
-                                                    prop:value=move || setup_mode.get()
                                                     on:change=move |ev| setup_mode.set(event_target_value(&ev))
                                                 >
-                                                    <option value="noPassword">
+                                                    <option value="noPassword" prop:selected=move || setup_mode.get() == "noPassword">
                                                         {move || i.t("不设密码（同一网络中任何人都能连接）", "No password (anyone on this network can connect)")}
                                                     </option>
-                                                    <option value="password">{move || i.t("需要密码", "Require a password")}</option>
+                                                    <option value="password" prop:selected=move || setup_mode.get() == "password">{move || i.t("需要密码", "Require a password")}</option>
                                                 </select>
                                             </Field>
                                             <Show when=move || setup_mode.get() == "password">

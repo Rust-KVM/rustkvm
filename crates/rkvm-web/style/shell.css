@@ -7,14 +7,17 @@
 .app.focus { grid-template-columns: 0 minmax(0, 1fr); }
 
 /* Sidebar */
-.sidebar { position: relative; z-index: 20; min-width: 0; }
+/* Above the sheets' scrims (z 40-41) so theme, language and nav stay
+   clickable while settings is open. */
+.sidebar { position: relative; z-index: 45; min-width: 0; }
 .app.focus .sidebar { display: none; }
+.app.focus .drawer-scrim, .app.focus .scrim { left: 0; }
 .sb-panel { position: absolute; inset: 0 auto 0 0; width: var(--sidebar-rail); display: flex; flex-direction: column;
   padding: 0 var(--space-2) var(--space-3); background: var(--bg-sidebar);
   border-right: var(--hairline) solid var(--border-secondary); overflow: hidden;
   transition: width .2s var(--ease), box-shadow .2s var(--ease); }
 .sidebar.open .sb-panel { width: var(--sidebar-open); box-shadow: var(--shadow-lg); }
-.sb-scrim { position: fixed; inset: 0; z-index: 19; background: transparent; }
+.sb-scrim { position: fixed; inset: 0; z-index: 44; background: transparent; }
 .sb-top { display: flex; align-items: center; gap: var(--space-2); height: var(--titlebar-h); flex: none; }
 .sb-logo { display: grid; place-items: center; width: 36px; height: 36px; flex: none; padding: 0; border: 0;
   border-radius: var(--radius-md); background: transparent; color: var(--accent); cursor: pointer;

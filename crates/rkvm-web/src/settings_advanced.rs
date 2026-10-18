@@ -290,10 +290,10 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
                 <div class="muted">{move || dc_reading.get()}</div>
                 <label class="field">
                     <span>"After a power loss"</span>
-                    <select on:change=set_restore prop:value=move || dc_restore.get()>
-                        <option value="0">"Stay off"</option>
-                        <option value="1">"Turn on"</option>
-                        <option value="2">"Restore last state"</option>
+                    <select on:change=set_restore>
+                        <option value="0" prop:selected=move || dc_restore.get() == "0">"Stay off"</option>
+                        <option value="1" prop:selected=move || dc_restore.get() == "1">"Turn on"</option>
+                        <option value="2" prop:selected=move || dc_restore.get() == "2">"Restore last state"</option>
                     </select>
                 </label>
             </Show>
@@ -371,12 +371,17 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             <label class="field">
                 <span>"Hardware extension"</span>
                 <select
-                    prop:value=move || active_ext.get()
                     on:change=move |ev| active_ext.set(event_target_value(&ev))
                 >
                     {EXTENSIONS
                         .iter()
-                        .map(|(id, name)| view! { <option value=*id>{*name}</option> })
+                        .map(|(id, name)| {
+                        view! {
+                            <option value=*id prop:selected=move || active_ext.get() == *id>
+                                {*name}
+                            </option>
+                        }
+                    })
                         .collect_view()}
                 </select>
             </label>
@@ -406,12 +411,11 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc) -> impl IntoView {
             <label class="field">
                 <span>"Certificate"</span>
                 <select
-                    prop:value=move || tls_mode.get()
                     on:change=move |ev| tls_mode.set(event_target_value(&ev))
                 >
-                    <option value="">"Off (plain HTTP)"</option>
-                    <option value="self-signed">"Self-signed"</option>
-                    <option value="custom">"Custom certificate"</option>
+                    <option value="" prop:selected=move || tls_mode.get() == "">"Off (plain HTTP)"</option>
+                    <option value="self-signed" prop:selected=move || tls_mode.get() == "self-signed">"Self-signed"</option>
+                    <option value="custom" prop:selected=move || tls_mode.get() == "custom">"Custom certificate"</option>
                 </select>
             </label>
             <Show when=move || tls_mode.get() == "custom">
