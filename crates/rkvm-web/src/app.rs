@@ -285,11 +285,14 @@ pub fn App() -> impl IntoView {
 
     let do_ocr = move |_| {
         let Some(video) = video_store.get_value() else { return };
-        ocr_text.set(Some("scanning…".to_string()));
+        ocr_text.set(Some("Reading text from the screen…".to_string()));
         spawn_local(async move {
             match crate::ocr::recognize(&video).await {
+                Ok(text) if text.trim().is_empty() => {
+                    ocr_text.set(Some("No text found on the screen.".to_string()))
+                }
                 Ok(text) => ocr_text.set(Some(text)),
-                Err(e) => ocr_text.set(Some(e)),
+                Err(e) => ocr_text.set(Some(format!("Could not read text: {e}"))),
             }
         });
     };
@@ -360,7 +363,7 @@ pub fn App() -> impl IntoView {
                         if v.width > 0 {
                             format!("{}×{} @ {:.0}fps", v.width, v.height, v.fps)
                         } else {
-                            "no signal".to_string()
+                            "No signal".to_string()
                         }
                     }}
                 </span>
@@ -373,7 +376,7 @@ pub fn App() -> impl IntoView {
                 <span class="tb-sep"></span>
 
                 <button on:click=toggle_mouse title="Switch absolute / relative pointer">
-                    {move || if mouse_relative.get() { "Mouse: Rel" } else { "Mouse: Abs" }}
+                    {move || if mouse_relative.get() { "Mouse: relative" } else { "Mouse: absolute" }}
                 </button>
                 <span class="tb-group">
                     <button
@@ -457,12 +460,13 @@ pub fn App() -> impl IntoView {
             <div class="panel">
                 <div class="card">
                     <h1>"Device setup"</h1>
+                    <label>"Sign-in"</label>
                     <select
                         prop:value=move || setup_mode.get()
                         on:change=move |ev| setup_mode.set(event_target_value(&ev))
                     >
-                        <option value="noPassword">"No password"</option>
-                        <option value="password">"Password"</option>
+                        <option value="noPassword">"No password (anyone on this network can connect)"</option>
+                        <option value="password">"Require a password"</option>
                     </select>
                     <Show when=move || setup_mode.get() == "password">
                         <input

@@ -11,7 +11,7 @@ use wasm_bindgen::JsCast;
 use crate::net::peer::Peer;
 use crate::net::{rest, upload};
 use crate::rpc::RpcClient;
-use crate::util::{Rpc, as_string, fire, json_str};
+use crate::util::{Rpc, as_string, fire, fire_status, json_str};
 
 /// Values are the codes `getKeyboardLayout` returns and `setKeyboardLayout`
 /// accepts on the device.
@@ -37,35 +37,41 @@ pub fn Settings(
     let rotation = RwSignal::new(String::new());
     let layout = RwSignal::new(String::new());
     let brightness = RwSignal::new(0_i64);
+    // Sent back unchanged: `setBacklightSettings` requires all three fields.
+    let dim_after = RwSignal::new(0_i64);
+    let off_after = RwSignal::new(0_i64);
     let device_id = RwSignal::new(String::new());
-    let version = RwSignal::new(String::new());
+    let app_version = RwSignal::new(String::new());
+    let sys_version = RwSignal::new(String::new());
 
     let mount_url = RwSignal::new(String::new());
     let mount_mode = RwSignal::new("CDROM".to_string());
     let mount_state = RwSignal::new(String::new());
     let upload_state = RwSignal::new(String::new());
 
-    let network = RwSignal::new(String::new());
+    let network = RwSignal::new(Vec::<(&'static str, String)>::new());
     let update_state = RwSignal::new(String::new());
     // Only offered after Check reports an update.
     let update_available = RwSignal::new(false);
     let confirm_pw = RwSignal::new(String::new());
     let usb = RwSignal::new(UsbDevices::default());
     let edid = RwSignal::new(String::new());
+    let edid_msg = RwSignal::new(String::new());
     let wol_mac = RwSignal::new(String::new());
+    let wol_msg = RwSignal::new(String::new());
 
     let net_dhcp = RwSignal::new(true);
     let net_ip = RwSignal::new(String::new());
     let net_gw = RwSignal::new(String::new());
     let net_dns = RwSignal::new(String::new());
+    let net_msg = RwSignal::new(String::new());
 
     let auto_update = RwSignal::new(false);
     let jiggler = RwSignal::new(false);
     let usb_emul = RwSignal::new(false);
-    let host_idle = RwSignal::new(false);
-    let video_sleep = RwSignal::new(-1_i64);
     let log_level = RwSignal::new("INFO".to_string());
     let ssh_key = RwSignal::new(String::new());
+    let ssh_msg = RwSignal::new(String::new());
 
     let mqtt_enabled = RwSignal::new(false);
     let mqtt_broker = RwSignal::new(String::new());
@@ -73,6 +79,7 @@ pub fn Settings(
     let mqtt_user = RwSignal::new(String::new());
     let mqtt_pass = RwSignal::new(String::new());
     let mqtt_topic = RwSignal::new("rustkvm".to_string());
+    let mqtt_msg = RwSignal::new(String::new());
 
     let old_pw = RwSignal::new(String::new());
     let new_pw = RwSignal::new(String::new());
@@ -103,8 +110,10 @@ pub fn Settings(
                 }),
                 Box::pin(async move {
                     if let Ok(v) = client.call("getBacklightSettings", Value::Null).await {
-                        brightness
-                            .set(v.get("max_brightness").and_then(Value::as_i64).unwrap_or(0));
+                        let num = |k: &str| v.get(k).and_then(Value::as_i64).unwrap_or(0);
+                        brightness.set(num("max_brightness"));
+                        dim_after.set(num("dim_after"));
+                        off_after.set(num("off_after"));
                     }
                 }),
                 Box::pin(async move {
@@ -114,13 +123,8 @@ pub fn Settings(
                 }),
                 Box::pin(async move {
                     if let Ok(v) = client.call("getLocalVersion", Value::Null).await {
-                        let app = json_str(&v, "app_version");
-                        let sys = json_str(&v, "system_version");
-                        version.set(if sys.is_empty() {
-                            format!("app {app}")
-                        } else {
-                            format!("app {app} · system {sys}")
-                        });
+                        app_version.set(json_str(&v, "app_version"));
+                        sys_version.set(json_str(&v, "system_version"));
                     }
                 }),
                 Box::pin(async move {
@@ -178,19 +182,6 @@ pub fn Settings(
                     }
                 }),
                 Box::pin(async move {
-                    if let Ok(v) = client.call("getHostDisplayIdleMode", Value::Null).await {
-                        host_idle.set(v.get("enabled").and_then(Value::as_bool).unwrap_or(false));
-                    }
-                }),
-                Box::pin(async move {
-                    if let Ok(v) = client.call("getVideoSleepMode", Value::Null).await {
-                        // The device keeps the last duration while disabled.
-                        let enabled = v.get("enabled").and_then(Value::as_bool).unwrap_or(false);
-                        let duration = v.get("duration").and_then(Value::as_i64).unwrap_or(-1);
-                        video_sleep.set(if enabled { duration } else { -1 });
-                    }
-                }),
-                Box::pin(async move {
                     if let Ok(v) = client.call("getDefaultLogLevel", Value::Null).await {
                         log_level.set(v.as_str().unwrap_or("INFO").to_string());
                     }
@@ -219,7 +210,7 @@ pub fn Settings(
     let do_mount = move |_| {
         let url = mount_url.get().trim().to_string();
         if url.is_empty() {
-            mount_state.set("enter an image URL first".to_string());
+            mount_state.set("Enter an image URL first".to_string());
             return;
         }
         let mode = mount_mode.get();
@@ -231,15 +222,17 @@ pub fn Settings(
                         mount_state.set(describe_mount(&v));
                     }
                 }
-                Err(e) => mount_state.set(e.to_string()),
+                Err(e) => mount_state.set(format!("Mount failed: {e}")),
             }
         });
     };
     let do_unmount = move |_| {
         let Some(client) = rpc.get_value() else { return };
         spawn_local(async move {
-            let _ = client.call("unmountImage", Value::Null).await;
-            mount_state.set("none".to_string());
+            match client.call("unmountImage", Value::Null).await {
+                Ok(_) => mount_state.set(NOTHING_MOUNTED.to_string()),
+                Err(e) => mount_state.set(format!("Unmount failed: {e}")),
+            }
         });
     };
 
@@ -251,17 +244,17 @@ pub fn Settings(
         let Some(file) = input.files().and_then(|f| f.get(0)) else { return };
         let (Some(client), Some(p)) = (rpc.get_value(), peer.get_value()) else { return };
         let mode = mount_mode.get();
-        upload_state.set("uploading… 0%".to_string());
+        upload_state.set("Uploading… 0%".to_string());
         spawn_local(async move {
-            let report = move |pct: u32| upload_state.set(format!("uploading… {pct}%"));
+            let report = move |pct: u32| upload_state.set(format!("Uploading… {pct}%"));
             match upload::upload_and_mount(p, client.clone(), file, mode, report).await {
                 Ok(()) => {
-                    upload_state.set("mounted".to_string());
+                    upload_state.set("Uploaded and mounted".to_string());
                     if let Ok(v) = client.call("getVirtualMediaState", Value::Null).await {
                         mount_state.set(describe_mount(&v));
                     }
                 }
-                Err(e) => upload_state.set(e),
+                Err(e) => upload_state.set(format!("Upload failed: {e}")),
             }
         });
     };
@@ -278,7 +271,7 @@ pub fn Settings(
 
     let check_update = move |_| {
         let Some(client) = rpc.get_value() else { return };
-        update_state.set("checking…".to_string());
+        update_state.set("Checking…".to_string());
         spawn_local(async move {
             match client.call_with("getUpdateStatus", Value::Null, 10_000, 4).await {
                 Ok(v) => {
@@ -287,12 +280,12 @@ pub fn Settings(
                         v.get("systemUpdateAvailable").and_then(Value::as_bool).unwrap_or(false);
                     update_available.set(app || sys);
                     update_state.set(if app || sys {
-                        "update available".to_string()
+                        "An update is available".to_string()
                     } else {
-                        "up to date".to_string()
+                        "Up to date".to_string()
                     });
                 }
-                Err(e) => update_state.set(e.to_string()),
+                Err(e) => update_state.set(format!("Check failed: {e}")),
             }
         });
     };
@@ -301,9 +294,11 @@ pub fn Settings(
             return;
         }
         let Some(client) = rpc.get_value() else { return };
-        update_state.set("updating…".to_string());
+        update_state.set("Updating… the device restarts when it is done".to_string());
         spawn_local(async move {
-            let _ = client.call("tryUpdate", Value::Null).await;
+            if let Err(e) = client.call("tryUpdate", Value::Null).await {
+                update_state.set(format!("Update failed: {e}"));
+            }
         });
     };
 
@@ -312,15 +307,22 @@ pub fn Settings(
     };
 
     let save_edid = move |_| {
-        fire(rpc, "setEDID", json!({ "edid": edid.get() }));
+        fire_status(rpc, "setEDID", json!({ "edid": edid.get().trim() }), edid_msg, "EDID applied");
     };
 
     let send_wol = move |_| {
-        let mac = wol_mac.get();
+        let mac = wol_mac.get().trim().to_string();
         if mac.is_empty() {
+            wol_msg.set("Enter the MAC address of the computer to wake".to_string());
             return;
         }
-        fire(rpc, "sendWOLMagicPacket", json!({ "macAddress": mac }));
+        fire_status(
+            rpc,
+            "sendWOLMagicPacket",
+            json!({ "macAddress": mac }),
+            wol_msg,
+            "Magic packet sent",
+        );
     };
 
     let save_network = move |_| {
@@ -330,7 +332,7 @@ pub fn Settings(
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        fire(
+        fire_status(
             rpc,
             "setNetworkSettings",
             json!({ "settings": {
@@ -339,11 +341,13 @@ pub fn Settings(
                 "gateway": net_gw.get(),
                 "dns": dns,
             }}),
+            net_msg,
+            "Network settings saved",
         );
     };
 
     let save_mqtt = move |_| {
-        fire(
+        fire_status(
             rpc,
             "setMqttSettings",
             json!({ "settings": {
@@ -358,14 +362,19 @@ pub fn Settings(
                 "enable_ha_discovery": true,
                 "enable_actions": false,
             }}),
+            mqtt_msg,
+            "MQTT settings saved",
         );
     };
 
-    let save_ssh = move |_| fire(rpc, "setSSHKeyState", json!({ "sshKey": ssh_key.get() }));
-    let set_sleep = move |ev: web_sys::Event| {
-        let d: i64 = event_target_value(&ev).parse().unwrap_or(-1);
-        video_sleep.set(d);
-        fire(rpc, "setVideoSleepMode", json!({ "duration": d }));
+    let save_ssh = move |_| {
+        fire_status(
+            rpc,
+            "setSSHKeyState",
+            json!({ "sshKey": ssh_key.get().trim() }),
+            ssh_msg,
+            "SSH key saved",
+        )
     };
     let set_log = move |ev: web_sys::Event| {
         let lvl = event_target_value(&ev);
@@ -388,7 +397,15 @@ pub fn Settings(
     };
     let set_brightness = move |ev: web_sys::Event| {
         let value: i64 = event_target_value(&ev).parse().unwrap_or(0);
-        fire(rpc, "setBacklightSettings", json!({ "max_brightness": value }));
+        fire(
+            rpc,
+            "setBacklightSettings",
+            json!({
+                "max_brightness": value,
+                "dim_after": dim_after.get_untracked(),
+                "off_after": off_after.get_untracked(),
+            }),
+        );
         brightness.set(value);
     };
     let submit_password = move |_| {
@@ -481,7 +498,7 @@ pub fn Settings(
                 </section>
 
                 <section>
-                    <h3>"Backlight brightness"</h3>
+                    <h3>"Device screen brightness"</h3>
                     <div class="row">
                         <input
                             type="range"
@@ -492,6 +509,7 @@ pub fn Settings(
                         />
                         <span class="muted">{move || brightness.get()}</span>
                     </div>
+                    <div class="hint">"Only applies when a screen is attached to the device."</div>
                 </section>
 
                 <section>
@@ -524,32 +542,48 @@ pub fn Settings(
 
                 <section>
                     <h3>"Virtual media"</h3>
-                    <div class="muted">"Mounted: "{move || mount_state.get()}</div>
-                    <input
-                        type="url"
-                        placeholder="https://…/image.iso"
-                        prop:value=move || mount_url.get()
-                        on:input=move |ev| mount_url.set(event_target_value(&ev))
-                    />
-                    <select
-                        prop:value=move || mount_mode.get()
-                        on:change=move |ev| mount_mode.set(event_target_value(&ev))
-                    >
-                        <option value="CDROM">"CD-ROM"</option>
-                        <option value="DISK">"Disk"</option>
-                    </select>
+                    <div class="muted">{move || mount_state.get()}</div>
+                    <label class="field">
+                        <span>"Image URL"</span>
+                        <input
+                            type="url"
+                            placeholder="https://example.com/image.iso"
+                            prop:value=move || mount_url.get()
+                            on:input=move |ev| mount_url.set(event_target_value(&ev))
+                        />
+                    </label>
+                    <label class="field">
+                        <span>"Present to the host as"</span>
+                        <select
+                            prop:value=move || mount_mode.get()
+                            on:change=move |ev| mount_mode.set(event_target_value(&ev))
+                        >
+                            <option value="CDROM">"CD-ROM"</option>
+                            <option value="DISK">"USB disk"</option>
+                        </select>
+                    </label>
                     <div class="row">
                         <button on:click=do_mount>"Mount URL"</button>
                         <button on:click=do_unmount>"Unmount"</button>
                     </div>
-                    <label class="muted">"or upload a local image:"</label>
-                    <input type="file" on:change=on_file />
+                    <label class="field">
+                        <span>"Or upload an image from this computer"</span>
+                        <input type="file" on:change=on_file />
+                    </label>
                     <div class="muted">{move || upload_state.get()}</div>
                 </section>
 
                 <section>
                     <h3>"Network"</h3>
-                    <div class="muted">{move || network.get()}</div>
+                    <dl class="kv">
+                        {move || {
+                            network
+                                .get()
+                                .into_iter()
+                                .map(|(k, v)| view! { <dt>{k}</dt><dd>{v}</dd> })
+                                .collect_view()
+                        }}
+                    </dl>
                     <button on:click=renew_dhcp>"Renew DHCP lease"</button>
                 </section>
 
@@ -557,11 +591,11 @@ pub fn Settings(
                     <h3>"Firmware update"</h3>
                     <div class="muted">{move || update_state.get()}</div>
                     <div class="row">
-                        <button on:click=check_update>"Check"</button>
+                        <button on:click=check_update>"Check for updates"</button>
                         <button
                             on:click=apply_update
                             disabled=move || !update_available.get()
-                            title="Run Check first; enabled when an update is available"
+                            title="Check for updates first; enabled when one is available"
                         >
                             "Update now"
                         </button>
@@ -614,57 +648,76 @@ pub fn Settings(
 
                 <section>
                     <h3>"EDID"</h3>
-                    <input
-                        type="text"
-                        placeholder="hex EDID (empty = default)"
-                        prop:value=move || edid.get()
-                        on:input=move |ev| edid.set(event_target_value(&ev))
-                    />
+                    <label class="field">
+                        <span>"EDID (hex)"</span>
+                        <textarea
+                            rows="3"
+                            placeholder="00ffffffffffff00…"
+                            prop:value=move || edid.get()
+                            on:input=move |ev| edid.set(event_target_value(&ev))
+                        ></textarea>
+                    </label>
+                    <div class="hint">"Leave empty to restore the default display identity."</div>
                     <button on:click=save_edid>"Apply EDID"</button>
+                    <div class="muted">{move || edid_msg.get()}</div>
                 </section>
 
                 <section>
                     <h3>"Wake-on-LAN"</h3>
-                    <input
-                        type="text"
-                        placeholder="AA:BB:CC:DD:EE:FF"
-                        prop:value=move || wol_mac.get()
-                        on:input=move |ev| wol_mac.set(event_target_value(&ev))
-                    />
+                    <label class="field">
+                        <span>"MAC address of the computer to wake"</span>
+                        <input
+                            type="text"
+                            placeholder="AA:BB:CC:DD:EE:FF"
+                            prop:value=move || wol_mac.get()
+                            on:input=move |ev| wol_mac.set(event_target_value(&ev))
+                        />
+                    </label>
                     <button on:click=send_wol>"Send magic packet"</button>
+                    <div class="muted">{move || wol_msg.get()}</div>
                 </section>
 
                 <section>
-                    <h3>"Static network"</h3>
+                    <h3>"IP address"</h3>
                     <label class="toggle">
                         <input
                             type="checkbox"
                             prop:checked=move || net_dhcp.get()
                             on:change=move |ev| net_dhcp.set(event_target_checked(&ev))
                         />
-                        "DHCP"
+                        "Get address automatically (DHCP)"
                     </label>
                     <Show when=move || !net_dhcp.get()>
-                        <input
-                            type="text"
-                            placeholder="Static IP (e.g. 192.168.1.50)"
-                            prop:value=move || net_ip.get()
-                            on:input=move |ev| net_ip.set(event_target_value(&ev))
-                        />
-                        <input
-                            type="text"
-                            placeholder="Gateway"
-                            prop:value=move || net_gw.get()
-                            on:input=move |ev| net_gw.set(event_target_value(&ev))
-                        />
-                        <input
-                            type="text"
-                            placeholder="DNS (comma separated)"
-                            prop:value=move || net_dns.get()
-                            on:input=move |ev| net_dns.set(event_target_value(&ev))
-                        />
+                        <label class="field">
+                            <span>"Static IP"</span>
+                            <input
+                                type="text"
+                                placeholder="192.168.1.50"
+                                prop:value=move || net_ip.get()
+                                on:input=move |ev| net_ip.set(event_target_value(&ev))
+                            />
+                        </label>
+                        <label class="field">
+                            <span>"Gateway"</span>
+                            <input
+                                type="text"
+                                placeholder="192.168.1.1"
+                                prop:value=move || net_gw.get()
+                                on:input=move |ev| net_gw.set(event_target_value(&ev))
+                            />
+                        </label>
+                        <label class="field">
+                            <span>"DNS servers (comma separated)"</span>
+                            <input
+                                type="text"
+                                placeholder="1.1.1.1, 8.8.8.8"
+                                prop:value=move || net_dns.get()
+                                on:input=move |ev| net_dns.set(event_target_value(&ev))
+                            />
+                        </label>
                     </Show>
-                    <button on:click=save_network>"Apply network"</button>
+                    <button on:click=save_network>"Apply"</button>
+                    <div class="muted">{move || net_msg.get()}</div>
                 </section>
 
                 <section>
@@ -688,34 +741,11 @@ pub fn Settings(
                     <label class="toggle">
                         <input
                             type="checkbox"
-                            prop:checked=move || host_idle.get()
-                            on:change=move |ev| {
-                                send_toggle(rpc, "setHostDisplayIdleMode", host_idle, &ev)
-                            }
-                        />
-                        "Host display idle"
-                    </label>
-                    <label class="toggle">
-                        <input
-                            type="checkbox"
                             prop:checked=move || auto_update.get()
                             on:change=move |ev| send_toggle(rpc, "setAutoUpdateState", auto_update, &ev)
                         />
                         "Auto-update"
                     </label>
-                </section>
-
-                <section>
-                    <h3>"Video sleep"</h3>
-                    <div class="row">
-                        <input
-                            type="number"
-                            min="-1"
-                            prop:value=move || video_sleep.get().to_string()
-                            on:change=set_sleep
-                        />
-                        <span class="muted">"seconds (-1 = off)"</span>
-                    </div>
                 </section>
 
                 <section>
@@ -729,14 +759,18 @@ pub fn Settings(
                 </section>
 
                 <section>
-                    <h3>"SSH authorized key"</h3>
-                    <input
-                        type="text"
-                        placeholder="ssh-ed25519 AAAA…"
-                        prop:value=move || ssh_key.get()
-                        on:input=move |ev| ssh_key.set(event_target_value(&ev))
-                    />
+                    <h3>"SSH access"</h3>
+                    <label class="field">
+                        <span>"Authorized public key"</span>
+                        <textarea
+                            rows="3"
+                            placeholder="ssh-ed25519 AAAA… user@host"
+                            prop:value=move || ssh_key.get()
+                            on:input=move |ev| ssh_key.set(event_target_value(&ev))
+                        ></textarea>
+                    </label>
                     <button on:click=save_ssh>"Save SSH key"</button>
+                    <div class="muted">{move || ssh_msg.get()}</div>
                 </section>
 
                 <section>
@@ -747,47 +781,71 @@ pub fn Settings(
                             prop:checked=move || mqtt_enabled.get()
                             on:change=move |ev| mqtt_enabled.set(event_target_checked(&ev))
                         />
-                        "Enabled"
+                        "Publish to an MQTT broker"
                     </label>
-                    <input
-                        type="text"
-                        placeholder="Broker host"
-                        prop:value=move || mqtt_broker.get()
-                        on:input=move |ev| mqtt_broker.set(event_target_value(&ev))
-                    />
-                    <input
-                        type="number"
-                        placeholder="Port"
-                        prop:value=move || mqtt_port.get().to_string()
-                        on:input=move |ev| mqtt_port.set(event_target_value(&ev).parse().unwrap_or(1883))
-                    />
-                    <input
-                        type="text"
-                        placeholder="Username"
-                        prop:value=move || mqtt_user.get()
-                        on:input=move |ev| mqtt_user.set(event_target_value(&ev))
-                    />
-                    <input
-                        type="password"
-                        placeholder="Password"
-                        prop:value=move || mqtt_pass.get()
-                        on:input=move |ev| mqtt_pass.set(event_target_value(&ev))
-                    />
-                    <input
-                        type="text"
-                        placeholder="Base topic"
-                        prop:value=move || mqtt_topic.get()
-                        on:input=move |ev| mqtt_topic.set(event_target_value(&ev))
-                    />
+                    <label class="field">
+                        <span>"Broker host"</span>
+                        <input
+                            type="text"
+                            placeholder="homeassistant.local"
+                            prop:value=move || mqtt_broker.get()
+                            on:input=move |ev| mqtt_broker.set(event_target_value(&ev))
+                        />
+                    </label>
+                    <label class="field">
+                        <span>"Port"</span>
+                        <input
+                            type="number"
+                            placeholder="1883"
+                            prop:value=move || mqtt_port.get().to_string()
+                            on:input=move |ev| mqtt_port.set(event_target_value(&ev).parse().unwrap_or(1883))
+                        />
+                    </label>
+                    <label class="field">
+                        <span>"Username"</span>
+                        <input
+                            type="text"
+                            placeholder="Optional"
+                            prop:value=move || mqtt_user.get()
+                            on:input=move |ev| mqtt_user.set(event_target_value(&ev))
+                        />
+                    </label>
+                    <label class="field">
+                        <span>"Password"</span>
+                        <input
+                            type="password"
+                            placeholder="Optional"
+                            prop:value=move || mqtt_pass.get()
+                            on:input=move |ev| mqtt_pass.set(event_target_value(&ev))
+                        />
+                    </label>
+                    <label class="field">
+                        <span>"Base topic"</span>
+                        <input
+                            type="text"
+                            placeholder="rustkvm"
+                            prop:value=move || mqtt_topic.get()
+                            on:input=move |ev| mqtt_topic.set(event_target_value(&ev))
+                        />
+                    </label>
                     <button on:click=save_mqtt>"Apply MQTT"</button>
+                    <div class="muted">{move || mqtt_msg.get()}</div>
                 </section>
 
                 <crate::settings_advanced::AdvancedSettings open=open rpc=rpc />
 
                 <section>
                     <h3>"About"</h3>
-                    <div class="muted">"Device: "{move || device_id.get()}</div>
-                    <div class="muted">{move || version.get()}</div>
+                    <dl class="kv">
+                        <dt>"Device ID"</dt>
+                        <dd>{move || or_dash(device_id.get())}</dd>
+                        <dt>"App version"</dt>
+                        <dd>{move || or_dash(app_version.get())}</dd>
+                        <Show when=move || !sys_version.get().is_empty()>
+                            <dt>"System version"</dt>
+                            <dd>{move || sys_version.get()}</dd>
+                        </Show>
+                    </dl>
                 </section>
             </aside>
         </Show>
@@ -820,20 +878,25 @@ impl UsbDevices {
     }
 }
 
-/// One line for the Network section: address, link state, gateway and DNS.
+const NOTHING_MOUNTED: &str = "Nothing mounted";
+
+fn or_dash(s: String) -> String {
+    if s.is_empty() { "—".to_string() } else { s }
+}
+
+/// Rows for the Network section: address, link state, gateway and DNS.
 /// The device can have several interfaces, so when this page was loaded from a
 /// different address than the one reported, say so instead of looking wrong.
-fn describe_network(v: &Value) -> String {
+fn describe_network(v: &Value) -> Vec<(&'static str, String)> {
     let ip = json_str(v, "ip");
     let online = v.get("online").and_then(Value::as_bool).unwrap_or(false);
-    let mut line = format!(
-        "{} ({})",
-        if ip.is_empty() { "—" } else { &ip },
-        if online { "online" } else { "offline" }
-    );
+    let mut rows = vec![
+        ("Address", or_dash(ip.clone())),
+        ("Link", if online { "Online" } else { "Offline" }.to_string()),
+    ];
     let gateway = json_str(v, "gateway");
     if !gateway.is_empty() {
-        line.push_str(&format!(" · gateway {gateway}"));
+        rows.push(("Gateway", gateway));
     }
     let dns: Vec<&str> = v
         .get("dns")
@@ -841,29 +904,29 @@ fn describe_network(v: &Value) -> String {
         .map(|a| a.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
     if !dns.is_empty() {
-        line.push_str(&format!(" · DNS {}", dns.join(", ")));
+        rows.push(("DNS", dns.join(", ")));
     }
     let page_host =
         web_sys::window().and_then(|w| w.location().hostname().ok()).unwrap_or_default();
     if !ip.is_empty() && !page_host.is_empty() && page_host != ip {
-        line.push_str(&format!(" · this page via {page_host}"));
+        rows.push(("This page", format!("opened via {page_host}")));
     }
-    line
+    rows
 }
 
 fn describe_mount(v: &Value) -> String {
-    if v.is_null() {
-        return "none".to_string();
-    }
     let name = json_str(v, "filename");
     let url = json_str(v, "url");
-    let mode = json_str(v, "mode");
     let what = if !name.is_empty() {
         name
     } else if !url.is_empty() {
         url
     } else {
-        return "none".to_string();
+        return NOTHING_MOUNTED.to_string();
     };
-    if mode.is_empty() { what } else { format!("{what} ({mode})") }
+    match json_str(v, "mode").as_str() {
+        "CDROM" => format!("Mounted as CD-ROM: {what}"),
+        "DISK" => format!("Mounted as USB disk: {what}"),
+        _ => format!("Mounted: {what}"),
+    }
 }
