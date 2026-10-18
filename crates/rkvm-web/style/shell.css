@@ -1,0 +1,114 @@
+/* App shell: Claude Desktop layout. A 52px sidebar rail on the left, a 48px
+   titlebar over the content, and the video stage filling the rest. The
+   pinned sidebar (256px, logo click) pushes the content, as in Claude
+   Desktop, so the titlebar chip and actions are never covered; the column
+   switches in one step, so the video rescales once, not every frame.
+   Hovering the rail peeks the sidebar over the content without moving it.
+   Below 720px a pinned sidebar floats too. */
+
+.app { position: fixed; inset: 0; display: grid; grid-template-columns: var(--sidebar-rail) minmax(0, 1fr); }
+/* The sidebar leaves the grid entirely, so main must be the only track. */
+.app.sb-open { grid-template-columns: var(--sidebar-open) minmax(0, 1fr); }
+.app.focus { grid-template-columns: minmax(0, 1fr); }
+
+/* Sidebar */
+/* Above the sheets' scrims (z 40-41) so theme, language and nav stay
+   clickable while settings is open. */
+.sidebar { position: relative; z-index: 45; min-width: 0; }
+.app.focus .sidebar { display: none; }
+.app.focus .scrim { left: 0; }
+.sb-panel { position: absolute; inset: 0 auto 0 0; width: var(--sidebar-rail); display: flex; flex-direction: column;
+  padding: 0 var(--space-2) var(--space-3); background: var(--bg-sidebar);
+  border-right: var(--hairline) solid var(--border-secondary); overflow: hidden; }
+.sidebar.expanded .sb-panel { width: var(--sidebar-open); }
+/* Hover peek: floats over the content and never moves the grid. */
+.sidebar.peek .sb-panel { box-shadow: var(--shadow-lg); transition: width .18s var(--ease), box-shadow .18s var(--ease); }
+.sb-scrim { display: none; }
+@media (max-width: 720px) {
+  .app.sb-open { grid-template-columns: var(--sidebar-rail) minmax(0, 1fr); }
+  .sb-panel { transition: width .2s var(--ease), box-shadow .2s var(--ease); }
+  .sidebar.open .sb-panel { box-shadow: var(--shadow-lg); }
+  .sb-scrim { display: block; position: fixed; inset: 0; z-index: 44; background: transparent; }
+}
+.sb-top { display: flex; align-items: center; gap: var(--space-2); height: var(--titlebar-h); flex: none; }
+.sb-logo { display: grid; place-items: center; width: 36px; height: 36px; flex: none; padding: 0; border: 0;
+  border-radius: var(--radius-md); background: transparent; color: var(--accent); cursor: pointer;
+  transition: background var(--dur) var(--ease); }
+.sb-logo:hover { background: var(--bg-hover); }
+.sb-logo svg { width: 22px; height: 22px; }
+.sb-brand { font-size: var(--text-md); font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+.sb-top .icon-btn { margin-left: auto; }
+.sb-nav { display: flex; flex-direction: column; gap: 2px; margin-top: var(--space-2); }
+.sb-item { display: flex; align-items: center; gap: var(--space-3); width: 100%; height: 36px; padding: 0 var(--space-2);
+  border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-secondary);
+  font-size: var(--text-sm); text-align: left; white-space: nowrap; cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
+.sb-item:not(:disabled):hover { background: var(--bg-hover); color: var(--text-primary); }
+.sb-item.on { background: var(--bg-selected); color: var(--text-primary); font-weight: 500; }
+.sb-item:disabled { opacity: .45; cursor: default; }
+.sb-item .sb-meta { margin-left: auto; font-size: var(--text-xs); color: var(--text-tertiary); }
+.sb-foot { margin-top: auto; display: flex; flex-direction: column; gap: 2px; }
+.sb-status { display: flex; align-items: center; gap: var(--space-3); height: 45px; padding: 0 var(--space-2);
+  margin-top: var(--space-1); border-top: var(--hairline) solid var(--border-tertiary); white-space: nowrap; }
+.sb-status .dot { margin: 0 6px; }
+.sb-status .sb-host { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.sb-status .sb-host small { color: var(--text-tertiary); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; }
+.sidebar:not(.expanded) .sb-label { display: none; }
+.sidebar:not(.expanded) .sidebar:not(.expanded) .sb-top .icon-btn { display: none; }
+
+/* Main column */
+.main { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
+/* Titlebar */
+.titlebar { display: flex; align-items: center; gap: var(--space-2); height: var(--titlebar-h); flex: none;
+  padding: 0 var(--space-2) 0 var(--space-4); background: var(--bg-sidebar);
+  border-bottom: var(--hairline) solid var(--border-tertiary); min-width: 0; }
+.tb-title { font-size: var(--text-md); font-weight: 500; white-space: nowrap; }
+.tb-left { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.tb-right { display: flex; align-items: center; gap: 2px; margin-left: auto; min-width: 0;
+  overflow-x: auto; scrollbar-width: none; }
+.tb-right::-webkit-scrollbar { display: none; }
+.tb-leds { display: inline-flex; gap: var(--space-1); margin-right: var(--space-2); }
+.tb-quality { display: inline-flex; align-items: center; }
+.tb-quality > span { min-width: 40px; text-align: center; font-size: var(--text-xs); color: var(--text-secondary);
+  font-variant-numeric: tabular-nums; }
+
+/* Focus mode: sidebar and titlebar leave the layout; a small handle at the
+   top center peeks the titlebar in as an overlay. */
+.app.focus .titlebar { position: absolute; top: 0; left: 50%; z-index: 25; width: max-content;
+  max-width: calc(100% - 16px); border: 0; border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+  box-shadow: var(--shadow-popover); transform: translate(-50%, -100%); opacity: 0;
+  transition: transform .22s var(--ease), opacity .18s var(--ease); }
+.app.focus .titlebar.peek { transform: translate(-50%, 0); opacity: 1; }
+.focus-handle { position: absolute; top: 0; left: 50%; transform: translateX(-50%); z-index: 24;
+  width: 56px; height: 14px; border: 0; border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--bg-primary); color: var(--text-tertiary); box-shadow: var(--shadow-popover);
+  display: grid; place-items: center; cursor: pointer; opacity: .7; }
+.focus-handle:hover { opacity: 1; }
+.focus-handle::before { content: ""; width: 20px; height: 3px; border-radius: 2px; background: currentColor; }
+
+/* Stage: the video is always mounted here so its MediaStream survives every
+   overlay change; gates and dialogs sit on top of it. */
+.stage { position: relative; flex: 1; min-height: 0; background: var(--stage); overflow: hidden; }
+#kvm-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+  background: var(--stage); display: block; outline: none; }
+
+/* Gate: setup / sign-in / connect, centered over the stage. */
+.gate { position: absolute; inset: 0; z-index: 10; display: grid; place-items: center; padding: var(--space-4);
+  background: var(--bg-secondary); animation: fade .2s var(--ease); overflow-y: auto; }
+.gate .card .btn.block { margin-top: var(--space-2); }
+
+/* No-password warning over the stage. */
+.stage-callout { position: absolute; top: var(--space-3); left: var(--space-3); z-index: 15;
+  max-width: min(480px, calc(100% - 24px)); background: var(--bg-primary); box-shadow: var(--shadow-popover); }
+.stage-callout .icon-btn { margin: -6px -6px -6px 0; color: inherit; }
+
+/* Touch: every target at least 44px (WCAG 2.5.5). The titlebar row scrolls
+   sideways when the actions no longer fit. */
+@media (pointer: coarse) {
+  .icon-btn, .icon-btn.sm { width: 44px; height: 44px; }
+  .btn.sm { height: 44px; }
+  .sb-item, .set-item { height: 44px; }
+  .seg button { height: 40px; }
+  .focus-handle { width: 88px; height: 24px; }
+}

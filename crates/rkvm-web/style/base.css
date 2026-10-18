@@ -1,0 +1,28 @@
+/* Element defaults. Only tokens from tokens.css appear here. */
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; height: 100%; overflow: hidden;
+  background: var(--bg-secondary); color: var(--text-primary);
+  font: 400 var(--text-sm)/var(--lh-sm) var(--font-sans);
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+::selection { background: var(--bg-info); }
+::placeholder { color: var(--text-tertiary); }
+
+.muted { color: var(--text-tertiary); font-size: var(--text-xs); line-height: var(--lh-xs);
+  overflow-wrap: anywhere; }
+.mono { font-family: var(--font-mono); }
+
+* { scrollbar-width: thin; scrollbar-color: var(--border-secondary) transparent; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes slideUp { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes toastIn { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

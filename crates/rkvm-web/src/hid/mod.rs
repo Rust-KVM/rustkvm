@@ -57,7 +57,7 @@ pub fn attach(video: HtmlVideoElement, session: Session, mouse_mode: MouseMode) 
         let session = session.clone();
         let kb = kb.clone();
         let cb = Closure::<dyn FnMut(KeyboardEvent)>::new(move |ev: KeyboardEvent| {
-            if editable_focused() {
+            if ui_owns_keyboard() {
                 return;
             }
             ev.prevent_default();
@@ -83,18 +83,27 @@ pub fn attach(video: HtmlVideoElement, session: Session, mouse_mode: MouseMode) 
         let session = session.clone();
         let kb = kb.clone();
         let cb = Closure::<dyn FnMut(KeyboardEvent)>::new(move |ev: KeyboardEvent| {
-            if editable_focused() {
-                return;
-            }
-            ev.prevent_default();
+            // A key pressed for the host is always released to it, even if
+            // focus moved into the UI while it was held.
+            let local = ui_owns_keyboard();
             let code = ev.code();
             let mut st = kb.borrow_mut();
-            if let Some(bit) = keymap::code_to_modifier(&code) {
+            let held = if let Some(bit) = keymap::code_to_modifier(&code) {
+                let held = st.modifiers & bit != 0;
                 st.modifiers &= !bit;
+                held
             } else if let Some(usage) = keymap::code_to_usage(&code) {
+                let held = st.keys.contains(&usage);
                 st.keys.retain(|&k| k != usage);
+                held
             } else {
                 return;
+            };
+            if local && !held {
+                return;
+            }
+            if !local {
+                ev.prevent_default();
             }
             if let Some((peer, _)) = session.borrow().as_ref() {
                 send_keyboard(peer, &st);
@@ -162,7 +171,12 @@ fn pointer_locked(_video: &HtmlVideoElement) -> bool {
     web_sys::window().and_then(|w| w.document()).and_then(|d| d.pointer_lock_element()).is_some()
 }
 
-fn editable_focused() -> bool {
+/// Whether keys belong to the page instead of the host: a text field, the
+/// terminal, an open sheet or dialog (`data-modal`), or chrome
+/// (`data-chrome`) reached with the keyboard. A button that was only clicked
+/// does not match `:focus-visible`, so typing after a click still goes to the
+/// host.
+fn ui_owns_keyboard() -> bool {
     web_sys::window()
         .and_then(|w| w.document())
         .and_then(|d| d.active_element())
@@ -170,6 +184,9 @@ fn editable_focused() -> bool {
             matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT")
                 || el.has_attribute("contenteditable")
                 || el.has_attribute("data-term")
+                || el.closest("[data-modal]").ok().flatten().is_some()
+                || (el.closest("[data-chrome]").ok().flatten().is_some()
+                    && el.matches(":focus-visible").unwrap_or(false))
         })
         .unwrap_or(false)
 }
@@ -183,15 +200,33 @@ fn send_keyboard(peer: &Peer, st: &KbState) {
     let _ = peer.hidrpc.send_with_u8_array(&bytes);
 }
 
+/// Maps a pointer position on the `<video>` element to the 0..=32767 absolute
+/// range. The element uses `object-fit: contain`, so the picture is centered
+/// and may have bars on two sides; positions are taken relative to the
+/// picture itself and clamped onto its edges when the pointer is on a bar.
 fn abs_position(video: &HtmlVideoElement, ev: &MouseEvent) -> Option<(i32, i32, u8)> {
     let (cw, ch) = (video.client_width() as f64, video.client_height() as f64);
     if cw <= 0.0 || ch <= 0.0 {
         return None;
     }
-    let rel_x = (ev.offset_x() as f64 / cw).clamp(0.0, 1.0);
-    let rel_y = (ev.offset_y() as f64 / ch).clamp(0.0, 1.0);
+    let (left, top, w, h) =
+        content_rect(cw, ch, video.video_width() as f64, video.video_height() as f64);
+    let rel_x = ((ev.offset_x() as f64 - left) / w).clamp(0.0, 1.0);
+    let rel_y = ((ev.offset_y() as f64 - top) / h).clamp(0.0, 1.0);
     let buttons = (ev.buttons() & 0x1f) as u8;
     Some(((rel_x * 32767.0).round() as i32, (rel_y * 32767.0).round() as i32, buttons))
+}
+
+/// The box the picture occupies inside a `cw` x `ch` element under
+/// `object-fit: contain`, as (left, top, width, height). Before the first
+/// frame the intrinsic size is 0 and the whole element is used.
+fn content_rect(cw: f64, ch: f64, vw: f64, vh: f64) -> (f64, f64, f64, f64) {
+    if vw <= 0.0 || vh <= 0.0 {
+        return (0.0, 0.0, cw, ch);
+    }
+    let scale = (cw / vw).min(ch / vh);
+    let (w, h) = (vw * scale, vh * scale);
+    ((cw - w) / 2.0, (ch - h) / 2.0, w, h)
 }
 
 /// Sends a press and a release report. Keyboard reports go over the reliable,

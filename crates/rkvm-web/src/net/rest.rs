@@ -2,6 +2,8 @@ use gloo_net::http::Request;
 use serde_json::json;
 use web_sys::RequestCredentials;
 
+use crate::i18n::tr;
+
 pub async fn auth_required() -> bool {
     match Request::get("/device").credentials(RequestCredentials::Include).send().await {
         Ok(resp) => resp.status() == 401,
@@ -72,7 +74,7 @@ pub async fn change_password(old: &str, new: &str) -> Result<(), String> {
         .map_err(|e| format!("change-password request failed: {e}"))?;
     match resp.status() {
         s if (200..300).contains(&s) => Ok(()),
-        401 => Err("Current password is incorrect".to_string()),
+        401 => Err(tr("当前密码不正确", "Current password is incorrect").to_string()),
         s => Err(format!("change-password HTTP {s}")),
     }
 }
@@ -88,9 +90,9 @@ pub async fn login_local(password: &str) -> Result<(), String> {
     if resp.ok() {
         Ok(())
     } else if resp.status() == 401 {
-        Err("Incorrect password".to_string())
+        Err(tr("密码不正确", "Incorrect password").to_string())
     } else if resp.status() == 429 {
-        Err("Too many attempts — try again later".to_string())
+        Err(tr("尝试次数过多，请稍后再试", "Too many attempts, try again later").to_string())
     } else {
         Err(format!("login HTTP {}", resp.status()))
     }

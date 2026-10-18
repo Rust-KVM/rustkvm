@@ -193,15 +193,22 @@ lib.rs                   # re-exports hidrpc + jsonrpc
 
 ```
 main.rs                  # WASM entry: panic hook + tracing-wasm + mount Leptos App
-├── app.rs               # root component, layout, top-level signals/routing
+├── app.rs               # root component: connection state, handlers, page content inside the shell
+├── shell/               # Claude Desktop frame: sidebar.rs (52px rail / 256px overlay), titlebar.rs
+├── ui/                  # design-system components: icon.rs, button.rs (Button, IconButton), field.rs (Field, Callout)
+├── i18n.rs              # zh/en copy via `i18n.t("中文", "English")`, zh by default
+├── theme.rs             # light/dark toggle (boot script in index.html applies it before paint)
 ├── rpc.rs               # JSON-RPC over WebRTC data channel
 ├── net/                 # peer.rs (WebRTC PeerConnection), rest.rs (HTTP), upload.rs (virtual media)
 ├── hid/                 # keymap.rs (re-exports rkvm_proto::keymap) + mod.rs (keyboard/mouse → hidrpc via rkvm-proto)
 ├── terminal.rs          # vt100 terminal view
 ├── ocr.rs               # screen OCR via Tesseract.js (JS interop, CDN-loaded)
-├── settings.rs / settings_advanced.rs  # settings drawer
+├── settings.rs / settings_advanced.rs  # settings dialog sections
+├── settings_nav.rs                      # settings dialog pages, search
 └── util.rs
 ```
+
+Styles live in `crates/rkvm-web/style/` (`tokens.css` → `base.css` → `components.css` → `shell.css` → `panels.css`, linked from `index.html` with `data-trunk rel="css"`). The design rules (tokens, layout, components, copy) are in [`docs/design-system.md`](docs/design-system.md); follow it for any UI change.
 
 ## Frontend
 

@@ -40,8 +40,13 @@ impl Peer {
     }
 }
 
-const LOST_MESSAGE: &str = "Connection lost: another client may have taken over this session, \
-                            or the network dropped.";
+fn lost_message() -> String {
+    crate::i18n::tr(
+        "连接已断开：可能是其他客户端接管了这个会话，或者网络中断了。",
+        "Connection lost: another client may have taken over this session, or the network dropped.",
+    )
+    .to_string()
+}
 
 /// Polls an established connection until it is lost or `cancelled` returns
 /// true. Returns the user-facing reason when the connection is lost.
@@ -60,12 +65,12 @@ pub async fn watch(peer: &Peer, cancelled: impl Fn() -> bool) -> Option<String> 
         }
         match peer.pc.ice_connection_state() {
             RtcIceConnectionState::Failed | RtcIceConnectionState::Closed => {
-                return Some(LOST_MESSAGE.to_string());
+                return Some(lost_message());
             }
             RtcIceConnectionState::Disconnected => {
                 disconnected += 1;
                 if disconnected >= DISCONNECTED_TICKS {
-                    return Some(LOST_MESSAGE.to_string());
+                    return Some(lost_message());
                 }
             }
             _ => disconnected = 0,
@@ -74,7 +79,7 @@ pub async fn watch(peer: &Peer, cancelled: impl Fn() -> bool) -> Option<String> 
             peer.rpc.ready_state(),
             RtcDataChannelState::Closing | RtcDataChannelState::Closed
         ) {
-            return Some(LOST_MESSAGE.to_string());
+            return Some(lost_message());
         }
     }
 }
@@ -212,7 +217,7 @@ pub async fn connect(video: &HtmlVideoElement) -> Result<Peer, String> {
                 pc.close();
                 out_tx.close_channel();
                 let _ = raw_ws.close();
-                return Err("ICE connection failed".to_string());
+                return Err(crate::i18n::tr("连接失败（ICE）", "ICE connection failed").to_string());
             }
             _ => {}
         }
@@ -232,7 +237,8 @@ pub async fn connect(video: &HtmlVideoElement) -> Result<Peer, String> {
     pc.close();
     out_tx.close_channel();
     let _ = raw_ws.close();
-    Err("timed out waiting for the data channel to open".to_string())
+    Err(crate::i18n::tr("等待数据通道打开超时", "Timed out waiting for the data channel to open")
+        .to_string())
 }
 
 fn signaling_url() -> Result<String, String> {

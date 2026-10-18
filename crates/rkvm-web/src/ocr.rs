@@ -12,7 +12,7 @@ extern "C" {
 pub async fn recognize(video: &HtmlVideoElement) -> Result<String, String> {
     let (w, h) = (video.video_width(), video.video_height());
     if w == 0 || h == 0 {
-        return Err("no video frame yet".to_string());
+        return Err(crate::i18n::tr("还没有视频画面", "No video frame yet").to_string());
     }
 
     let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;

@@ -8,16 +8,51 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::HtmlTextAreaElement;
 
+use crate::i18n::tr;
 use crate::rpc::RpcClient;
 
 pub type Rpc = StoredValue<Option<Rc<RpcClient>>, LocalStorage>;
 
-pub fn fire(rpc: Rpc, method: &'static str, params: Value) {
-    if let Some(client) = rpc.get_value() {
-        spawn_local(async move {
-            let _ = client.call(method, params).await;
-        });
+thread_local! {
+    static ERROR_SINK: std::cell::Cell<Option<RwSignal<Option<String>>>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Registers the app's toast signal; [`report_error`] writes into it.
+pub fn set_error_sink(sink: RwSignal<Option<String>>) {
+    ERROR_SINK.set(Some(sink));
+}
+
+/// Shows `msg` in the bottom-center toast (above dialogs).
+pub fn report_error(msg: String) {
+    if let Some(sink) = ERROR_SINK.get() {
+        sink.set(Some(msg));
     }
+}
+
+/// Sends a change the UI already shows. If the device refuses it, the toast
+/// says so; use [`fire_revert`] when the control must also snap back.
+pub fn fire(rpc: Rpc, method: &'static str, params: Value) {
+    fire_revert(rpc, method, params, || ());
+}
+
+/// Optimistic update: the caller has already set the new value; on failure
+/// `revert` restores the old one and the toast explains why.
+pub fn fire_revert(rpc: Rpc, method: &'static str, params: Value, revert: impl FnOnce() + 'static) {
+    let Some(client) = rpc.get_value() else {
+        revert();
+        report_error(tr("未连接设备", "Not connected to the device").to_string());
+        return;
+    };
+    spawn_local(async move {
+        if let Err(e) = client.call(method, params).await {
+            revert();
+            report_error(format!(
+                "{}{e}",
+                tr("设备未接受更改：", "The device refused the change: ")
+            ));
+        }
+    });
 }
 
 /// Like `fire`, but writes the outcome into `status` so the user can see
@@ -30,14 +65,14 @@ pub fn fire_status(
     ok: &'static str,
 ) {
     let Some(client) = rpc.get_value() else {
-        status.set("Not connected to the device".to_string());
+        status.set(tr("未连接设备", "Not connected to the device").to_string());
         return;
     };
-    status.set("Saving…".to_string());
+    status.set(tr("正在保存…", "Saving…").to_string());
     spawn_local(async move {
         match client.call(method, params).await {
             Ok(_) => status.set(ok.to_string()),
-            Err(e) => status.set(format!("Failed: {e}")),
+            Err(e) => status.set(format!("{}{e}", tr("失败：", "Failed: "))),
         }
     });
 }
@@ -83,11 +118,17 @@ pub async fn toggle_fullscreen() -> Result<(), String> {
         let el = doc.document_element().ok_or("no document element")?;
         call_method(el.as_ref(), "requestFullscreen", &Array::new())
     };
-    let value = result.map_err(|e| format!("Fullscreen unavailable: {}", js_message(&e)))?;
+    let value = result.map_err(|e| {
+        format!("{}{}", tr("无法全屏：", "Fullscreen unavailable: "), js_message(&e))
+    })?;
     if let Ok(promise) = value.dyn_into::<Promise>() {
-        JsFuture::from(promise)
-            .await
-            .map_err(|e| format!("Fullscreen blocked by the browser: {}", js_message(&e)))?;
+        JsFuture::from(promise).await.map_err(|e| {
+            format!(
+                "{}{}",
+                tr("浏览器阻止了全屏：", "Fullscreen blocked by the browser: "),
+                js_message(&e)
+            )
+        })?;
     }
     Ok(())
 }
@@ -124,6 +165,24 @@ pub async fn copy_text(text: &str) -> Result<(), String> {
     if copied {
         Ok(())
     } else {
-        Err("Copy failed: select the text and copy it manually".to_string())
+        Err(tr(
+            "复制失败：请选中文字后手动复制",
+            "Copy failed: select the text and copy it manually",
+        )
+        .to_string())
+    }
+}
+
+/// Read a per-browser preference. Storage can be missing or throw (private
+/// windows, blocked site data); that reads as "not set".
+pub fn store_get(key: &str) -> Option<String> {
+    web_sys::window()?.local_storage().ok()??.get_item(key).ok()?
+}
+
+/// Save a per-browser preference. Losing it only means the default comes back
+/// on the next load, so failures are ignored.
+pub fn store_set(key: &str, value: &str) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = storage.set_item(key, value);
     }
 }
