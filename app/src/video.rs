@@ -10,7 +10,7 @@ use webrtc::media::Sample;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
 use crate::api::{JsonRpcProcessor, default_registry};
-use crate::pipeline::{AudioConfig, PipelineManager, VideoConfig};
+use crate::pipeline::{AudioConfig, H264Profile, PipelineManager, VideoConfig};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VideoInputState {
@@ -53,6 +53,11 @@ static VIDEO_PIPELINE_STARTED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell
 
 static PIPELINE_MANAGER: tokio::sync::Mutex<Option<PipelineManager>> =
     tokio::sync::Mutex::const_new(None);
+
+/// The H.264 profile the attached viewer negotiated. It overrides the
+/// configured profile on the running encoder and on every rebuild, so the
+/// bitstream always matches the payload type the browser decodes it as.
+static H264_PROFILE: parking_lot::Mutex<Option<H264Profile>> = parking_lot::Mutex::new(None);
 
 static PIPELINE_CONFIG: OnceLock<(VideoConfig, Option<AudioConfig>)> = OnceLock::new();
 static SUPERVISOR_STOPPED: AtomicBool = AtomicBool::new(false);
@@ -128,6 +133,19 @@ pub async fn ensure_video_pipeline_started() -> anyhow::Result<()> {
         .map(|_| ())
 }
 
+/// Makes the encoder emit `profile`, the H.264 profile a new viewer
+/// negotiated. Called before the viewer's keyframe is requested, so its first
+/// IDR already carries the new SPS.
+pub async fn set_h264_profile(profile: H264Profile) {
+    if H264_PROFILE.lock().replace(profile) == Some(profile) {
+        return;
+    }
+    if let Some(manager) = PIPELINE_MANAGER.lock().await.as_ref() {
+        manager.set_h264_profile(profile);
+    }
+    info!(profile = profile.as_gst_str(), "H.264 encoder profile set to match the viewer");
+}
+
 /// Switches video output to a new session's track. The keyframe for the new
 /// viewer is requested once its connection is fully up (see webrtc.rs).
 pub async fn attach_webrtc_sink(track: Arc<TrackLocalStaticSample>) {
@@ -190,9 +208,14 @@ pub async fn start_native_video_with_cli(cli: &crate::cli::Cli) -> anyhow::Resul
 }
 
 async fn start_pipeline(
-    video_config: VideoConfig,
+    mut video_config: VideoConfig,
     audio_config: Option<AudioConfig>,
 ) -> anyhow::Result<()> {
+    if matches!(video_config.encoder, crate::cli::VideoEncoder::H264)
+        && let Some(profile) = *H264_PROFILE.lock()
+    {
+        video_config.profile = Some(profile.as_gst_str().to_owned());
+    }
     let manager = PipelineManager::new(video_config, audio_config)?;
 
     manager.set_video_callback(move |data, pts_us| {

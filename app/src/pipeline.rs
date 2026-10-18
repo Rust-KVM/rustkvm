@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 use gstreamer as gst;
@@ -23,6 +23,39 @@ pub struct VideoConfig {
     pub level: String,
     pub profile: Option<String>,
     pub fps: u32,
+}
+
+/// H.264 profiles mpph264enc can produce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum H264Profile {
+    /// Emitted as Constrained Baseline (constraint_set0 and set1 both set).
+    Baseline,
+    Main,
+    High,
+}
+
+impl H264Profile {
+    #[inline]
+    pub const fn as_gst_str(self) -> &'static str {
+        match self {
+            Self::Baseline => "baseline",
+            Self::Main => "main",
+            Self::High => "high",
+        }
+    }
+
+    /// Profile named by an SDP `profile-level-id` (RFC 6184: profile_idc,
+    /// profile-iop and level_idc as hex). Profiles the encoder cannot produce,
+    /// such as High 4:4:4, yield `None`.
+    pub fn from_profile_level_id(profile_level_id: &str) -> Option<Self> {
+        let profile_idc = u8::from_str_radix(profile_level_id.get(0..2)?, 16).ok()?;
+        match profile_idc {
+            0x42 => Some(Self::Baseline),
+            0x4d => Some(Self::Main),
+            0x64 => Some(Self::High),
+            _ => None,
+        }
+    }
 }
 
 impl Default for VideoConfig {
@@ -186,6 +219,7 @@ impl VideoPipeline {
             Arc::default();
         let probe_requested_at = keyframe_requested_at.clone();
         let is_h264 = matches!(config.encoder, crate::cli::VideoEncoder::H264);
+        let last_profile_idc = AtomicU8::new(0);
         encoder.static_pad("src").context("Encoder has no src pad")?.add_probe(
             gst::PadProbeType::BUFFER,
             move |_pad, info| {
@@ -196,6 +230,11 @@ impl VideoPipeline {
                     && let Ok(map) = buffer.map_readable()
                     && contains_h264_idr(map.as_slice())
                 {
+                    if let Some(idc) = h264_sps_profile_idc(map.as_slice())
+                        && last_profile_idc.swap(idc, Ordering::Relaxed) != idc
+                    {
+                        info!(profile_idc = idc, "encoder SPS profile");
+                    }
                     let delta = buffer.flags().contains(gst::BufferFlags::DELTA_UNIT);
                     match probe_requested_at.lock().take() {
                         Some(at) => info!(
@@ -835,6 +874,14 @@ impl PipelineManager {
         }
     }
 
+    /// Switches the H.264 encoder's profile; mpph264enc applies it from the
+    /// next frame. A no-op when the pipeline encodes another codec.
+    pub fn set_h264_profile(&self, profile: H264Profile) {
+        if let Some(encoder) = self.video.pipeline.by_name("mpph264enc") {
+            encoder.set_property_from_str("profile", profile.as_gst_str());
+        }
+    }
+
     pub fn request_raw_frame(&self) -> tokio::sync::oneshot::Receiver<gst::Sample> {
         self.video.request_raw_frame()
     }
@@ -900,6 +947,21 @@ fn contains_h264_idr(data: &[u8]) -> bool {
         }
     }
     false
+}
+
+/// The profile_idc of the first SPS in an Annex B access unit, if any comes
+/// before the first slice.
+fn h264_sps_profile_idc(data: &[u8]) -> Option<u8> {
+    for (i, w) in data.windows(4).enumerate() {
+        if w[0] == 0 && w[1] == 0 && w[2] == 1 {
+            match w[3] & 0x1f {
+                7 => return data.get(i + 4).copied(),
+                1 | 5 => return None,
+                _ => {}
+            }
+        }
+    }
+    None
 }
 
 pub fn encode_jpeg(sample: &gst::Sample) -> Result<bytes::Bytes> {
