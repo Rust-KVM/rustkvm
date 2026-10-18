@@ -65,7 +65,7 @@ jobs:
           test -x "$host/bin/aarch64-buildroot-linux-gnu-gcc"
           cp -a "$host" "$RUNNER_TEMP/rk3588-buildkit"
       - name: Upload system images
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rk3588-system-images-${{ inputs.sdk_tag }}
           path: |
