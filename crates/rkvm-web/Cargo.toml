@@ -30,6 +30,7 @@ web-sys = { version = "0.3", features = [
     "HtmlVideoElement",
     "HtmlMediaElement",
     "MediaStream",
+    "MediaQueryList",
     "RtcPeerConnection",
     "RtcConfiguration",
     "RtcIceServer",

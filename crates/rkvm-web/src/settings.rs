@@ -8,12 +8,14 @@ use leptos::task::spawn_local;
 use serde_json::{Value, json};
 use wasm_bindgen::JsCast;
 
-use crate::i18n::{I18n, tr, use_i18n};
+use crate::i18n::{I18n, Lang, tr, use_i18n};
 use crate::net::peer::Peer;
 use crate::net::{rest, upload};
 use crate::rpc::RpcClient;
 use crate::settings_nav::{SettingsHeading, SettingsNav, SettingsSidebar};
-use crate::util::{Rpc, as_string, fire, fire_status, json_str};
+use crate::theme::{Theme, ThemeChoice};
+use crate::ui::{Icon, IconName};
+use crate::util::{Rpc, as_string, fire, fire_revert, fire_status, json_str};
 
 /// Values are the codes `getKeyboardLayout` returns and `setKeyboardLayout`
 /// accepts on the device.
@@ -34,6 +36,7 @@ pub fn Settings(
     rpc: StoredValue<Option<Rc<RpcClient>>, LocalStorage>,
     peer: StoredValue<Option<Rc<Peer>>, LocalStorage>,
     no_password: RwSignal<bool>,
+    theme: Theme,
 ) -> impl IntoView {
     let i = use_i18n();
     let codec = RwSignal::new(String::new());
@@ -326,7 +329,14 @@ pub fn Settings(
     };
 
     let toggle_usb = move |device: &'static str, enabled: bool| {
-        fire(rpc, "setUsbDeviceState", json!({ "device": device, "enabled": enabled }));
+        let before = usb.get_untracked();
+        usb.update(|u| u.set(device, enabled));
+        fire_revert(
+            rpc,
+            "setUsbDeviceState",
+            json!({ "device": device, "enabled": enabled }),
+            move || usb.set(before),
+        );
     };
 
     let save_edid = move |_| {
@@ -411,28 +421,44 @@ pub fn Settings(
             tr("SSH 密钥已保存", "SSH key saved"),
         )
     };
+    // Every control below updates at once and snaps back if the device
+    // refuses the change (see `util::fire_revert`).
     let set_log = move |ev: web_sys::Event| {
         let lvl = event_target_value(&ev);
+        let before = log_level.get_untracked();
         log_level.set(lvl.clone());
-        fire(rpc, "setDefaultLogLevel", json!({ "level": lvl }));
+        fire_revert(rpc, "setDefaultLogLevel", json!({ "level": lvl }), move || {
+            log_level.set(before)
+        });
     };
 
     let set_codec = move |value: &'static str| {
-        fire(rpc, "setVideoCodecPreference", json!({ "codec": value }));
+        let before = codec.get_untracked();
         codec.set(value.to_string());
+        fire_revert(rpc, "setVideoCodecPreference", json!({ "codec": value }), move || {
+            codec.set(before)
+        });
     };
     let set_rotation = move |value: &'static str| {
-        fire(rpc, "setDisplayRotation", json!({ "rotation": value }));
+        let before = rotation.get_untracked();
         rotation.set(value.to_string());
+        fire_revert(rpc, "setDisplayRotation", json!({ "rotation": value }), move || {
+            rotation.set(before)
+        });
     };
     let set_layout = move |ev: web_sys::Event| {
         let value = event_target_value(&ev);
-        fire(rpc, "setKeyboardLayout", json!({ "layout": value }));
-        layout.set(value);
+        let before = layout.get_untracked();
+        layout.set(value.clone());
+        fire_revert(rpc, "setKeyboardLayout", json!({ "layout": value }), move || {
+            layout.set(before)
+        });
     };
     let set_brightness = move |ev: web_sys::Event| {
         let value: i64 = event_target_value(&ev).parse().unwrap_or(0);
-        fire(
+        let before = brightness.get_untracked();
+        brightness.set(value);
+        fire_revert(
             rpc,
             "setBacklightSettings",
             json!({
@@ -440,8 +466,8 @@ pub fn Settings(
                 "dim_after": dim_after.get_untracked(),
                 "off_after": off_after.get_untracked(),
             }),
+            move || brightness.set(before),
         );
-        brightness.set(value);
     };
     let submit_password = move |_| {
         pw_msg.set(String::new());
@@ -485,7 +511,13 @@ pub fn Settings(
 
     let codec_btn = move |value: &'static str, zh: &'static str, en: &'static str| {
         view! {
-            <button class:active=move || codec.get() == value on:click=move |_| set_codec(value)>
+            <button
+                type="button"
+                role="radio"
+                class:on=move || codec.get() == value
+                aria-checked=move || (codec.get() == value).to_string()
+                on:click=move |_| set_codec(value)
+            >
                 {move || i.t(zh, en)}
             </button>
         }
@@ -493,11 +525,58 @@ pub fn Settings(
     let rotation_btn = move |value: &'static str| {
         view! {
             <button
-                class:active=move || rotation.get() == value
+                type="button"
+                role="radio"
+                class:on=move || rotation.get() == value
+                aria-checked=move || (rotation.get() == value).to_string()
                 on:click=move |_| set_rotation(value)
             >
                 {value}"°"
             </button>
+        }
+    };
+    let theme_btn =
+        move |choice: ThemeChoice, icon: IconName, zh: &'static str, en: &'static str| {
+            view! {
+                <button
+                    type="button"
+                    role="radio"
+                    class:on=move || theme.choice() == choice
+                    aria-checked=move || (theme.choice() == choice).to_string()
+                    title=move || i.t(zh, en)
+                    aria-label=move || i.t(zh, en)
+                    on:click=move |_| theme.set(choice)
+                >
+                    <Icon name=icon/>
+                </button>
+            }
+        };
+    let lang_btn = move |lang: Lang, name: &'static str, code: &'static str| {
+        view! {
+            <button
+                type="button"
+                role="radio"
+                lang=code
+                class:on=move || i.lang() == lang
+                aria-checked=move || (i.lang() == lang).to_string()
+                on:click=move |_| i.set(lang)
+            >
+                {name}
+            </button>
+        }
+    };
+    let reboot = move |_| {
+        let ok = web_sys::window()
+            .and_then(|w| {
+                w.confirm_with_message(tr(
+                    "重启设备？视频和键鼠会断开，设备启动后需要重新连接。被控电脑不受影响。",
+                    "Reboot the device? Video and input disconnect until it is back; the controlled computer is not affected.",
+                ))
+                .ok()
+            })
+            .unwrap_or(false);
+        if ok {
+            fire(rpc, "reboot", json!({ "force": false }));
         }
     };
 
@@ -539,13 +618,41 @@ pub fn Settings(
                 <SettingsSidebar nav=nav i=i/>
                 <div class="set-body">
                 <button class="close" title=move || i.t("关闭", "Close") aria-label=move || i.t("关闭", "Close") on:click=move |_| open.set(false)>
-                    <crate::ui::Icon name=crate::ui::IconName::Close/>
+                    <Icon name=IconName::Close/>
                 </button>
                 <SettingsHeading nav=nav i=i/>
 
+                <section class:off=nav.off("appearance")>
+                    <div class="set-row">
+                        <div>
+                            <h3>{move || i.t("外观", "Appearance")}</h3>
+                            <div class="hint">{move || i.t("跟随系统、浅色或深色。", "Follow the system, light or dark.")}</div>
+                        </div>
+                        <div class="seg" role="radiogroup" aria-label=move || i.t("外观", "Appearance")>
+                            {theme_btn(ThemeChoice::System, IconName::Monitor, "跟随系统", "System")}
+                            {theme_btn(ThemeChoice::Light, IconName::Sun, "浅色", "Light")}
+                            {theme_btn(ThemeChoice::Dark, IconName::Moon, "深色", "Dark")}
+                        </div>
+                    </div>
+                </section>
+
+                <section class:off=nav.off("language")>
+                    <div class="set-row">
+                        <div>
+                            <h3>{move || i.t("语言", "Language")}</h3>
+                            <div class="hint">{move || i.t("界面文字的语言。", "Language of the interface.")}</div>
+                        </div>
+                        // Each language is named in itself.
+                        <div class="seg" role="radiogroup" aria-label=move || i.t("语言", "Language")>
+                            {lang_btn(Lang::Zh, "中文", "zh-CN")}
+                            {lang_btn(Lang::En, "English", "en")}
+                        </div>
+                    </div>
+                </section>
+
                 <section class:off=nav.off("codec")>
                     <h3>{move || i.t("视频编码", "Video codec")}</h3>
-                    <div class="row">
+                    <div class="seg" role="radiogroup" aria-label=move || i.t("视频编码", "Video codec")>
                         {codec_btn("auto", "自动", "Auto")}
                         {codec_btn("h264", "H.264", "H.264")}
                         {codec_btn("h265", "H.265", "H.265")}
@@ -554,7 +661,7 @@ pub fn Settings(
 
                 <section class:off=nav.off("rotation")>
                     <h3>{move || i.t("屏幕旋转", "Display rotation")}</h3>
-                    <div class="row">
+                    <div class="seg" role="radiogroup" aria-label=move || i.t("屏幕旋转", "Display rotation")>
                         {rotation_btn("0")}
                         {rotation_btn("90")}
                         {rotation_btn("180")}
@@ -679,6 +786,18 @@ pub fn Settings(
                         }}
                     </dl>
                     <button on:click=renew_dhcp>{move || i.t("重新获取 DHCP 地址", "Renew DHCP lease")}</button>
+                </section>
+
+                <section class:off=nav.off("reboot")>
+                    <div class="set-row">
+                        <div>
+                            <h3>{move || i.t("重启设备", "Reboot device")}</h3>
+                            <div class="hint">{move || i.t("只重启 KVM 设备，被控电脑不受影响。会先确认。", "Restarts only the KVM device, not the controlled computer. Asks first.")}</div>
+                        </div>
+                        <button type="button" class="tb-danger" on:click=reboot>
+                            {move || i.t("重启", "Reboot")}
+                        </button>
+                    </div>
                 </section>
 
                 <section class:off=nav.off("firmware")>
@@ -957,7 +1076,7 @@ pub fn Settings(
 fn send_toggle(rpc: Rpc, method: &'static str, sig: RwSignal<bool>, ev: &web_sys::Event) {
     let on = event_target_checked(ev);
     sig.set(on);
-    fire(rpc, method, json!({ "enabled": on }));
+    fire_revert(rpc, method, json!({ "enabled": on }), move || sig.set(!on));
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -969,6 +1088,17 @@ struct UsbDevices {
 }
 
 impl UsbDevices {
+    /// `device` is the name `setUsbDeviceState` takes.
+    fn set(&mut self, device: &str, on: bool) {
+        match device {
+            "keyboard" => self.keyboard = on,
+            "absoluteMouse" => self.absolute_mouse = on,
+            "relativeMouse" => self.relative_mouse = on,
+            "massStorage" => self.mass_storage = on,
+            _ => {}
+        }
+    }
+
     fn from_value(v: &Value) -> Self {
         let b = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
         Self {

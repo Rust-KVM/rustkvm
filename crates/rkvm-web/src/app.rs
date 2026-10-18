@@ -41,6 +41,7 @@ pub fn App() -> impl IntoView {
     let nopw_dismissed = RwSignal::new(false);
     let conn_state = RwSignal::new("idle".to_string());
     let error = RwSignal::new(Option::<String>::None);
+    crate::util::set_error_sink(error);
     let password = RwSignal::new(String::new());
 
     let setup_mode = RwSignal::new("noPassword".to_string());
@@ -265,21 +266,6 @@ pub fn App() -> impl IntoView {
         });
     };
 
-    let do_reboot = move |()| {
-        let confirmed = web_sys::window()
-            .and_then(|w| w.confirm_with_message(i.t_now("重启设备？", "Reboot the device?")).ok())
-            .unwrap_or(false);
-        if !confirmed {
-            return;
-        }
-        let Some(client) = rpc_store.get_value() else { return };
-        spawn_local(async move {
-            if let Err(e) = client.call("reboot", json!({ "force": false })).await {
-                error.set(Some(e.to_string()));
-            }
-        });
-    };
-
     let send_cad = move |_| {
         if let Some(p) = peer_store.get_value() {
             crate::hid::send_key_combo(&p, 0x05, &[0x4c]);
@@ -386,8 +372,6 @@ pub fn App() -> impl IntoView {
                 show_settings=show_settings
                 show_terminal=show_terminal
                 status=status
-                theme=theme
-                on_reboot=Callback::new(do_reboot)
             />
 
             <main class="main">
@@ -675,6 +659,7 @@ pub fn App() -> impl IntoView {
                     rpc=rpc_store
                     peer=peer_store
                     no_password=no_password
+                    theme=theme
                 />
             </Show>
 

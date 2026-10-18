@@ -121,16 +121,15 @@ until the user picks one. `src/theme.rs` flips it from the sidebar.
     a pinned sidebar floats and a transparent scrim closes it.
   - `.expanded` (pinned or peeking) shows labels; `.open` is pinned only. Top row: logo (click to expand), brand,
   collapse button. Nav rows (36px, radius 8, icon + label): Remote desktop,
-  Device terminal, Settings. Footer: preferences, reboot, connection status
-  (dot + label + host). Rows are disabled until connected.
-- **Preferences show state, not actions.** Expanded, theme and language are
-  segmented controls (`.seg`, `button.on` is the current choice, each
-  language named in itself: 中文 / English). Collapsed, one icon each
-  (`.sb-rail-only`) whose tooltip says the current value and what a click
-  does. Never label a toggle with the value it switches to.
-- **Destructive device actions live in the sidebar footer**, as a labeled
-  `.sb-item.danger` row that confirms first (reboot). Never in a titlebar
-  corner, where a near miss of fullscreen or focus lands on it.
+  Device terminal, Settings. Footer: connection status (dot + label + host)
+  only. Rows are disabled until connected. The sidebar holds navigation and
+  status, nothing else.
+- **Preferences and device actions live in Settings**, as in Claude
+  Desktop: theme (follow system / light / dark) and language on 通用,
+  reboot on 系统 with a confirm. Preferences show the current state with a
+  segmented control; never label a toggle with the value it switches to.
+  Destructive actions are never in a titlebar corner, where a near miss of
+  fullscreen or focus lands on them.
 - **Titlebar** (`shell/titlebar.rs`). 48px (Figma uses 68px; KVM gives the
   space to the video). Left: page title and a chip (`1920×1080 · 60 fps` or
   "无信号"). Right: page actions, grouped with `.vsep` hairlines. No
@@ -149,8 +148,8 @@ until the user picks one. `src/theme.rs` flips it from the sidebar.
 - **Settings is a modal dialog** (`settings.rs`, `settings_nav.rs`), as in
   Claude Desktop: centered panel (max 960×720, radius 16) over a scrim that
   covers the whole app, sidebar included (z 50/51). Left column (240px,
-  sidebar color): search box, then the pages (视频, 键盘与鼠标, 虚拟媒体,
-  网络, 访问与安全, 硬件, 系统). Right column: page title and that page's
+  sidebar color): search box, then the pages (通用, 视频, 键盘与鼠标,
+  虚拟媒体, 网络, 访问与安全, 硬件, 系统). Right column: page title and that page's
   sections; close button top right. Esc, the close button and a click on
   the backdrop close it. Search matches section and page titles and lists
   every hit across pages. Sections stay mounted and are hidden with
@@ -195,7 +194,9 @@ every button, nav row and segment is at least 44px.
 | `IconButton` | 32px (28px `small`), radius 8/6, ghost; `active` → selected fill; `danger` → red glyph; `label` is tooltip and aria-label (required) | toolbar actions |
 | `Field` | 12px label above, control below, 16px bottom margin; inputs 40px, radius 8, 1px `--border-secondary`, focus ring | forms |
 | `Callout` | tinted fill, hairline, leading alert icon, 12px text | warnings (no-password) |
-| `.toggle` | switch 36×20, knob 16px, off = tertiary + hairline, on = `--border-info` | boolean settings |
+| `.toggle` | switch 36×20, knob 16px, off = `--border-tertiary` track, on = `--border-info`; hover darkens the track, press stretches the knob, focus ring, disabled 50%. In settings the label sits left and the switch right | boolean settings |
+| `.seg` | segmented radio group: `button[role=radio]`, `.on` + `aria-checked` on the current one (raised `--bg-primary` chip), ghost hover on the others, press `scale(.97)`, focus ring. Icon-only segments carry `title` and `aria-label` | one-of-few choices (theme, language, codec, rotation) |
+| `.set-row` | label + hint left, control right | settings rows |
 | `.badge` | 20px mono, hairline; `.on` = success tint | LEDs |
 | `.chip` | 24px pill, hover fill, tabular numbers | status in titlebar |
 | `.dot` | 8px; `.on` green, `.warn` amber, default grey | connection state |
@@ -204,6 +205,13 @@ every button, nav row and segment is at least 44px.
 
 Rules:
 
+- Controls update optimistically: set the signal first, then send with
+  `util::fire_revert`, which restores the old value and shows the toast if
+  the device refuses. `util::fire` reports failures too. The toast sits
+  above dialogs (z 60).
+- Selected state must survive hover: hover styles never apply to the
+  selected segment. Plain settings buttons use a `:where()` selector so
+  component classes override them without `!important`.
 - Event handlers go straight on components: `<IconButton … on:click=handler/>`.
 - One primary button per card. Secondary next to it, ghost elsewhere.
 - Icon-only buttons always carry a translated `label`.

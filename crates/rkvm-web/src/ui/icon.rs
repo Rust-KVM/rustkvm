@@ -8,7 +8,6 @@ pub enum IconName {
     Monitor,
     Terminal,
     Sliders,
-    Power,
     Maximize,
     Focus,
     Keyboard,
@@ -22,7 +21,6 @@ pub enum IconName {
     Sun,
     Moon,
     Alert,
-    Languages,
     Search,
     Globe,
     Shield,
@@ -46,7 +44,6 @@ impl IconName {
             Self::Sliders => {
                 "M3.5 6.5h7M15.5 6.5h1M11 6.5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0zM3.5 13.5h1M9.5 13.5h7M5 13.5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0z"
             }
-            Self::Power => "M10 3v6M6.2 5.4a6.25 6.25 0 1 0 7.6 0",
             Self::Maximize => "M3.5 7.5v-4h4M12.5 3.5h4v4M16.5 12.5v4h-4M7.5 16.5h-4v-4",
             // A window with its toolbar and sidebar marked: "hide the
             // chrome". Deliberately unlike Maximize's four corners.
@@ -86,9 +83,6 @@ impl IconName {
                 "M6.5 5h7a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1 -1.5 1.5h-7a1.5 1.5 0 0 1 -1.5 -1.5v-7a1.5 1.5 0 0 1 1.5 -1.5zM8.5 2.5V5M11.5 2.5V5M8.5 15v2.5M11.5 15v2.5M2.5 8.5H5M2.5 11.5H5M15 8.5h2.5M15 11.5h2.5"
             }
             Self::Info => "M3 10a7 7 0 1 0 14 0a7 7 0 1 0 -14 0zM10 9v4.5M10 6.5h.01",
-            Self::Languages => {
-                "M3 5h8M7 3.5V5M9.5 5c-.6 3-2.6 5.6-5.5 7M5.5 8c.9 1.8 2.3 3.2 4 4M10.5 17l3-7 3 7M11.5 14.8h4"
-            }
         }
     }
 }

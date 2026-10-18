@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::i18n::{tr, use_i18n};
 use crate::rpc::RpcClient;
 use crate::settings_nav::SettingsNav;
-use crate::util::{Rpc, as_string, fire, fire_status, json_str, json_string_list};
+use crate::util::{Rpc, as_string, fire, fire_revert, fire_status, json_str, json_string_list};
 
 /// Extensions the device knows how to mount (`setActiveExtension`).
 const EXTENSIONS: &[(&str, &str, &str)] = &[
@@ -127,11 +127,16 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc, nav: SettingsNav) -> imp
     let toggle_dc = move |ev: web_sys::Event| {
         let on = event_target_checked(&ev);
         dc_enabled.set(on);
-        fire(rpc, "setDCPowerState", json!({ "enabled": on }));
+        fire_revert(rpc, "setDCPowerState", json!({ "enabled": on }), move || dc_enabled.set(!on));
     };
     let set_restore = move |ev: web_sys::Event| {
-        let s: i32 = event_target_value(&ev).parse().unwrap_or(0);
-        fire(rpc, "setDCRestoreState", json!({ "state": s }));
+        let value = event_target_value(&ev);
+        let s: i32 = value.parse().unwrap_or(0);
+        let before = dc_restore.get_untracked();
+        dc_restore.set(value);
+        fire_revert(rpc, "setDCRestoreState", json!({ "state": s }), move || {
+            dc_restore.set(before)
+        });
     };
     let atx =
         move |action: &'static str| fire(rpc, "setATXPowerAction", json!({ "action": action }));
@@ -200,12 +205,14 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc, nav: SettingsNav) -> imp
     let toggle_dev = move |ev: web_sys::Event| {
         let on = event_target_checked(&ev);
         dev_mode.set(on);
-        fire(rpc, "setDevModeState", json!({ "enabled": on }));
+        fire_revert(rpc, "setDevModeState", json!({ "enabled": on }), move || dev_mode.set(!on));
     };
     let toggle_devchan = move |ev: web_sys::Event| {
         let on = event_target_checked(&ev);
         dev_channel.set(on);
-        fire(rpc, "setDevChannelState", json!({ "enabled": on }));
+        fire_revert(rpc, "setDevChannelState", json!({ "enabled": on }), move || {
+            dev_channel.set(!on)
+        });
     };
     let save_tls = move |_| {
         let mode = tls_mode.get();

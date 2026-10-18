@@ -10,6 +10,7 @@ use crate::ui::{Icon, IconName};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
+    General,
     Video,
     Input,
     Media,
@@ -20,6 +21,7 @@ pub enum Page {
 }
 
 const PAGES: &[(Page, &str, &str, IconName)] = &[
+    (Page::General, "通用", "General", IconName::Sliders),
     (Page::Video, "视频", "Video", IconName::Monitor),
     (Page::Input, "键盘与鼠标", "Keyboard & mouse", IconName::Keyboard),
     (Page::Media, "虚拟媒体", "Virtual media", IconName::Disc),
@@ -31,6 +33,8 @@ const PAGES: &[(Page, &str, &str, IconName)] = &[
 
 /// Every section of the dialog: id, page, and the title search matches.
 const SECTIONS: &[(&str, Page, &str, &str)] = &[
+    ("appearance", Page::General, "外观", "Appearance"),
+    ("language", Page::General, "语言", "Language"),
     ("codec", Page::Video, "视频编码", "Video codec"),
     ("rotation", Page::Video, "屏幕旋转", "Display rotation"),
     ("edid", Page::Video, "EDID", "EDID"),
@@ -52,6 +56,7 @@ const SECTIONS: &[(&str, Page, &str, &str)] = &[
     ("power", Page::Hardware, "电源", "Power"),
     ("extension", Page::Hardware, "扩展", "Extension"),
     ("serial", Page::Hardware, "串口控制台", "Serial console"),
+    ("reboot", Page::System, "重启设备", "Reboot device"),
     ("firmware", Page::System, "固件更新", "Firmware update"),
     ("timezone", Page::System, "时区", "Time zone"),
     ("log", Page::System, "日志级别", "Log level"),
@@ -76,7 +81,7 @@ pub struct SettingsNav {
 
 impl SettingsNav {
     pub fn new() -> Self {
-        Self { page: RwSignal::new(Page::Video), query: RwSignal::new(String::new()) }
+        Self { page: RwSignal::new(Page::General), query: RwSignal::new(String::new()) }
     }
 
     fn searching(self) -> Option<String> {

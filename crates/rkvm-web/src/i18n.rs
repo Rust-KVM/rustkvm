@@ -59,13 +59,6 @@ impl I18n {
         self.0.get()
     }
 
-    pub fn toggle(self) {
-        self.set(match self.0.get_untracked() {
-            Lang::Zh => Lang::En,
-            Lang::En => Lang::Zh,
-        });
-    }
-
     pub fn set(self, next: Lang) {
         self.0.set(next);
         apply(next);

@@ -13,12 +13,46 @@ use crate::rpc::RpcClient;
 
 pub type Rpc = StoredValue<Option<Rc<RpcClient>>, LocalStorage>;
 
-pub fn fire(rpc: Rpc, method: &'static str, params: Value) {
-    if let Some(client) = rpc.get_value() {
-        spawn_local(async move {
-            let _ = client.call(method, params).await;
-        });
+thread_local! {
+    static ERROR_SINK: std::cell::Cell<Option<RwSignal<Option<String>>>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Registers the app's toast signal; [`report_error`] writes into it.
+pub fn set_error_sink(sink: RwSignal<Option<String>>) {
+    ERROR_SINK.set(Some(sink));
+}
+
+/// Shows `msg` in the bottom-center toast (above dialogs).
+pub fn report_error(msg: String) {
+    if let Some(sink) = ERROR_SINK.get() {
+        sink.set(Some(msg));
     }
+}
+
+/// Sends a change the UI already shows. If the device refuses it, the toast
+/// says so; use [`fire_revert`] when the control must also snap back.
+pub fn fire(rpc: Rpc, method: &'static str, params: Value) {
+    fire_revert(rpc, method, params, || ());
+}
+
+/// Optimistic update: the caller has already set the new value; on failure
+/// `revert` restores the old one and the toast explains why.
+pub fn fire_revert(rpc: Rpc, method: &'static str, params: Value, revert: impl FnOnce() + 'static) {
+    let Some(client) = rpc.get_value() else {
+        revert();
+        report_error(tr("未连接设备", "Not connected to the device").to_string());
+        return;
+    };
+    spawn_local(async move {
+        if let Err(e) = client.call(method, params).await {
+            revert();
+            report_error(format!(
+                "{}{e}",
+                tr("设备未接受更改：", "The device refused the change: ")
+            ));
+        }
+    });
 }
 
 /// Like `fire`, but writes the outcome into `status` so the user can see
