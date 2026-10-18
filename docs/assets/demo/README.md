@@ -1,7 +1,7 @@
 # Demo media
 
-Screenshots and a short clip of the RustKVM web UI (English, light and dark
-themes), used by the top-level README.
+Screenshots and two short clips of the RustKVM web UI (English, light and
+dark themes), used by the top-level README.
 
 | File | What it shows |
 | --- | --- |
@@ -10,8 +10,10 @@ themes), used by the top-level README.
 | `{light,dark}-03-sidebar-pinned.webp` | Sidebar pinned open (navigation and connection status) |
 | `{light,dark}-04-settings-general.webp` | Settings dialog, General page (appearance and language) |
 | `{light,dark}-09-focus-mode.webp` | Focus mode: sidebar and titlebar hidden |
-| `rustkvm-demo.gif` | 11 s loop: pin sidebar, open Settings, switch to dark, close, unpin (1280 px wide) |
+| `rustkvm-demo.gif` | 17 s control demo: the target's cursor glides over the page, the README scrolls down and back up, the cursor clicks GitHub's search box and types `WebRTC`, Esc closes it (1280 px wide, 12 fps) |
 | `rustkvm-demo.webm` | The same clip at 1920×1080 (VP9) |
+| `rustkvm-ui-tour.gif` | 11 s loop: pin sidebar, open Settings, switch to dark, close, unpin (1280 px wide) |
+| `rustkvm-ui-tour.webm` | The same clip at 1920×1080 (VP9) |
 
 ## How they were made
 
@@ -19,11 +21,19 @@ themes), used by the top-level README.
   3840×2160, 60 fps.
 - Browser: headless Chromium driven by Playwright at 1920×1080, device scale
   factor 1. Theme and language were set in the browser's localStorage only.
-- The scripts clicked only UI elements (sidebar, titlebar, settings dialog)
-  and sent no keyboard or mouse input to the target.
-- Stills were saved as WebP (quality 85). The clip was recorded with the
-  Chrome DevTools screencast and encoded with ffmpeg; the GIF drops frames
-  identical to the previous one, because the UI changes in single steps.
+- Control demo: every action on the target is real USB HID input sent
+  through the web UI. Mouse moves over the video become absolute pointer
+  reports, wheel steps become wheel reports, and key presses become keyboard
+  reports. Nothing was typed into the target beyond the search query, no
+  link was followed, and the page was left as it started. The script paused
+  once after the click to check that the search box had opened; that pause
+  is cut from the clip.
+- UI tour and stills: the scripts clicked only UI elements (sidebar,
+  titlebar, settings dialog) and sent no keyboard or mouse input to the
+  target.
+- Stills were saved as WebP (quality 85). Clips were recorded with the
+  Chrome DevTools screencast and encoded with ffmpeg; the GIFs drop frames
+  identical to the previous one to stay small.
 
 ## Sources and licenses
 
