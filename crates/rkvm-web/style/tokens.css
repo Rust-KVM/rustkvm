@@ -1,0 +1,159 @@
+/* Design tokens. The one place colors, type, spacing, radii, shadows and motion
+   are defined; everything else references these variables. Values follow the
+   Claude Desktop design kit (docs/design-system.md). Light is the default;
+   :root[data-theme="dark"] swaps the palette. The inline script in index.html
+   sets data-theme before first paint from the saved choice or the OS setting. */
+
+:root {
+  color-scheme: light;
+
+  /* Backgrounds */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f4ed;
+  --bg-tertiary: #faf9f5;
+  --bg-inverse: #141413;
+  --bg-sidebar: #f9f9f7;
+  --bg-selected: #f0efec;
+  --bg-hover: rgba(31, 30, 29, 0.05);
+  --bg-press: rgba(31, 30, 29, 0.08);
+  --bg-info: #d6e4f6;
+  --bg-danger: #b53333;
+  --bg-danger-soft: rgba(181, 51, 51, 0.08);
+  --bg-success: #e9f1dc;
+  --bg-warning: #f6eedf;
+  --bg-scrim: rgba(20, 20, 19, 0.32);
+
+  /* Text */
+  --text-primary: #141413;
+  --text-secondary: #3d3d3a;
+  --text-tertiary: #73726c;
+  --text-ghost: rgba(115, 114, 108, 0.5);
+  --text-inverse: #ffffff;
+  --text-info: #3266ad;
+  --text-danger: #7f2c28;
+  --text-danger-strong: #b53333;
+  --text-success: #265b19;
+  --text-warning: #5a4815;
+
+  /* Borders (0.5px hairlines unless noted) */
+  --border-primary: rgba(31, 30, 29, 0.4);
+  --border-secondary: rgba(31, 30, 29, 0.3);
+  --border-tertiary: rgba(31, 30, 29, 0.15);
+  --border-info: #4682d5;
+  --border-danger: #a73d39;
+  --border-success: #437426;
+  --border-warning: #805c1f;
+  --hairline: 0.5px;
+
+  /* Focus rings */
+  --ring-primary: rgba(20, 20, 19, 0.7);
+  --ring-info: rgba(50, 102, 173, 0.5);
+  --ring-danger: rgba(167, 61, 57, 0.5);
+  --focus-ring: 0 0 0 2px var(--bg-primary), 0 0 0 3.5px var(--ring-info);
+
+  /* Brand accent and status dots */
+  --accent: #c6613f;
+  --accent-soft: #d97757;
+  --dot-on: #599130;
+  --dot-off: #a8a69d;
+  --dot-warn: #d1a041;
+
+  /* The video stage is always near-black so the remote screen reads the same
+     in both themes. */
+  --stage: #141413;
+  --term-bg: #141413;
+  --term-text: #e8e6dc;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 0.25rem 1.25rem rgba(0, 0, 0, 0.035), 0 0 0 0.5px var(--border-tertiary);
+  --shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.08), 0 0 0 0.5px var(--border-tertiary);
+  --shadow-popover: 0 4px 16px rgba(0, 0, 0, 0.08), 0 0 0 0.5px var(--border-tertiary);
+
+  /* Typography */
+  --font-sans: "Anthropic Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --text-xs: 12px;   --lh-xs: 16.8px;
+  --text-sm: 14px;   --lh-sm: 19.6px;
+  --text-md: 16px;   --lh-md: 22.4px;
+  --text-lg: 18px;   --lh-lg: 25px;
+  --heading-lg: 20px;
+  --heading-xl: 24px;
+  --heading-3xl: 36px;
+
+  /* Spacing (4px grid) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Radii */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-full: 999px;
+
+  /* Layout */
+  --sidebar-rail: 52px;
+  --sidebar-open: 256px;
+  --titlebar-h: 48px;
+
+  /* Motion */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur: 150ms;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-primary: #30302e;
+  --bg-secondary: #262624;
+  --bg-tertiary: #141413;
+  --bg-inverse: #faf9f5;
+  --bg-sidebar: #1f1e1d;
+  --bg-selected: #30302e;
+  --bg-hover: rgba(222, 220, 209, 0.06);
+  --bg-press: rgba(222, 220, 209, 0.1);
+  --bg-info: #253e5f;
+  --bg-danger: #dd5353;
+  --bg-danger-soft: rgba(221, 83, 83, 0.12);
+  --bg-success: #1b4614;
+  --bg-warning: #483a0f;
+  --bg-scrim: rgba(0, 0, 0, 0.5);
+
+  --text-primary: #faf9f5;
+  --text-secondary: #c2c0b6;
+  --text-tertiary: #9c9a92;
+  --text-ghost: rgba(156, 154, 146, 0.5);
+  --text-inverse: #141413;
+  --text-info: #80aadd;
+  --text-danger: #ee8884;
+  --text-danger-strong: #ee8884;
+  --text-success: #7ab948;
+  --text-warning: #d1a041;
+
+  --border-primary: rgba(222, 220, 209, 0.4);
+  --border-secondary: rgba(222, 220, 209, 0.3);
+  --border-tertiary: rgba(222, 220, 209, 0.15);
+  --border-danger: #cd5c58;
+  --border-success: #599130;
+  --border-warning: #a87829;
+
+  --ring-primary: rgba(250, 249, 245, 0.7);
+  --ring-info: rgba(128, 170, 221, 0.5);
+  --ring-danger: rgba(205, 92, 88, 0.5);
+
+  --dot-off: #6b6a65;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 0.25rem 1.25rem rgba(0, 0, 0, 0.25), 0 0 0 0.5px var(--border-tertiary);
+  --shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.4), 0 0 0 0.5px var(--border-tertiary);
+  --shadow-popover: 0 4px 16px rgba(0, 0, 0, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}

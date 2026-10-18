@@ -463,7 +463,9 @@ pub fn Settings(
             <aside class="drawer">
                 <header>
                     <h2>"Settings"</h2>
-                    <button class="close" on:click=move |_| open.set(false)>"✕"</button>
+                    <button class="close" title="Close" aria-label="Close" on:click=move |_| open.set(false)>
+                        <crate::ui::Icon name=crate::ui::IconName::Close/>
+                    </button>
                 </header>
 
                 <section>

@@ -183,15 +183,33 @@ fn send_keyboard(peer: &Peer, st: &KbState) {
     let _ = peer.hidrpc.send_with_u8_array(&bytes);
 }
 
+/// Maps a pointer position on the `<video>` element to the 0..=32767 absolute
+/// range. The element uses `object-fit: contain`, so the picture is centered
+/// and may have bars on two sides; positions are taken relative to the
+/// picture itself and clamped onto its edges when the pointer is on a bar.
 fn abs_position(video: &HtmlVideoElement, ev: &MouseEvent) -> Option<(i32, i32, u8)> {
     let (cw, ch) = (video.client_width() as f64, video.client_height() as f64);
     if cw <= 0.0 || ch <= 0.0 {
         return None;
     }
-    let rel_x = (ev.offset_x() as f64 / cw).clamp(0.0, 1.0);
-    let rel_y = (ev.offset_y() as f64 / ch).clamp(0.0, 1.0);
+    let (left, top, w, h) =
+        content_rect(cw, ch, video.video_width() as f64, video.video_height() as f64);
+    let rel_x = ((ev.offset_x() as f64 - left) / w).clamp(0.0, 1.0);
+    let rel_y = ((ev.offset_y() as f64 - top) / h).clamp(0.0, 1.0);
     let buttons = (ev.buttons() & 0x1f) as u8;
     Some(((rel_x * 32767.0).round() as i32, (rel_y * 32767.0).round() as i32, buttons))
+}
+
+/// The box the picture occupies inside a `cw` x `ch` element under
+/// `object-fit: contain`, as (left, top, width, height). Before the first
+/// frame the intrinsic size is 0 and the whole element is used.
+fn content_rect(cw: f64, ch: f64, vw: f64, vh: f64) -> (f64, f64, f64, f64) {
+    if vw <= 0.0 || vh <= 0.0 {
+        return (0.0, 0.0, cw, ch);
+    }
+    let scale = (cw / vw).min(ch / vh);
+    let (w, h) = (vw * scale, vh * scale);
+    ((cw - w) / 2.0, (ch - h) / 2.0, w, h)
 }
 
 /// Sends a press and a release report. Keyboard reports go over the reliable,

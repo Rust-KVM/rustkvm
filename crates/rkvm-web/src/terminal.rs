@@ -165,13 +165,18 @@ pub fn Terminal(
             .collect::<Vec<_>>()
     };
 
+    let i = crate::i18n::use_i18n();
     view! {
         <Show when=move || open.get()>
             <div class="term">
                 <header>
-                    <span>"Device shell (root)"</span>
-                    <button title="Close" on:click=move |_| open.set(false)>
-                        "✕"
+                    <span>{move || i.t("设备终端（root）", "Device shell (root)")}</span>
+                    <button
+                        title=move || i.t("关闭", "Close")
+                        aria-label=move || i.t("关闭", "Close")
+                        on:click=move |_| open.set(false)
+                    >
+                        <crate::ui::Icon name=crate::ui::IconName::Close/>
                     </button>
                 </header>
                 <div

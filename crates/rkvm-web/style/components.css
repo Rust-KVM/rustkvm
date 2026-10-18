@@ -1,0 +1,123 @@
+/* Base components. Each class here has a matching Rust component in src/ui
+   (or is a plain-HTML pattern documented in docs/design-system.md). One-border
+   rule: a bordered surface never contains another bordered box; controls
+   inside cards are ghost or filled. */
+
+/* Icon: 20px box, stroke follows currentColor. */
+.icon { width: 20px; height: 20px; flex: none; display: block; fill: none;
+  stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.icon.sm { width: 16px; height: 16px; }
+
+/* Button */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+  height: 36px; padding: 0 var(--space-4); border: 0; border-radius: var(--radius-md);
+  font-size: var(--text-sm); font-weight: 600; line-height: 1; white-space: nowrap;
+  cursor: pointer; user-select: none;
+  transition: background var(--dur) var(--ease), box-shadow var(--dur) var(--ease),
+    transform var(--dur) var(--ease), opacity var(--dur) var(--ease); }
+.btn:not(:disabled):active { transform: scale(.98); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.sm { height: 32px; padding: 0 var(--space-3); border-radius: var(--radius-sm); font-size: var(--text-xs); }
+.btn.block { width: 100%; }
+.btn-primary { background: var(--bg-inverse); color: var(--text-inverse); }
+.btn-primary:not(:disabled):hover { opacity: .9; }
+.btn-primary:focus-visible { box-shadow: 0 0 0 2px var(--bg-primary), 0 0 0 3.5px var(--ring-primary); }
+.btn-secondary { background: transparent; color: var(--text-primary);
+  box-shadow: inset 0 0 0 var(--hairline) var(--border-primary); }
+.btn-secondary:not(:disabled):hover { background: var(--bg-hover); }
+.btn-ghost { background: transparent; color: var(--text-secondary); }
+.btn-ghost:not(:disabled):hover { background: var(--bg-hover); color: var(--text-primary); }
+.btn-danger { background: var(--bg-danger); color: #fff; }
+.btn-danger:disabled { opacity: .6; }
+.btn-danger:focus-visible { box-shadow: 0 0 0 2px var(--bg-primary), 0 0 0 3.5px var(--ring-danger); }
+.btn.on { background: var(--bg-selected); color: var(--text-primary); }
+
+/* Icon button: square, 32px (28px small). */
+.icon-btn { display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px;
+  padding: 0; border: 0; border-radius: var(--radius-md); background: transparent;
+  color: var(--text-secondary); cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease), transform var(--dur) var(--ease); }
+.icon-btn.sm { width: 28px; height: 28px; border-radius: var(--radius-sm); }
+.icon-btn:not(:disabled):hover { background: var(--bg-hover); color: var(--text-primary); }
+.icon-btn:not(:disabled):active { transform: scale(.96); background: var(--bg-press); }
+.icon-btn:disabled { opacity: .5; cursor: default; }
+.icon-btn.on { background: var(--bg-selected); color: var(--text-primary); }
+.icon-btn.danger { color: var(--text-danger-strong); }
+.icon-btn.danger:not(:disabled):hover { background: var(--bg-danger-soft); color: var(--text-danger-strong); }
+
+/* Text input, select, textarea */
+.input, .field input, .field select, .field textarea {
+  display: block; width: 100%; height: 40px; padding: 0 var(--space-3);
+  background: var(--bg-primary); border: 1px solid var(--border-secondary); border-radius: var(--radius-md);
+  font-size: var(--text-sm); transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
+.field textarea { height: auto; padding: var(--space-2) var(--space-3); font-family: var(--font-mono); resize: vertical; }
+.input:focus, .field input:focus, .field select:focus, .field textarea:focus {
+  outline: none; border-color: var(--border-primary); box-shadow: var(--focus-ring); }
+
+/* Field: label above control, optional hint below. */
+.field { display: flex; flex-direction: column; gap: 6px; margin: 0 0 var(--space-4); }
+.field > .field-label { font-size: var(--text-xs); line-height: var(--lh-xs); font-weight: 500;
+  color: var(--text-secondary); }
+
+/* Callout: tinted, single hairline, leading icon. */
+.callout { display: flex; gap: var(--space-2); align-items: flex-start; padding: var(--space-3);
+  border-radius: var(--radius-lg); font-size: var(--text-xs); line-height: var(--lh-xs); }
+.callout > .icon { width: 16px; height: 16px; margin-top: 1px; }
+.callout > .callout-body { flex: 1; }
+.callout-danger { background: var(--bg-danger-soft); color: var(--text-danger);
+  box-shadow: inset 0 0 0 var(--hairline) var(--border-danger); }
+.callout-danger > .icon { color: var(--text-danger-strong); }
+
+/* Card: the one bordered surface of a gate or dialog. */
+.card { width: min(380px, 100%); padding: var(--space-6); background: var(--bg-primary);
+  border-radius: var(--radius-2xl); box-shadow: var(--shadow-lg); animation: pop .2s var(--ease); }
+.card-title { margin: 0 0 var(--space-1); font-size: var(--heading-lg); line-height: 25px; font-weight: 600;
+  letter-spacing: -0.01em; }
+.card-sub { margin: 0 0 var(--space-5); color: var(--text-tertiary); }
+.card .callout { margin-bottom: var(--space-4); }
+.card .actions { display: flex; gap: var(--space-2); justify-content: flex-end; margin-top: var(--space-4); }
+.err { color: var(--text-danger-strong); margin-top: var(--space-3); min-height: var(--lh-xs);
+  font-size: var(--text-xs); line-height: var(--lh-xs); }
+.err:empty { display: none; }
+
+/* Status dot and badge */
+.dot { display: inline-block; width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--dot-off); }
+.dot.on { background: var(--dot-on); }
+.dot.warn { background: var(--dot-warn); }
+.badge { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: var(--radius-xs);
+  font: 600 10px/1 var(--font-mono); letter-spacing: .03em; color: var(--text-tertiary);
+  box-shadow: inset 0 0 0 var(--hairline) var(--border-tertiary); transition: all var(--dur) var(--ease); }
+.badge.on { background: var(--bg-success); color: var(--text-success); box-shadow: inset 0 0 0 var(--hairline) var(--border-success); }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 var(--space-2);
+  border-radius: var(--radius-full); background: var(--bg-hover); color: var(--text-tertiary);
+  font-size: var(--text-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Switch: checkbox inside label.toggle. Off: tertiary track with hairline;
+   on: info blue. 36x20, 16px knob. */
+.toggle { display: flex; align-items: center; gap: var(--space-3); margin: var(--space-2) 0; cursor: pointer;
+  font-size: var(--text-sm); }
+.toggle input[type=checkbox] { appearance: none; -webkit-appearance: none; flex: none; position: relative;
+  width: 36px; height: 20px; margin: 0; border-radius: var(--radius-full); cursor: pointer;
+  background: var(--bg-tertiary); box-shadow: inset 0 0 0 var(--hairline) var(--border-primary);
+  transition: background var(--dur) var(--ease); }
+.toggle input[type=checkbox]::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2);
+  transition: transform var(--dur) var(--ease); }
+.toggle input[type=checkbox]:checked { background: var(--border-info); box-shadow: none; }
+.toggle input[type=checkbox]:checked::after { transform: translateX(16px); }
+.toggle input[type=checkbox]:focus-visible { box-shadow: var(--focus-ring); }
+
+.spinner { width: 14px; height: 14px; flex: none; border: 2px solid currentColor; border-right-color: transparent;
+  border-radius: 50%; display: inline-block; opacity: .8; animation: spin .7s linear infinite; }
+
+/* Separator inside a toolbar row */
+.vsep { width: var(--hairline); align-self: stretch; margin: 8px var(--space-1); background: var(--border-secondary); flex: none; }
+
+/* Toast: bottom-center, solid surface (never blurred over video). */
+.toast { position: absolute; left: 50%; bottom: var(--space-6); transform: translateX(-50%); z-index: 30;
+  display: flex; align-items: center; gap: var(--space-2); max-width: min(560px, calc(100% - 32px));
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3); border-radius: var(--radius-xl);
+  background: var(--bg-primary); color: var(--text-primary); box-shadow: var(--shadow-popover);
+  font-size: var(--text-sm); animation: toastIn .2s var(--ease); }
+.toast > .icon { color: var(--text-danger-strong); width: 16px; height: 16px; }
+.toast > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

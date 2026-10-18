@@ -127,3 +127,17 @@ pub async fn copy_text(text: &str) -> Result<(), String> {
         Err("Copy failed: select the text and copy it manually".to_string())
     }
 }
+
+/// Read a per-browser preference. Storage can be missing or throw (private
+/// windows, blocked site data); that reads as "not set".
+pub fn store_get(key: &str) -> Option<String> {
+    web_sys::window()?.local_storage().ok()??.get_item(key).ok()?
+}
+
+/// Save a per-browser preference. Losing it only means the default comes back
+/// on the next load, so failures are ignored.
+pub fn store_set(key: &str, value: &str) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = storage.set_item(key, value);
+    }
+}

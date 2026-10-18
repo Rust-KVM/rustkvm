@@ -1,11 +1,15 @@
 mod app;
 mod hid;
+mod i18n;
 mod net;
 mod ocr;
 mod rpc;
 mod settings;
 mod settings_advanced;
+mod shell;
 mod terminal;
+mod theme;
+mod ui;
 mod util;
 
 fn main() {

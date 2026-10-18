@@ -70,6 +70,7 @@ web-sys = { version = "0.3", features = [
     "Navigator",
     "WebSocket",
     "Node",
+    "Storage",
 ] }
 
 [profile.release]

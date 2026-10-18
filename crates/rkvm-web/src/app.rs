@@ -11,6 +11,8 @@ use web_sys::HtmlVideoElement;
 use crate::hid::{MouseMode, Session};
 use crate::net::{peer, rest};
 use crate::rpc::RpcClient;
+use crate::shell::{Sidebar, Titlebar};
+use crate::ui::{Button, Callout, Field, Icon, IconButton, IconName, Variant};
 
 #[derive(Clone, Copy, Default, PartialEq)]
 struct VideoInfo {
@@ -28,6 +30,8 @@ struct Leds {
 
 #[component]
 pub fn App() -> impl IntoView {
+    let i = crate::i18n::provide();
+    let theme = crate::theme::provide();
     let video_ref = NodeRef::<html::Video>::new();
 
     let checking = RwSignal::new(true);
@@ -50,7 +54,11 @@ pub fn App() -> impl IntoView {
 
     let show_settings = RwSignal::new(false);
     let show_terminal = RwSignal::new(false);
-    let toolbar_open = RwSignal::new(false);
+    let sidebar_open = RwSignal::new(false);
+    // Focus mode hides the sidebar and titlebar; `peek` slides the titlebar
+    // back in as an overlay while the pointer is on it.
+    let focus_mode = RwSignal::new(false);
+    let peek = RwSignal::new(false);
     let ocr_text = RwSignal::new(Option::<String>::None);
 
     let rpc_store = StoredValue::new_local(None::<Rc<RpcClient>>);
@@ -246,8 +254,11 @@ pub fn App() -> impl IntoView {
                     mouse_mode.get_value().set(true);
                 }
                 Ok(_) => error.set(Some(
-                    "Relative mouse is disabled: enable it in ⚙ Settings → USB devices first"
-                        .to_string(),
+                    i.t_now(
+                        "相对鼠标未启用：请先在 设置 → USB 设备 中打开",
+                        "Relative mouse is disabled: enable it in Settings → USB devices first",
+                    )
+                    .to_string(),
                 )),
                 Err(e) => error.set(Some(e.to_string())),
             }
@@ -256,7 +267,7 @@ pub fn App() -> impl IntoView {
 
     let do_reboot = move |_| {
         let confirmed = web_sys::window()
-            .and_then(|w| w.confirm_with_message("Reboot the device?").ok())
+            .and_then(|w| w.confirm_with_message(i.t_now("重启设备？", "Reboot the device?")).ok())
             .unwrap_or(false);
         if !confirmed {
             return;
@@ -285,14 +296,18 @@ pub fn App() -> impl IntoView {
 
     let do_ocr = move |_| {
         let Some(video) = video_store.get_value() else { return };
-        ocr_text.set(Some("Reading text from the screen…".to_string()));
+        ocr_text
+            .set(Some(i.t_now("正在识别屏幕文字…", "Reading text from the screen…").to_string()));
         spawn_local(async move {
             match crate::ocr::recognize(&video).await {
-                Ok(text) if text.trim().is_empty() => {
-                    ocr_text.set(Some("No text found on the screen.".to_string()))
-                }
+                Ok(text) if text.trim().is_empty() => ocr_text.set(Some(
+                    i.t_now("屏幕上没有识别到文字。", "No text found on the screen.").to_string(),
+                )),
                 Ok(text) => ocr_text.set(Some(text)),
-                Err(e) => ocr_text.set(Some(format!("Could not read text: {e}"))),
+                Err(e) => ocr_text.set(Some(format!(
+                    "{}{e}",
+                    i.t_now("无法识别文字：", "Could not read text: ")
+                ))),
             }
         });
     };
@@ -302,13 +317,13 @@ pub fn App() -> impl IntoView {
         let text = ocr_text.get_untracked().unwrap_or_default();
         spawn_local(async move {
             ocr_copy_msg.set(match crate::util::copy_text(&text).await {
-                Ok(()) => "Copied".to_string(),
+                Ok(()) => i.t_now("已复制", "Copied").to_string(),
                 Err(e) => e,
             });
         });
     };
 
-    // Toolbar errors are transient: clear each one after a few seconds unless a
+    // Toast errors are transient: clear each one after a few seconds unless a
     // newer error replaced it. Errors shown on the Connect card stay put.
     let error_timer = StoredValue::new_local(None::<Timeout>);
     Effect::new(move |_| {
@@ -328,209 +343,357 @@ pub fn App() -> impl IntoView {
     let hide_timer = StoredValue::new_local(None::<Timeout>);
     let cancel_hide = move |_| hide_timer.set_value(None);
     let schedule_hide = move |_| {
-        hide_timer.set_value(Some(Timeout::new(600, move || toolbar_open.set(false))));
+        hide_timer.set_value(Some(Timeout::new(600, move || peek.set(false))));
     };
 
+    let connected = Signal::derive(move || conn_state.get() == "connected");
+    let status = Signal::derive(move || match conn_state.get().as_str() {
+        "connected" => (i.t("已连接", "Connected"), "on"),
+        "connecting" => (i.t("连接中…", "Connecting…"), "warn"),
+        "lost" => (i.t("连接已断开", "Disconnected"), "warn"),
+        "error" => (i.t("连接失败", "Connection failed"), ""),
+        _ => (i.t("未连接", "Not connected"), ""),
+    });
+    let title = Signal::derive(move || {
+        if connected.get() { i.t("远程桌面", "Remote desktop") } else { "rustkvm" }
+    });
+    let chip = Signal::derive(move || {
+        connected.get().then(|| {
+            let v = video_info.get();
+            if v.width > 0 {
+                format!("{}×{} · {:.0} fps", v.width, v.height, v.fps)
+            } else {
+                i.t("无信号", "No signal").to_string()
+            }
+        })
+    });
+    let host = StoredValue::new(
+        web_sys::window().and_then(|w| w.location().host().ok()).unwrap_or_default(),
+    );
+
     view! {
-        <video
-            id="kvm-video"
-            node_ref=video_ref
-            autoplay=true
-            playsinline=true
-            muted=true
-            on:mousedown=move |_| toolbar_open.set(false)
-        ></video>
-
-        <Show when=move || conn_state.get() == "connected">
-            <button
-                class="tb-handle"
-                on:click=move |_| toolbar_open.update(|o| *o = !*o)
-                on:mouseenter=cancel_hide
-                on:mouseleave=schedule_hide
-            >
-                {move || if toolbar_open.get() { "▲" } else { "▾" }}
-            </button>
-
-            <div
-                class="toolbar"
-                class:open=move || toolbar_open.get()
-                on:mouseenter=cancel_hide
-                on:mouseleave=schedule_hide
-            >
-                <span class="tb-stat">
-                    {move || {
-                        let v = video_info.get();
-                        if v.width > 0 {
-                            format!("{}×{} @ {:.0}fps", v.width, v.height, v.fps)
-                        } else {
-                            "No signal".to_string()
-                        }
-                    }}
-                </span>
-                <span class="tb-leds">
-                    <span class:on=move || leds.get().num title="Num Lock">"NUM"</span>
-                    <span class:on=move || leds.get().caps title="Caps Lock">"CAPS"</span>
-                    <span class:on=move || leds.get().scroll title="Scroll Lock">"SCR"</span>
-                </span>
-
-                <span class="tb-sep"></span>
-
-                <button on:click=toggle_mouse title="Switch absolute / relative pointer">
-                    {move || if mouse_relative.get() { "Mouse: relative" } else { "Mouse: absolute" }}
-                </button>
-                <span class="tb-group">
-                    <button
-                        on:click=quality_down
-                        disabled=move || { quality.get() <= 0.15 }
-                        title="Lower stream quality"
-                    >
-                        "−"
-                    </button>
-                    <span class="tb-stat">{move || format!("{:.0}%", quality.get() * 100.0)}</span>
-                    <button
-                        on:click=quality_up
-                        disabled=move || { quality.get() >= 0.95 }
-                        title="Raise stream quality"
-                    >
-                        "+"
-                    </button>
-                </span>
-                <button class:active=move || audio_on.get() on:click=toggle_audio title="Toggle device audio">
-                    {move || if audio_on.get() { "Audio: on" } else { "Audio: off" }}
-                </button>
-
-                <span class="tb-sep"></span>
-
-                <button on:click=send_cad title="Send Ctrl+Alt+Del">"C·A·D"</button>
-                <button on:click=go_fullscreen title="Fullscreen">"⛶"</button>
-                <button on:click=do_ocr title="Copy text from screen (OCR)">"OCR"</button>
-                <button on:click=move |_| show_terminal.update(|s| *s = !*s) title="Device shell (root)">"›_"</button>
-                <button on:click=move |_| show_settings.update(|s| *s = !*s) title="Settings">"⚙"</button>
-
-                <span class="tb-sep"></span>
-
-                <button class="tb-danger" on:click=do_reboot title="Reboot device">"⏻"</button>
-                <span
-                    class="tb-err"
-                    title=move || error.get().unwrap_or_default()
-                    on:click=move |_| error.set(None)
-                >
-                    {move || error.get().unwrap_or_default()}
-                </span>
-            </div>
-
-            <Show when=move || no_password.get() && !nopw_dismissed.get()>
-                <div class="nopw-banner" class:low=move || toolbar_open.get() role="alert">
-                    <span>
-                        "⚠ No password set: anyone on this network can control this machine and open a root shell on the device. Set one in ⚙ Settings → Password."
-                    </span>
-                    <button title="Hide until reload" on:click=move |_| nopw_dismissed.set(true)>
-                        "✕"
-                    </button>
-                </div>
-            </Show>
-            <crate::settings::Settings
-                open=show_settings
-                rpc=rpc_store
-                peer=peer_store
-                no_password=no_password
+        <div class="app" class:focus=move || focus_mode.get()>
+            <Sidebar
+                open=sidebar_open
+                connected=connected
+                show_settings=show_settings
+                show_terminal=show_terminal
+                status=status
+                theme=theme
             />
-            <crate::terminal::Terminal open=show_terminal peer=peer_store />
+
+            <main class="main">
+                <Show when=move || focus_mode.get()>
+                    <button
+                        type="button"
+                        class="focus-handle"
+                        title=move || i.t("显示工具栏", "Show toolbar")
+                        on:click=move |_| peek.update(|p| *p = !*p)
+                        on:mouseenter=cancel_hide
+                        on:mouseleave=schedule_hide
+                    ></button>
+                </Show>
+                <Titlebar
+                    title=title
+                    chip=chip
+                    peek=peek
+                    on:mouseenter=cancel_hide
+                    on:mouseleave=schedule_hide
+                >
+                    <Show when=move || connected.get()>
+                        <span class="tb-leds">
+                            <span class="badge" class:on=move || leds.get().num title="Num Lock">
+                                "NUM"
+                            </span>
+                            <span class="badge" class:on=move || leds.get().caps title="Caps Lock">
+                                "CAPS"
+                            </span>
+                            <span class="badge" class:on=move || leds.get().scroll title="Scroll Lock">
+                                "SCR"
+                            </span>
+                        </span>
+                        <Button
+                            variant=Variant::Ghost
+                            small=true
+                            title=Signal::derive(move || {
+                                i.t("切换绝对 / 相对鼠标", "Switch absolute / relative pointer")
+                            })
+                            on:click=toggle_mouse
+                        >
+                            <Icon name=IconName::Mouse/>
+                            {move || {
+                                if mouse_relative.get() {
+                                    i.t("相对", "Relative")
+                                } else {
+                                    i.t("绝对", "Absolute")
+                                }
+                            }}
+                        </Button>
+                        <span class="tb-quality">
+                            <IconButton
+                                icon=IconName::Minus
+                                small=true
+                                label=Signal::derive(move || i.t("降低画质", "Lower stream quality"))
+                                disabled=Signal::derive(move || quality.get() <= 0.15)
+                                on:click=quality_down
+                            />
+                            <span title=move || i.t("画质", "Stream quality")>
+                                {move || format!("{:.0}%", quality.get() * 100.0)}
+                            </span>
+                            <IconButton
+                                icon=IconName::Plus
+                                small=true
+                                label=Signal::derive(move || i.t("提高画质", "Raise stream quality"))
+                                disabled=Signal::derive(move || quality.get() >= 0.95)
+                                on:click=quality_up
+                            />
+                        </span>
+                        <IconButton
+                            icon=Signal::derive(move || {
+                                if audio_on.get() { IconName::Volume } else { IconName::VolumeOff }
+                            })
+                            label=Signal::derive(move || {
+                                if audio_on.get() {
+                                    i.t("关闭声音", "Mute device audio")
+                                } else {
+                                    i.t("打开声音", "Play device audio")
+                                }
+                            })
+                            active=Signal::derive(move || audio_on.get())
+                            on:click=toggle_audio
+                        />
+                        <span class="vsep"></span>
+                        <IconButton
+                            icon=IconName::Keyboard
+                            label=Signal::derive(move || i.t("发送 Ctrl+Alt+Del", "Send Ctrl+Alt+Del"))
+                            on:click=send_cad
+                        />
+                        <IconButton
+                            icon=IconName::ScanText
+                            label=Signal::derive(move || {
+                                i.t("识别屏幕文字（OCR）", "Copy text from screen (OCR)")
+                            })
+                            on:click=do_ocr
+                        />
+                        <IconButton
+                            icon=Signal::derive(move || {
+                                if focus_mode.get() { IconName::Minimize } else { IconName::Focus }
+                            })
+                            label=Signal::derive(move || {
+                                if focus_mode.get() {
+                                    i.t("退出专注模式", "Exit focus mode")
+                                } else {
+                                    i.t("专注模式：隐藏侧边栏和工具栏", "Focus mode: hide sidebar and toolbar")
+                                }
+                            })
+                            active=Signal::derive(move || focus_mode.get())
+                            on:click=move |_| {
+                                focus_mode.update(|f| *f = !*f);
+                                peek.set(false);
+                                sidebar_open.set(false);
+                            }
+                        />
+                        <IconButton
+                            icon=IconName::Maximize
+                            label=Signal::derive(move || i.t("全屏", "Fullscreen"))
+                            on:click=go_fullscreen
+                        />
+                        <span class="vsep"></span>
+                        <IconButton
+                            icon=IconName::Power
+                            danger=true
+                            label=Signal::derive(move || i.t("重启设备", "Reboot device"))
+                            on:click=do_reboot
+                        />
+                    </Show>
+                </Titlebar>
+
+                <div class="stage">
+                    <video
+                        id="kvm-video"
+                        node_ref=video_ref
+                        autoplay=true
+                        playsinline=true
+                        muted=true
+                        on:mousedown=move |_| peek.set(false)
+                    ></video>
+
+                    <Show when=move || connected.get() && no_password.get() && !nopw_dismissed.get()>
+                        <Callout class="stage-callout">
+                            <div style="display:flex;gap:8px;align-items:flex-start">
+                                <span style="flex:1">
+                                    {move || i.t(
+                                        "未设置密码：同一网络中的任何人都能控制这台电脑，并打开设备的 root 终端。请在 设置 → 密码 中设置。",
+                                        "No password set: anyone on this network can control this machine and open a root shell on the device. Set one in Settings → Password.",
+                                    )}
+                                </span>
+                                <IconButton
+                                    icon=IconName::Close
+                                    small=true
+                                    label=Signal::derive(move || i.t("暂时隐藏", "Hide until reload"))
+                                    on:click=move |_| nopw_dismissed.set(true)
+                                />
+                            </div>
+                        </Callout>
+                    </Show>
+
+                    <Show when=move || connected.get() && error.get().is_some()>
+                        <div class="toast" role="status">
+                            <Icon name=IconName::Alert/>
+                            <span title=move || error.get().unwrap_or_default()>
+                                {move || error.get().unwrap_or_default()}
+                            </span>
+                            <IconButton
+                                icon=IconName::Close
+                                small=true
+                                label=Signal::derive(move || i.t("关闭", "Dismiss"))
+                                on:click=move |_| error.set(None)
+                            />
+                        </div>
+                    </Show>
+
+                    <Show when=move || connected.get()>
+                        <crate::terminal::Terminal open=show_terminal peer=peer_store/>
+                    </Show>
+
+                    <Show when=move || !connected.get()>
+                        <div class="gate">
+                            {move || {
+                                if checking.get() {
+                                    view! { <span class="spinner" style="color:var(--text-tertiary)"></span> }
+                                        .into_any()
+                                } else if !is_setup.get() {
+                                    view! {
+                                        <div class="card">
+                                            <h1 class="card-title">{move || i.t("设置设备", "Device setup")}</h1>
+                                            <p class="card-sub">
+                                                {move || i.t("选择登录方式，之后可以在设置里修改。", "Choose how to sign in. You can change it later in Settings.")}
+                                            </p>
+                                            <Field label=Signal::derive(move || i.t("登录方式", "Sign-in"))>
+                                                <select
+                                                    prop:value=move || setup_mode.get()
+                                                    on:change=move |ev| setup_mode.set(event_target_value(&ev))
+                                                >
+                                                    <option value="noPassword">
+                                                        {move || i.t("不设密码（同一网络中任何人都能连接）", "No password (anyone on this network can connect)")}
+                                                    </option>
+                                                    <option value="password">{move || i.t("需要密码", "Require a password")}</option>
+                                                </select>
+                                            </Field>
+                                            <Show when=move || setup_mode.get() == "password">
+                                                <Field label=Signal::derive(move || i.t("密码", "Password"))>
+                                                    <input
+                                                        type="password"
+                                                        autocomplete="new-password"
+                                                        prop:value=move || setup_pw.get()
+                                                        on:input=move |ev| setup_pw.set(event_target_value(&ev))
+                                                    />
+                                                </Field>
+                                            </Show>
+                                            <Button block=true on:click=do_setup>
+                                                {move || i.t("完成设置", "Complete setup")}
+                                            </Button>
+                                            <div class="err">{move || error.get().unwrap_or_default()}</div>
+                                        </div>
+                                    }
+                                        .into_any()
+                                } else if needs_login.get() {
+                                    view! {
+                                        <div class="card">
+                                            <h1 class="card-title">{move || i.t("登录", "Sign in")}</h1>
+                                            <p class="card-sub">{move || i.t("输入设备密码。", "Enter the device password.")}</p>
+                                            <Field label=Signal::derive(move || i.t("密码", "Password"))>
+                                                <input
+                                                    type="password"
+                                                    autocomplete="current-password"
+                                                    prop:value=move || password.get()
+                                                    on:input=move |ev| password.set(event_target_value(&ev))
+                                                    on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                                        if ev.key() == "Enter" {
+                                                            do_login(());
+                                                        }
+                                                    }
+                                                />
+                                            </Field>
+                                            <Button block=true on:click=move |_| do_login(())>
+                                                {move || i.t("登录", "Log in")}
+                                            </Button>
+                                            <div class="err">{move || error.get().unwrap_or_default()}</div>
+                                        </div>
+                                    }
+                                        .into_any()
+                                } else {
+                                    view! {
+                                        <div class="card">
+                                            <h1 class="card-title">"rustkvm"</h1>
+                                            <p class="card-sub mono">{host.get_value()}</p>
+                                            <Show when=move || no_password.get()>
+                                                <Callout>
+                                                    {move || i.t(
+                                                        "未设置密码。同一网络中的任何人都能连接、控制这台电脑，并打开设备的 root 终端。连接后请在 设置 → 密码 中设置。",
+                                                        "No password is set. Anyone on this network can connect, control this machine and open a root shell on the device. After connecting, set a password in Settings → Password.",
+                                                    )}
+                                                </Callout>
+                                            </Show>
+                                            <Button
+                                                block=true
+                                                disabled=Signal::derive(move || conn_state.get() == "connecting")
+                                                on:click=do_connect
+                                            >
+                                                <Show when=move || conn_state.get() == "connecting">
+                                                    <span class="spinner"></span>
+                                                </Show>
+                                                {move || match conn_state.get().as_str() {
+                                                    "connecting" => i.t("连接中…", "Connecting…"),
+                                                    "lost" => i.t("重新连接", "Reconnect"),
+                                                    _ => i.t("连接", "Connect"),
+                                                }}
+                                            </Button>
+                                            <div class="err">{move || error.get().unwrap_or_default()}</div>
+                                        </div>
+                                    }
+                                        .into_any()
+                                }
+                            }}
+                        </div>
+                    </Show>
+                </div>
+            </main>
+
+            <Show when=move || connected.get()>
+                <crate::settings::Settings
+                    open=show_settings
+                    rpc=rpc_store
+                    peer=peer_store
+                    no_password=no_password
+                />
+            </Show>
+
             <Show when=move || ocr_text.get().is_some()>
-                <div class="panel">
+                <div class="scrim"></div>
+                <div class="dialog" role="dialog" aria-modal="true">
                     <div class="card">
-                        <h1>"Recognized text"</h1>
+                        <h1 class="card-title">{move || i.t("识别到的文字", "Recognized text")}</h1>
+                        <p class="card-sub">{move || ocr_copy_msg.get()}</p>
                         <textarea rows="10" readonly=true prop:value=move || {
                             ocr_text.get().unwrap_or_default()
                         }></textarea>
-                        <div class="row">
-                            <button on:click=copy_ocr>"Copy"</button>
-                            <button on:click=move |_| {
-                                ocr_copy_msg.set(String::new());
-                                ocr_text.set(None);
-                            }>"Close"</button>
+                        <div class="actions">
+                            <Button
+                                variant=Variant::Secondary
+                                on:click=move |_| {
+                                    ocr_copy_msg.set(String::new());
+                                    ocr_text.set(None);
+                                }
+                            >
+                                {move || i.t("关闭", "Close")}
+                            </Button>
+                            <Button on:click=copy_ocr>{move || i.t("复制", "Copy")}</Button>
                         </div>
-                        <div class="muted">{move || ocr_copy_msg.get()}</div>
                     </div>
                 </div>
             </Show>
-        </Show>
-
-        <Show when=move || !checking.get() && !is_setup.get()>
-            <div class="panel">
-                <div class="card">
-                    <h1>"Device setup"</h1>
-                    <label>"Sign-in"</label>
-                    <select
-                        prop:value=move || setup_mode.get()
-                        on:change=move |ev| setup_mode.set(event_target_value(&ev))
-                    >
-                        <option value="noPassword">"No password (anyone on this network can connect)"</option>
-                        <option value="password">"Require a password"</option>
-                    </select>
-                    <Show when=move || setup_mode.get() == "password">
-                        <input
-                            type="password"
-                            placeholder="Set a password"
-                            prop:value=move || setup_pw.get()
-                            on:input=move |ev| setup_pw.set(event_target_value(&ev))
-                        />
-                    </Show>
-                    <button on:click=do_setup>"Complete setup"</button>
-                    <div class="err">{move || error.get().unwrap_or_default()}</div>
-                </div>
-            </div>
-        </Show>
-
-        <Show when=move || !checking.get() && is_setup.get() && needs_login.get()>
-            <div class="panel">
-                <div class="card">
-                    <h1>"Sign in"</h1>
-                    <input
-                        type="password"
-                        placeholder="Device password"
-                        prop:value=move || password.get()
-                        on:input=move |ev| password.set(event_target_value(&ev))
-                    />
-                    <button on:click=do_login>"Log in"</button>
-                    <div class="err">{move || error.get().unwrap_or_default()}</div>
-                </div>
-            </div>
-        </Show>
-
-        <Show when=move || {
-            !checking.get()
-                && is_setup.get()
-                && !needs_login.get()
-                && conn_state.get() != "connected"
-        }>
-            <div class="panel">
-                <div class="card">
-                    <h1>"rustkvm"</h1>
-                    <Show when=move || no_password.get()>
-                        <div class="nopw-card">
-                            "No password is set. Anyone on this network can connect, control this machine and open a root shell on the device. After connecting, set a password in ⚙ Settings → Password."
-                        </div>
-                    </Show>
-                    <button
-                        on:click=do_connect
-                        disabled=move || conn_state.get() == "connecting"
-                    >
-                        <Show when=move || conn_state.get() == "connecting">
-                            <span class="spinner"></span>
-                        </Show>
-                        {move || {
-                            match conn_state.get().as_str() {
-                                "connecting" => "Connecting…",
-                                "lost" => "Reconnect",
-                                _ => "Connect",
-                            }
-                        }}
-                    </button>
-                    <div class="err">{move || error.get().unwrap_or_default()}</div>
-                </div>
-            </div>
-        </Show>
+        </div>
     }
 }
 
