@@ -506,7 +506,7 @@ pub fn Settings(
             <aside class="drawer">
                 <header>
                     <h2>{move || i.t("设置", "Settings")}</h2>
-                    <button class="close" title=move || i.t("关闭", "Close") aria-label="Close" on:click=move |_| open.set(false)>
+                    <button class="close" title=move || i.t("关闭", "Close") aria-label=move || i.t("关闭", "Close") on:click=move |_| open.set(false)>
                         <crate::ui::Icon name=crate::ui::IconName::Close/>
                     </button>
                 </header>
