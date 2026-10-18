@@ -22,9 +22,9 @@ MCP endpoint so AI agents can operate the machine too.
   <img src="docs/assets/demo/light-02-remote-desktop.webp" alt="RustKVM web UI showing a Windows 11 target at 3840×2160, 60 fps" width="900">
 </picture>
 
-<img src="docs/assets/demo/rustkvm-demo.gif" alt="Pinning the sidebar, opening Settings and switching to the dark theme" width="900">
+<img src="docs/assets/demo/rustkvm-demo.gif" alt="Driving the target from the browser: moving its cursor, scrolling the GitHub page, clicking the search box and typing WebRTC" width="900">
 
-<sub>Live 4K60 target in the browser. More screenshots under <a href="#interface-overview">Interface overview</a>; full-resolution clip: <a href="docs/assets/demo/rustkvm-demo.webm">WebM</a>.</sub>
+<sub>The target's own cursor and keyboard, driven from the browser over USB HID while its 4K60 screen streams back. More screenshots under <a href="#interface-overview">Interface overview</a>; full-resolution clip: <a href="docs/assets/demo/rustkvm-demo.webm">WebM</a>.</sub>
 
 </div>
 
@@ -126,6 +126,8 @@ First launch opens a **setup wizard** where you choose password or no-password m
 | **Settings** | <img src="docs/assets/demo/light-04-settings-general.webp" width="400" alt="Settings, General page, light"> | <img src="docs/assets/demo/dark-04-settings-general.webp" width="400" alt="Settings, General page, dark"> |
 | **Focus mode** | <img src="docs/assets/demo/light-09-focus-mode.webp" width="400" alt="Focus mode, light"> | <img src="docs/assets/demo/dark-09-focus-mode.webp" width="400" alt="Focus mode, dark"> |
 | **Connect** | <img src="docs/assets/demo/light-01-connect.webp" width="400" alt="Connect card"> | |
+
+<img src="docs/assets/demo/rustkvm-ui-tour.gif" alt="Pinning the sidebar, opening Settings and switching to the dark theme" width="800">
 
 Click any image for full size. How these were captured and their sources: [docs/assets/demo/README.md](docs/assets/demo/README.md).
 
