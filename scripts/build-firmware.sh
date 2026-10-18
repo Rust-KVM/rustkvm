@@ -119,17 +119,32 @@ BOARD=${BOARD_MK%.mk}
 EOF
 
     [ -f "$APP" ] || die "application binary not found: $APP (run scripts/build-app.sh first)"
+    # /userdata is its own (initially empty) partition mounted over the rootfs
+    # directory, so the factory binary lives in the rootfs and S99rustkvm copies
+    # it to /userdata/rustkvm/bin on first boot (and after a userdata wipe).
     log "install application $(basename "$APP")"
-    local bin=$SDK/device/rockchip/common/images/userdata/normal/rustkvm/bin
-    mkdir -p "$bin"
-    install -m 0755 "$APP" "$bin/rustkvm_app"
+    rm -rf "$SDK/device/rockchip/common/images/userdata/normal/rustkvm"
+    install -D -m 0755 "$APP" "$files/usr/lib/rustkvm/rustkvm_app"
 }
 
 step_build() {
     cd "$SDK"
-    log "build kernel, u-boot, Buildroot and SD image ($BOARD_MK)"
-    ./build.sh "$BOARD_MK"
-    log "build eMMC flasher image"
+    # `./build.sh <board>.mk` builds everything twice, the second time as root,
+    # which leaves root-owned objects that break the next unprivileged build.
+    # Select the board ourselves and build each part as the current user; only
+    # image packing needs root (build.sh sudoes for those targets itself).
+    if [ -n "$(find u-boot kernel buildroot/output -maxdepth 3 -user root -print -quit 2>/dev/null)" ]; then
+        log "reclaim root-owned build files"
+        sudo chown -R "$(id -u):$(id -g)" u-boot kernel buildroot/output scripts/sd-fuse/out
+    fi
+    ln -sfn "$(readlink -f .current)/$BOARD_MK" .current_config.mk
+    for part in uboot kernel buildroot; do
+        log "build $part ($BOARD_MK)"
+        ./build.sh "$part"
+    done
+    log "pack SD image"
+    ./build.sh sd-img
+    log "pack eMMC flasher image"
     ./build.sh emmc-img
 }
 
@@ -140,10 +155,14 @@ step_collect() {
     sd=$(ls -t "$SDK"/out/*_sd.img 2>/dev/null | head -n1) || true
     eflasher=$(ls -t "$SDK"/out/*_eflasher.img 2>/dev/null | head -n1) || true
     [ -n "$sd" ] || die "no SD image under $SDK/out"
-    local name=rustkvm-rk3588-$FW_VERSION
+    # Name the files after the version baked into the image, not the current HEAD.
+    local release=$SDK/device/friendlyelec/rustkvm-files/etc/rustkvm-release
+    local built
+    built=$(sed -n 's/^FIRMWARE_VERSION=//p' "$release")
+    local name=rustkvm-rk3588-$built
     gzip -c "$sd" >"$OUT/$name-sd.img.gz"
     [ -n "$eflasher" ] && gzip -c "$eflasher" >"$OUT/$name-eflasher.img.gz"
-    cp "$SDK/device/friendlyelec/rustkvm-files/etc/rustkvm-release" "$OUT/$name.release"
+    cp "$release" "$OUT/$name.release"
     (cd "$OUT" && sha256sum "$name"-* "$name.release" >"$name.SHA256SUMS")
     ls -lh "$OUT"/"$name"*
 }

@@ -80,6 +80,7 @@ What a freshly flashed unit looks like, and what "factory reset" must restore:
 
 | Item | Factory state |
 | --- | --- |
+| `/userdata` | empty partition; first boot copies the factory binary from `/usr/lib/rustkvm/` |
 | `/userdata/rustkvm/config.toml` | absent → setup wizard on first login (device password or no-password mode) |
 | TLS certificate | self-signed, generated at start |
 | SSH (dropbear) | off; enabled only by `/userdata/rustkvm/devmode.enable` |

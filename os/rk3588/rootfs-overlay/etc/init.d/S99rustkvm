@@ -4,6 +4,7 @@
 # exit, so it is always stopped with SIGTERM. SIGKILL reboots the device.
 
 APP=/userdata/rustkvm/bin/rustkvm_app
+FACTORY_APP=/usr/lib/rustkvm/rustkvm_app
 LOG_DIR=/userdata/rustkvm/log
 
 stop_app() {
@@ -42,6 +43,12 @@ start)
 	sleep 2
 
 	mkdir -p $LOG_DIR
+
+	# First boot or wiped userdata: install the binary shipped in the image.
+	if [ ! -f "$APP" ] && [ -f "$FACTORY_APP" ]; then
+		mkdir -p "$(dirname "$APP")"
+		cp "$FACTORY_APP" "$APP.tmp" && mv "$APP.tmp" "$APP"
+	fi
 
 	if [ ! -f "$APP" ]; then
 		echo "rustkvm_app not found!" >>$LOG_DIR/rustkvm_app.log

@@ -17,7 +17,7 @@ RUN apt-get update \
         libnl-3-dev libssl-dev llvm-dev lz4 openssl parted patch \
         pkg-config python-is-python3 python3 python3-dev python3-pip python3-pyelftools \
         rsync sudo texinfo \
-        u-boot-tools udev unzip uuid-dev wget xz-utils zstd \
+        u-boot-tools udev unzip uuid-dev wget xxd xz-utils zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # Google's `repo` launcher (v2.69), pinned by content hash.

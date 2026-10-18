@@ -11,7 +11,8 @@
   </project>
   <project path="device/rockchip" name="buildroot_device_rockchip" remote="friendlyarm" revision="c0e4d3c483d07551731e0a430e25482ef3d59203" upstream="refs/heads/kernel-5.10" />
   <project path="external" name="linuxsdk-rockchip-external" remote="friendlyarm" revision="fd788b4f85581a89ecdbb4646b8ef9b522a0b09a" upstream="refs/heads/kernel-5.10" />
-  <project path="external/mpp" name="mpp" remote="friendlyarm" revision="50037d3946c90f6bf4934754944d5b9df3542c01" upstream="refs/heads/develop" />
+  <!-- mpp records its last commits in its version string; keep enough history. -->
+  <project path="external/mpp" name="mpp" remote="friendlyarm" revision="50037d3946c90f6bf4934754944d5b9df3542c01" upstream="refs/heads/develop" clone-depth="30" />
   <project path="external/rknn-toolkit2" name="rknn-toolkit2" remote="friendlyarm" revision="77b71094e08391c543d9c65fea5f7cf98cc16eee" upstream="refs/heads/master" />
   <project path="external/rknpu2" name="rknpu2" remote="friendlyarm" revision="22b548a2862b05c93876349ae209a8d49e0fd562" upstream="refs/heads/master" />
   <project path="kernel" name="kernel-rockchip" remote="friendlyarm" revision="28c0b8a30d656e29a3b1c1801d1f2339a73e6355" upstream="refs/heads/nanopi6-v6.1.y" />
