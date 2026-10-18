@@ -17,6 +17,15 @@ MCP endpoint so AI agents can operate the machine too.
 
 [Features](#features) · [Interface](#interface-overview) · [Architecture](#architecture) · [Quick start](#quick-start) · [Build](#building-from-source) · [API](#api-overview) · [Contributing](CONTRIBUTING.md) · [中文](README.zh-CN.md)
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/demo/dark-02-remote-desktop.webp">
+  <img src="docs/assets/demo/light-02-remote-desktop.webp" alt="RustKVM web UI showing a Windows 11 target at 3840×2160, 60 fps" width="900">
+</picture>
+
+<img src="docs/assets/demo/rustkvm-demo.gif" alt="Pinning the sidebar, opening Settings and switching to the dark theme" width="900">
+
+<sub>Live 4K60 target in the browser. More screenshots under <a href="#interface-overview">Interface overview</a>; full-resolution clip: <a href="docs/assets/demo/rustkvm-demo.webm">WebM</a>.</sub>
+
 </div>
 
 ---
@@ -110,7 +119,15 @@ The web UI is a single-page app served by the device itself.
 
 First launch opens a **setup wizard** where you choose password or no-password mode.
 
-<!-- Screenshots: add docs/assets/ui-console.png and docs/assets/ui-settings.png taken from a running device, then embed them here. -->
+| | Light | Dark |
+| --- | --- | --- |
+| **Remote desktop** | <img src="docs/assets/demo/light-02-remote-desktop.webp" width="400" alt="Remote desktop, light"> | <img src="docs/assets/demo/dark-02-remote-desktop.webp" width="400" alt="Remote desktop, dark"> |
+| **Sidebar pinned** | <img src="docs/assets/demo/light-03-sidebar-pinned.webp" width="400" alt="Sidebar pinned, light"> | <img src="docs/assets/demo/dark-03-sidebar-pinned.webp" width="400" alt="Sidebar pinned, dark"> |
+| **Settings** | <img src="docs/assets/demo/light-04-settings-general.webp" width="400" alt="Settings, General page, light"> | <img src="docs/assets/demo/dark-04-settings-general.webp" width="400" alt="Settings, General page, dark"> |
+| **Focus mode** | <img src="docs/assets/demo/light-09-focus-mode.webp" width="400" alt="Focus mode, light"> | <img src="docs/assets/demo/dark-09-focus-mode.webp" width="400" alt="Focus mode, dark"> |
+| **Connect** | <img src="docs/assets/demo/light-01-connect.webp" width="400" alt="Connect card"> | |
+
+Click any image for full size. How these were captured and their sources: [docs/assets/demo/README.md](docs/assets/demo/README.md).
 
 ## Architecture
 
