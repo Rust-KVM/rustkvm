@@ -25,6 +25,7 @@ use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSampl
 use crate::api::{JsonRpcProcessor, default_registry};
 use crate::data_channel::DataChannelManager;
 use crate::hardware::usb::storage as storage_mod;
+use crate::pipeline::H264Profile;
 use crate::session::Session;
 use crate::state::AppState;
 use crate::video;
@@ -51,6 +52,31 @@ impl Default for SessionConfig {
 /// High profile, level 5.2: what mpph264enc produces by default.
 const H264_HIGH_FMTP: &str =
     "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640034";
+
+/// The H.264 profile the video track sends with. Binding picks the first
+/// negotiated codec matching [`H264_HIGH_FMTP`] (packetization-mode 1 and a
+/// profile-level-id starting `6400`, level ignored), else the first negotiated
+/// H.264 codec; this mirrors that choice so the encoder can follow it.
+pub fn negotiated_h264_profile(codecs: &[RTCRtpCodecParameters]) -> Option<H264Profile> {
+    let h264: Vec<_> = codecs
+        .iter()
+        .filter(|c| c.capability.mime_type.eq_ignore_ascii_case(MIME_TYPE_H264))
+        .collect();
+    let fmtp = |c: &RTCRtpCodecParameters, key: &str| {
+        c.capability.sdp_fmtp_line.split(';').find_map(|kv| {
+            let (k, v) = kv.split_once('=')?;
+            (k.trim() == key).then(|| v.trim().to_owned())
+        })
+    };
+    let is_high = |c: &&&RTCRtpCodecParameters| {
+        fmtp(c, "packetization-mode").as_deref() == Some("1")
+            && fmtp(c, "profile-level-id")
+                .and_then(|p| p.get(0..4).map(|p| p.eq_ignore_ascii_case("6400")))
+                .unwrap_or(false)
+    };
+    let bound = h264.iter().find(is_high).or_else(|| h264.first())?;
+    H264Profile::from_profile_level_id(&fmtp(bound, "profile-level-id")?)
+}
 
 pub struct WebRTCApi;
 
@@ -209,6 +235,7 @@ impl WebRTCApi {
             )
             .await?;
         let video_sender = video_transceiver.sender().await;
+        let video_sender_for_profile = Arc::clone(&video_sender);
 
         let audio_transceiver = peer_connection
             .add_transceiver_from_track(
@@ -272,6 +299,7 @@ impl WebRTCApi {
                 let session_id = session_id_clone.clone();
                 let video_track = video_track_clone.clone();
                 let audio_track = audio_track_clone.clone();
+                let video_sender = video_sender_for_profile.clone();
                 let is_connected = is_connected_clone.clone();
                 let app_state = app_state_for_close.clone();
                 Box::pin(async move {
@@ -288,6 +316,14 @@ impl WebRTCApi {
                                 drop(connected);
                                 info!("WebRTC session {} connected", session_id);
                                 increment_session_counter().await;
+                                let codecs = video_sender.get_parameters().await.rtp_parameters.codecs;
+                                match negotiated_h264_profile(&codecs) {
+                                    Some(profile) => video::set_h264_profile(profile).await,
+                                    None => warn!(
+                                        "session {} negotiated no H.264 profile the encoder can produce",
+                                        session_id
+                                    ),
+                                }
                                 if let Some(track) = video_track.clone() {
                                     video::attach_webrtc_sink(track).await;
                                     video::set_encoding_active(true).await;
