@@ -10,7 +10,6 @@ pub enum IconName {
     Sliders,
     Power,
     Maximize,
-    Minimize,
     Focus,
     Keyboard,
     Mouse,
@@ -43,8 +42,11 @@ impl IconName {
             }
             Self::Power => "M10 3v6M6.2 5.4a6.25 6.25 0 1 0 7.6 0",
             Self::Maximize => "M3.5 7.5v-4h4M12.5 3.5h4v4M16.5 12.5v4h-4M7.5 16.5h-4v-4",
-            Self::Minimize => "M7.5 3.5v4h-4M16.5 7.5h-4v-4M12.5 16.5v-4h4M3.5 12.5h4v4",
-            Self::Focus => "M11.5 3.5h5v5M16.5 3.5l-5 5M8.5 16.5h-5v-5M3.5 16.5l5-5",
+            // A window with its toolbar and sidebar marked: "hide the
+            // chrome". Deliberately unlike Maximize's four corners.
+            Self::Focus => {
+                "M5 3.5h10a2.5 2.5 0 0 1 2.5 2.5v8a2.5 2.5 0 0 1 -2.5 2.5h-10a2.5 2.5 0 0 1 -2.5 -2.5v-8a2.5 2.5 0 0 1 2.5 -2.5zM2.5 7h15M6.5 7v9.5M10 10.5h4.5"
+            }
             Self::Keyboard => {
                 "M4.5 5h11a2 2 0 0 1 2 2v6a2 2 0 0 1 -2 2h-11a2 2 0 0 1 -2 -2v-6a2 2 0 0 1 2 -2zM6 8.5h.01M8.67 8.5h.01M11.33 8.5h.01M14 8.5h.01M7 12h6"
             }

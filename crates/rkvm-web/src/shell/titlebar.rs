@@ -11,7 +11,7 @@ pub fn Titlebar(
     children: Children,
 ) -> impl IntoView {
     view! {
-        <header class="titlebar" class:peek=move || peek.get()>
+        <header class="titlebar" class:peek=move || peek.get() data-chrome="1">
             <div class="tb-left">
                 <span class="tb-title">{move || title.get()}</span>
                 {move || chip.get().map(|c| view! { <span class="chip">{c}</span> })}

@@ -15,7 +15,7 @@ code taken).
 1. **The video comes first.** Nothing may cost the video path a frame. The
    `<video>` element is mounted once and never unmounted or re-parented; no
    `backdrop-filter`, blur or animated shadow sits over the stage; opening the
-   sidebar never resizes the stage (it overlays it).
+   sidebar resizes the stage in one step, never through an animation.
 2. **Quiet chrome.** Warm off-white and near-black surfaces, hairline (0.5px)
    borders, one accent used sparingly. Color carries meaning (danger, success,
    info), never decoration.
@@ -110,15 +110,26 @@ until the user picks one. `src/theme.rs` flips it from the sidebar.
 ```
 
 - **Sidebar** (`shell/sidebar.rs`). Collapsed: 52px icon rail. Expanded:
-  256px panel that floats over the stage with a shadow; a transparent scrim
-  closes it. Top row: logo (click to expand), brand, collapse button. Nav rows
-  (36px, radius 8, icon + label): Remote desktop, Device terminal, Settings.
-  Footer: theme, language, connection status (dot + label + host). Rows are
-  disabled until connected.
+  256px, and it pushes the content as Claude Desktop does (`.app.sb-open`
+  widens the first grid column), so the titlebar chip and actions are never
+  covered. The column changes in one step with no width transition, so the
+  video rescales once. Below 720px it floats over the content with a shadow
+  and a transparent scrim closes it. Top row: logo (click to expand), brand,
+  collapse button. Nav rows (36px, radius 8, icon + label): Remote desktop,
+  Device terminal, Settings. Footer: preferences, reboot, connection status
+  (dot + label + host). Rows are disabled until connected.
+- **Preferences show state, not actions.** Expanded, theme and language are
+  segmented controls (`.seg`, `button.on` is the current choice, each
+  language named in itself: 中文 / English). Collapsed, one icon each
+  (`.sb-rail-only`) whose tooltip says the current value and what a click
+  does. Never label a toggle with the value it switches to.
+- **Destructive device actions live in the sidebar footer**, as a labeled
+  `.sb-item.danger` row that confirms first (reboot). Never in a titlebar
+  corner, where a near miss of fullscreen or focus lands on it.
 - **Titlebar** (`shell/titlebar.rs`). 48px (Figma uses 68px; KVM gives the
   space to the video). Left: page title and a chip (`1920×1080 · 60 fps` or
-  "无信号"). Right: page actions, grouped with `.vsep` hairlines, destructive
-  action last.
+  "无信号"). Right: page actions, grouped with `.vsep` hairlines. No
+  destructive action.
 - **Stage**. Near-black in both themes. The picture keeps its aspect ratio
   (`object-fit: contain`); pointer positions map through the letterboxed
   content box (`hid::content_rect`).
@@ -135,9 +146,31 @@ until the user picks one. `src/theme.rs` flips it from the sidebar.
   first click while settings is open.
 - **Sheets and dialogs** (settings, OCR) sit above everything on a scrim.
 
-Remote-desktop titlebar actions, in order: Num/Caps/Scroll LED badges · mouse
-mode (absolute/relative) · quality − % + · audio | Ctrl+Alt+Del · OCR · focus
-mode · fullscreen | reboot (danger).
+Remote-desktop titlebar actions, in order: Num/Caps/Scroll LED badges |
+mouse mode (absolute/relative) · quality − % + · audio | Ctrl+Alt+Del · OCR |
+focus mode · fullscreen. Focus mode and fullscreen use clearly different
+glyphs (window with chrome marked vs four corners).
+
+### Keyboard ownership
+
+While connected every key goes to the host (Tab, Esc and shortcuts
+included), except when the page owns it (`hid::ui_owns_keyboard`):
+
+- a text field, select, the terminal, or anything inside `[data-modal]`
+  (settings sheet, OCR dialog);
+- chrome (`[data-chrome]`: sidebar, titlebar) focused with the keyboard
+  (`:focus-visible`). A button that was only clicked keeps focus but not
+  `:focus-visible`, so typing after a click still reaches the host.
+
+Clicking the video focuses it (`tabindex=-1`). Sheets and dialogs take focus
+when they open and close on Esc. A key pressed for the host is always
+released to the host, even if focus moved meanwhile. Focus mode does not
+take Esc, because the host needs it; leave it from the top handle.
+
+### Targets
+
+Pointer targets are 32px (28px small) for mouse. Under `(pointer: coarse)`
+every button, nav row and segment is at least 44px.
 
 ## Components (`src/ui`)
 

@@ -500,10 +500,28 @@ pub fn Settings(
         }
     };
 
+    let drawer_ref = NodeRef::<leptos::html::Aside>::new();
+    // Take focus when the sheet opens so Esc and Tab stay in it.
+    Effect::new(move |_| {
+        if let Some(el) = drawer_ref.get() {
+            let _ = el.focus();
+        }
+    });
+
     view! {
         <Show when=move || open.get()>
             <div class="drawer-scrim" on:click=move |_| open.set(false)></div>
-            <aside class="drawer">
+            <aside
+                class="drawer"
+                data-modal="1"
+                tabindex="-1"
+                node_ref=drawer_ref
+                on:keydown=move |ev: web_sys::KeyboardEvent| {
+                    if ev.key() == "Escape" {
+                        open.set(false);
+                    }
+                }
+            >
                 <header>
                     <h2>{move || i.t("设置", "Settings")}</h2>
                     <button class="close" title=move || i.t("关闭", "Close") aria-label=move || i.t("关闭", "Close") on:click=move |_| open.set(false)>

@@ -16,7 +16,10 @@ impl Theme {
     }
 
     pub fn toggle(self) {
-        let dark = !self.0.get_untracked();
+        self.set_dark(!self.0.get_untracked());
+    }
+
+    pub fn set_dark(self, dark: bool) {
         let name = if dark { "dark" } else { "light" };
         if let Some(root) = root() {
             // Both attributes are read only by CSS and the boot script; a

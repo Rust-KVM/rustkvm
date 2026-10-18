@@ -4,8 +4,9 @@ use crate::i18n::{Lang, use_i18n};
 use crate::theme::Theme;
 use crate::ui::{Icon, IconButton, IconName};
 
-/// Left navigation. Collapsed it is a 52px icon rail; expanded (256px) it
-/// floats over the stage so the video underneath keeps its size.
+/// Left navigation, as in Claude Desktop: a 52px icon rail that expands to
+/// 256px and pushes the content over (the video rescales once; it is not
+/// re-laid out per frame). On narrow windows it floats over the content.
 #[component]
 pub fn Sidebar(
     open: RwSignal<bool>,
@@ -16,6 +17,7 @@ pub fn Sidebar(
     #[prop(into)]
     status: Signal<(&'static str, &'static str)>,
     theme: Theme,
+    on_reboot: Callback<()>,
 ) -> impl IntoView {
     let i = use_i18n();
     let host = web_sys::window().and_then(|w| w.location().host().ok()).unwrap_or_default();
@@ -26,13 +28,19 @@ pub fn Sidebar(
         <Show when=move || open.get()>
             <div class="sb-scrim" on:click=move |_| open.set(false)></div>
         </Show>
-        <nav class="sidebar" class:open=move || open.get() aria-label=move || i.t("主导航", "Main")>
+        <nav
+            class="sidebar"
+            class:open=move || open.get()
+            data-chrome="1"
+            aria-label=move || i.t("主导航", "Main")
+        >
             <div class="sb-panel">
                 <div class="sb-top">
                     <button
                         type="button"
                         class="sb-logo"
                         title=move || i.t("展开侧边栏", "Expand sidebar")
+                        aria-label=move || i.t("展开侧边栏", "Expand sidebar")
                         on:click=move |_| open.update(|o| *o = !*o)
                     >
                         <Logo/>
@@ -55,7 +63,6 @@ pub fn Sidebar(
                         on:click=move |_| {
                             show_settings.set(false);
                             show_terminal.set(false);
-                            open.set(false);
                         }
                     >
                         <Icon name=IconName::Monitor/>
@@ -67,10 +74,7 @@ pub fn Sidebar(
                         class:on=move || show_terminal.get()
                         disabled=disabled
                         title=move || i.t("设备终端", "Device terminal")
-                        on:click=move |_| {
-                            show_terminal.update(|s| *s = !*s);
-                            open.set(false);
-                        }
+                        on:click=move |_| show_terminal.update(|s| *s = !*s)
                     >
                         <Icon name=IconName::Terminal/>
                         <span class="sb-label">{move || i.t("设备终端", "Device terminal")}</span>
@@ -82,10 +86,7 @@ pub fn Sidebar(
                         class:on=move || show_settings.get()
                         disabled=disabled
                         title=move || i.t("设置", "Settings")
-                        on:click=move |_| {
-                            show_settings.update(|s| *s = !*s);
-                            open.set(false);
-                        }
+                        on:click=move |_| show_settings.update(|s| *s = !*s)
                     >
                         <Icon name=IconName::Sliders/>
                         <span class="sb-label">{move || i.t("设置", "Settings")}</span>
@@ -93,36 +94,89 @@ pub fn Sidebar(
                 </div>
 
                 <div class="sb-foot">
+                    // Expanded: segmented controls that show the current
+                    // choice. Collapsed: one icon each, tooltip says what
+                    // is current and what a click does.
+                    <div class="sb-pref sb-label" role="group" aria-label=move || i.t("外观", "Appearance")>
+                        <span class="sb-pref-name">{move || i.t("外观", "Theme")}</span>
+                        <div class="seg">
+                            <button
+                                type="button"
+                                class:on=move || !theme.is_dark()
+                                aria-pressed=move || (!theme.is_dark()).to_string()
+                                on:click=move |_| theme.set_dark(false)
+                            >
+                                {move || i.t("浅色", "Light")}
+                            </button>
+                            <button
+                                type="button"
+                                class:on=move || theme.is_dark()
+                                aria-pressed=move || theme.is_dark().to_string()
+                                on:click=move |_| theme.set_dark(true)
+                            >
+                                {move || i.t("深色", "Dark")}
+                            </button>
+                        </div>
+                    </div>
+                    <div class="sb-pref sb-label" role="group" aria-label="语言 / Language">
+                        <span class="sb-pref-name">{move || i.t("语言", "Language")}</span>
+                        <div class="seg">
+                            <button
+                                type="button"
+                                lang="zh-CN"
+                                class:on=move || i.lang() == Lang::Zh
+                                aria-pressed=move || (i.lang() == Lang::Zh).to_string()
+                                on:click=move |_| i.set(Lang::Zh)
+                            >
+                                "中文"
+                            </button>
+                            <button
+                                type="button"
+                                lang="en"
+                                class:on=move || i.lang() == Lang::En
+                                aria-pressed=move || (i.lang() == Lang::En).to_string()
+                                on:click=move |_| i.set(Lang::En)
+                            >
+                                "English"
+                            </button>
+                        </div>
+                    </div>
                     <button
                         type="button"
-                        class="sb-item"
-                        title=move || i.t("切换浅色 / 深色", "Switch light / dark")
+                        class="sb-item sb-rail-only"
+                        title=move || {
+                            if theme.is_dark() {
+                                i.t("外观：深色（点击切换为浅色）", "Theme: dark (click for light)")
+                            } else {
+                                i.t("外观：浅色（点击切换为深色）", "Theme: light (click for dark)")
+                            }
+                        }
                         on:click=move |_| theme.toggle()
                     >
                         {move || {
-                            let name = if theme.is_dark() { IconName::Sun } else { IconName::Moon };
+                            let name = if theme.is_dark() { IconName::Moon } else { IconName::Sun };
                             view! { <Icon name=name/> }
                         }}
-                        <span class="sb-label">
-                            {move || {
-                                if theme.is_dark() {
-                                    i.t("浅色模式", "Light mode")
-                                } else {
-                                    i.t("深色模式", "Dark mode")
-                                }
-                            }}
-                        </span>
                     </button>
                     <button
                         type="button"
-                        class="sb-item"
-                        title="中文 / English"
+                        class="sb-item sb-rail-only"
+                        title=move || {
+                            i.t("语言：中文（点击切换为 English）", "Language: English (click for 中文)")
+                        }
                         on:click=move |_| i.toggle()
                     >
                         <Icon name=IconName::Languages/>
-                        <span class="sb-label">
-                            {move || if i.lang() == Lang::Zh { "English" } else { "中文" }}
-                        </span>
+                    </button>
+                    <button
+                        type="button"
+                        class="sb-item danger"
+                        disabled=disabled
+                        title=move || i.t("重启设备（会先确认）", "Reboot device (asks first)")
+                        on:click=move |_| on_reboot.run(())
+                    >
+                        <Icon name=IconName::Power/>
+                        <span class="sb-label">{move || i.t("重启设备", "Reboot device")}</span>
                     </button>
                     <div class="sb-status" title=move || status.get().0>
                         <span class=move || format!("dot {}", status.get().1)></span>

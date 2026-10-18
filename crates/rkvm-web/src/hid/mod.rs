@@ -57,7 +57,7 @@ pub fn attach(video: HtmlVideoElement, session: Session, mouse_mode: MouseMode) 
         let session = session.clone();
         let kb = kb.clone();
         let cb = Closure::<dyn FnMut(KeyboardEvent)>::new(move |ev: KeyboardEvent| {
-            if editable_focused() {
+            if ui_owns_keyboard() {
                 return;
             }
             ev.prevent_default();
@@ -83,18 +83,27 @@ pub fn attach(video: HtmlVideoElement, session: Session, mouse_mode: MouseMode) 
         let session = session.clone();
         let kb = kb.clone();
         let cb = Closure::<dyn FnMut(KeyboardEvent)>::new(move |ev: KeyboardEvent| {
-            if editable_focused() {
-                return;
-            }
-            ev.prevent_default();
+            // A key pressed for the host is always released to it, even if
+            // focus moved into the UI while it was held.
+            let local = ui_owns_keyboard();
             let code = ev.code();
             let mut st = kb.borrow_mut();
-            if let Some(bit) = keymap::code_to_modifier(&code) {
+            let held = if let Some(bit) = keymap::code_to_modifier(&code) {
+                let held = st.modifiers & bit != 0;
                 st.modifiers &= !bit;
+                held
             } else if let Some(usage) = keymap::code_to_usage(&code) {
+                let held = st.keys.contains(&usage);
                 st.keys.retain(|&k| k != usage);
+                held
             } else {
                 return;
+            };
+            if local && !held {
+                return;
+            }
+            if !local {
+                ev.prevent_default();
             }
             if let Some((peer, _)) = session.borrow().as_ref() {
                 send_keyboard(peer, &st);
@@ -162,7 +171,12 @@ fn pointer_locked(_video: &HtmlVideoElement) -> bool {
     web_sys::window().and_then(|w| w.document()).and_then(|d| d.pointer_lock_element()).is_some()
 }
 
-fn editable_focused() -> bool {
+/// Whether keys belong to the page instead of the host: a text field, the
+/// terminal, an open sheet or dialog (`data-modal`), or chrome
+/// (`data-chrome`) reached with the keyboard. A button that was only clicked
+/// does not match `:focus-visible`, so typing after a click still goes to the
+/// host.
+fn ui_owns_keyboard() -> bool {
     web_sys::window()
         .and_then(|w| w.document())
         .and_then(|d| d.active_element())
@@ -170,6 +184,9 @@ fn editable_focused() -> bool {
             matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT")
                 || el.has_attribute("contenteditable")
                 || el.has_attribute("data-term")
+                || el.closest("[data-modal]").ok().flatten().is_some()
+                || (el.closest("[data-chrome]").ok().flatten().is_some()
+                    && el.matches(":focus-visible").unwrap_or(false))
         })
         .unwrap_or(false)
 }

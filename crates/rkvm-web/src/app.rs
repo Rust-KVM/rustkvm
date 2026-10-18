@@ -265,7 +265,7 @@ pub fn App() -> impl IntoView {
         });
     };
 
-    let do_reboot = move |_| {
+    let do_reboot = move |()| {
         let confirmed = web_sys::window()
             .and_then(|w| w.confirm_with_message(i.t_now("重启设备？", "Reboot the device?")).ok())
             .unwrap_or(false);
@@ -313,6 +313,13 @@ pub fn App() -> impl IntoView {
     };
 
     let ocr_copy_msg = RwSignal::new(String::new());
+    let ocr_ref = NodeRef::<html::Div>::new();
+    // Take focus when the dialog opens so Esc reaches it, not the host.
+    Effect::new(move |_| {
+        if let Some(el) = ocr_ref.get() {
+            let _ = el.focus();
+        }
+    });
     let copy_ocr = move |_| {
         let text = ocr_text.get_untracked().unwrap_or_default();
         spawn_local(async move {
@@ -372,7 +379,7 @@ pub fn App() -> impl IntoView {
     );
 
     view! {
-        <div class="app" class:focus=move || focus_mode.get()>
+        <div class="app" class:focus=move || focus_mode.get() class:sb-open=move || sidebar_open.get()>
             <Sidebar
                 open=sidebar_open
                 connected=connected
@@ -380,6 +387,7 @@ pub fn App() -> impl IntoView {
                 show_terminal=show_terminal
                 status=status
                 theme=theme
+                on_reboot=Callback::new(do_reboot)
             />
 
             <main class="main">
@@ -412,6 +420,7 @@ pub fn App() -> impl IntoView {
                                 "SCR"
                             </span>
                         </span>
+                        <span class="vsep"></span>
                         <Button
                             variant=Variant::Ghost
                             small=true
@@ -475,10 +484,9 @@ pub fn App() -> impl IntoView {
                             })
                             on:click=do_ocr
                         />
+                        <span class="vsep"></span>
                         <IconButton
-                            icon=Signal::derive(move || {
-                                if focus_mode.get() { IconName::Minimize } else { IconName::Focus }
-                            })
+                            icon=IconName::Focus
                             label=Signal::derive(move || {
                                 if focus_mode.get() {
                                     i.t("退出专注模式", "Exit focus mode")
@@ -498,13 +506,6 @@ pub fn App() -> impl IntoView {
                             label=Signal::derive(move || i.t("全屏", "Fullscreen"))
                             on:click=go_fullscreen
                         />
-                        <span class="vsep"></span>
-                        <IconButton
-                            icon=IconName::Power
-                            danger=true
-                            label=Signal::derive(move || i.t("重启设备", "Reboot device"))
-                            on:click=do_reboot
-                        />
                     </Show>
                 </Titlebar>
 
@@ -515,7 +516,16 @@ pub fn App() -> impl IntoView {
                         autoplay=true
                         playsinline=true
                         muted=true
-                        on:mousedown=move |_| peek.set(false)
+                        tabindex="-1"
+                        on:mousedown=move |_| {
+                            peek.set(false);
+                            // The HID handler cancels mousedown, which also
+                            // cancels the focus move; take focus here so a
+                            // toolbar button clicked earlier stops owning keys.
+                            if let Some(v) = video_ref.get_untracked() {
+                                let _ = v.focus();
+                            }
+                        }
                     ></video>
 
                     <Show when=move || connected.get() && no_password.get() && !nopw_dismissed.get()>
@@ -670,7 +680,20 @@ pub fn App() -> impl IntoView {
 
             <Show when=move || ocr_text.get().is_some()>
                 <div class="scrim"></div>
-                <div class="dialog" role="dialog" aria-modal="true">
+                <div
+                    class="dialog"
+                    role="dialog"
+                    aria-modal="true"
+                    data-modal="1"
+                    tabindex="-1"
+                    node_ref=ocr_ref
+                    on:keydown=move |ev: web_sys::KeyboardEvent| {
+                        if ev.key() == "Escape" {
+                            ocr_copy_msg.set(String::new());
+                            ocr_text.set(None);
+                        }
+                    }
+                >
                     <div class="card">
                         <h1 class="card-title">{move || i.t("识别到的文字", "Recognized text")}</h1>
                         <p class="card-sub">{move || ocr_copy_msg.get()}</p>

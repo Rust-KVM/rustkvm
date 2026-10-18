@@ -60,10 +60,13 @@ impl I18n {
     }
 
     pub fn toggle(self) {
-        let next = match self.0.get_untracked() {
+        self.set(match self.0.get_untracked() {
             Lang::Zh => Lang::En,
             Lang::En => Lang::Zh,
-        };
+        });
+    }
+
+    pub fn set(self, next: Lang) {
         self.0.set(next);
         apply(next);
         crate::util::store_set(STORAGE_KEY, code(next));
