@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use parking_lot::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{trace, warn};
+use tracing::{debug, info, trace, warn};
 
 pub const KEYBOARD_LED_MASK_NUM_LOCK: u8 = 1 << 0;
 pub const KEYBOARD_LED_MASK_CAPS_LOCK: u8 = 1 << 1;
@@ -110,14 +110,16 @@ const HID_DEV_KEYBOARD: usize = 0;
 const HID_DEV_ABS_MOUSE: usize = 1;
 const HID_DEV_REL_MOUSE: usize = 2;
 
-enum HidWriteCmd {
+/// One report bound for a gadget device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HidReport {
     Keyboard([u8; 8]),
     AbsMouse([u8; 6]),
     AbsWheel([u8; 2]),
     RelMouse([u8; 4]),
 }
 
-impl HidWriteCmd {
+impl HidReport {
     fn device_and_payload(&self) -> (usize, &[u8]) {
         match self {
             Self::Keyboard(b) => (HID_DEV_KEYBOARD, b.as_slice()),
@@ -128,6 +130,111 @@ impl HidWriteCmd {
     }
 }
 
+/// Merges queued pointer reports that only matter as a whole: consecutive
+/// absolute moves with the same buttons keep only the last position, and
+/// consecutive relative moves with the same buttons are summed while they fit
+/// a report. Keyboard reports, button changes and wheel steps stay as they
+/// are and in order. After a host stall this turns a backlog of stale moves
+/// into one jump to where the pointer is now, instead of a slow replay.
+///
+/// `abs_buttons` carries the absolute pointer's buttons from one batch to the
+/// next, so a batch's first report counts as a move when they did not change.
+pub fn coalesce_reports(batch: &mut Vec<HidReport>, abs_buttons: &mut Option<u8>) {
+    let mut out: Vec<HidReport> = Vec::with_capacity(batch.len());
+    // Index in `out` of the last absolute move that later moves may replace.
+    // A report that changes the buttons is never replaced: a press or release
+    // has to land where it happened.
+    let mut abs_tail: Option<usize> = None;
+    for report in batch.drain(..) {
+        match report {
+            HidReport::AbsMouse(new) => {
+                if let Some(i) = abs_tail
+                    && let HidReport::AbsMouse(old) = &mut out[i]
+                    && old[1] == new[1]
+                {
+                    *old = new;
+                    continue;
+                }
+                let is_move = *abs_buttons == Some(new[1]);
+                *abs_buttons = Some(new[1]);
+                out.push(report);
+                abs_tail = is_move.then_some(out.len() - 1);
+                continue;
+            }
+            HidReport::AbsWheel(_) => abs_tail = None,
+            HidReport::RelMouse(new) => {
+                if let Some(HidReport::RelMouse(old)) = out.last_mut()
+                    && old[0] == new[0]
+                {
+                    let dx = i16::from(old[1] as i8) + i16::from(new[1] as i8);
+                    let dy = i16::from(old[2] as i8) + i16::from(new[2] as i8);
+                    if let (Ok(dx), Ok(dy)) = (i8::try_from(dx), i8::try_from(dy)) {
+                        old[1] = dx as u8;
+                        old[2] = dy as u8;
+                        continue;
+                    }
+                }
+            }
+            HidReport::Keyboard(_) => {}
+        }
+        out.push(report);
+    }
+    *batch = out;
+}
+
+/// Reports that restore the host's view of key and button state after
+/// reports were dropped: the latest keyboard report (full state, so a lost
+/// key-up cannot leave a key held), the latest absolute report, and the
+/// latest relative buttons with no motion.
+#[derive(Debug, Default)]
+struct Resync {
+    keyboard: Option<[u8; 8]>,
+    abs: Option<[u8; 6]>,
+    rel_buttons: Option<u8>,
+}
+
+impl Resync {
+    fn record(&mut self, report: &HidReport) {
+        match *report {
+            HidReport::Keyboard(r) => self.keyboard = Some(r),
+            HidReport::AbsMouse(r) => self.abs = Some(r),
+            HidReport::RelMouse(r) => self.rel_buttons = Some(r[0]),
+            HidReport::AbsWheel(_) => {}
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.keyboard.is_none() && self.abs.is_none() && self.rel_buttons.is_none()
+    }
+
+    /// Prepends the state reports a fresh batch does not already supersede.
+    fn apply(&mut self, batch: &mut Vec<HidReport>) -> usize {
+        let has = |f: fn(&HidReport) -> bool| batch.iter().any(f);
+        let mut lead = Vec::new();
+        if let Some(r) = self.keyboard.take()
+            && !has(|r| matches!(r, HidReport::Keyboard(_)))
+        {
+            lead.push(HidReport::Keyboard(r));
+        }
+        if let Some(r) = self.abs.take()
+            && !has(|r| matches!(r, HidReport::AbsMouse(_)))
+        {
+            lead.push(HidReport::AbsMouse(r));
+        }
+        if let Some(b) = self.rel_buttons.take()
+            && !has(|r| matches!(r, HidReport::RelMouse(_)))
+        {
+            lead.push(HidReport::RelMouse([b, 0, 0, 0]));
+        }
+        let n = lead.len();
+        batch.splice(0..0, lead);
+        n
+    }
+}
+
+/// How often a pending resync is retried while no new input arrives.
+const HID_RESYNC_RETRY: Duration = Duration::from_millis(500);
+
 struct HidWriter {
     paths: [String; 3],
     files: [Option<std::fs::File>; 3],
@@ -136,16 +243,55 @@ struct HidWriter {
 }
 
 impl HidWriter {
-    fn run(mut self, rx: mpsc::Receiver<HidWriteCmd>) {
-        while let Ok(cmd) = rx.recv() {
-            let (dev, payload) = cmd.device_and_payload();
-            if let Err(e) = self.write_report(dev, payload) {
-                self.files[dev] = None;
-                let mut dropped = 0usize;
-                while rx.try_recv().is_ok() {
-                    dropped += 1;
+    fn run(mut self, rx: mpsc::Receiver<HidReport>) {
+        let mut resync = Resync::default();
+        let mut abs_buttons = None;
+        loop {
+            let first = if resync.is_empty() {
+                match rx.recv() {
+                    Ok(r) => Some(r),
+                    Err(_) => break,
                 }
-                self.warn_rate_limited(dev, &e, dropped);
+            } else {
+                match rx.recv_timeout(HID_RESYNC_RETRY) {
+                    Ok(r) => Some(r),
+                    Err(mpsc::RecvTimeoutError::Timeout) => None,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            };
+            let mut batch: Vec<HidReport> = first.into_iter().collect();
+            while batch.len() < HID_WRITE_QUEUE_DEPTH {
+                match rx.try_recv() {
+                    Ok(r) => batch.push(r),
+                    Err(_) => break,
+                }
+            }
+            let queued = batch.len();
+            coalesce_reports(&mut batch, &mut abs_buttons);
+            if queued > batch.len() {
+                debug!(queued, sent = batch.len(), "coalesced HID pointer backlog");
+            }
+            let resynced = resync.apply(&mut batch);
+
+            let mut reports = batch.into_iter();
+            while let Some(report) = reports.next() {
+                let (dev, payload) = report.device_and_payload();
+                if let Err(e) = self.write_report(dev, payload) {
+                    self.files[dev] = None;
+                    // Keep only the latest state of what is dropped, and
+                    // send it once the host reads reports again.
+                    resync.record(&report);
+                    let mut dropped = 0usize;
+                    for r in reports.by_ref().chain(std::iter::from_fn(|| rx.try_recv().ok())) {
+                        resync.record(&r);
+                        dropped += 1;
+                    }
+                    self.warn_rate_limited(dev, &e, dropped);
+                    break;
+                }
+            }
+            if resynced > 0 && resync.is_empty() {
+                info!(reports = resynced, "HID state resent after host stall");
             }
         }
         trace!("hid writer thread exiting");
@@ -218,7 +364,7 @@ fn poll_writable(fd: std::os::fd::RawFd, timeout: Duration) -> std::io::Result<b
 pub struct Hid {
     keyboard_path: String,
 
-    write_tx: mpsc::SyncSender<HidWriteCmd>,
+    write_tx: mpsc::SyncSender<HidReport>,
     last_full_warn: Mutex<Option<Instant>>,
 
     keyboard_reader_cancel: Mutex<CancellationToken>,
@@ -265,7 +411,7 @@ impl Hid {
         }
     }
 
-    fn enqueue(&self, cmd: HidWriteCmd) -> anyhow::Result<()> {
+    fn enqueue(&self, cmd: HidReport) -> anyhow::Result<()> {
         self.reset_user_input_time();
         match self.write_tx.try_send(cmd) {
             Ok(()) => Ok(()),
@@ -386,7 +532,7 @@ impl Hid {
         for (i, k) in keys.iter().take(HID_KEY_BUFFER_SIZE).enumerate() {
             report[2 + i] = *k;
         }
-        self.enqueue(HidWriteCmd::Keyboard(report))
+        self.enqueue(HidReport::Keyboard(report))
     }
 
     pub fn abs_mouse_report(&self, x: i32, y: i32, buttons: u8) -> anyhow::Result<()> {
@@ -397,18 +543,18 @@ impl Hid {
         data[3] = ((x as u16 >> 8) & 0x00FF) as u8;
         data[4] = (y as u16 & 0x00FF) as u8;
         data[5] = ((y as u16 >> 8) & 0x00FF) as u8;
-        self.enqueue(HidWriteCmd::AbsMouse(data))
+        self.enqueue(HidReport::AbsMouse(data))
     }
 
     pub fn abs_mouse_wheel_report(&self, wheel_y: i8) -> anyhow::Result<()> {
         if wheel_y == 0 {
             return Ok(());
         }
-        self.enqueue(HidWriteCmd::AbsWheel([2u8, wheel_y as u8]))
+        self.enqueue(HidReport::AbsWheel([2u8, wheel_y as u8]))
     }
 
     pub fn rel_mouse_report(&self, dx: i8, dy: i8, buttons: u8) -> anyhow::Result<()> {
-        self.enqueue(HidWriteCmd::RelMouse([buttons, dx as u8, dy as u8, 0u8]))
+        self.enqueue(HidReport::RelMouse([buttons, dx as u8, dy as u8, 0u8]))
     }
 
     pub fn get_last_user_input_time(&self) -> Instant {
