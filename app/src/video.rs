@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use prometheus::Encoder;
@@ -10,7 +10,7 @@ use webrtc::media::Sample;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
 use crate::api::{JsonRpcProcessor, default_registry};
-use crate::hardware::v4l2::{CaptureProbe, CaptureSignal, SourceObservation, SourceWatch};
+use crate::hardware::v4l2::{CaptureProbe, RelockVerdict, RelockWatch, pulse_hotplug};
 use crate::pipeline::{AudioConfig, H264Profile, PipelineManager, VideoConfig};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -290,11 +290,16 @@ pub fn restart_backoff(consecutive_failures: u32) -> Duration {
         .min(RESTART_BACKOFF_MAX)
 }
 
-/// Per-pipeline state the supervisor keeps between ticks.
+/// How long hot-plug detect stays low on a software replug. Long enough for
+/// the source to register an unplug.
+const REPLUG_LOW: Duration = Duration::from_secs(2);
+
+/// State the supervisor keeps between ticks.
 struct LiveCheck {
     probe: Option<Arc<CaptureProbe>>,
     probe_error_logged: bool,
-    source: SourceWatch,
+    relock_events: Option<Arc<AtomicU32>>,
+    relock: RelockWatch,
     last_frames: u64,
     last_progress: Instant,
     stall_restarts: u32,
@@ -306,7 +311,8 @@ impl LiveCheck {
         Self {
             probe: None,
             probe_error_logged: false,
-            source: SourceWatch::default(),
+            relock_events: None,
+            relock: RelockWatch::default(),
             last_frames: 0,
             last_progress: Instant::now(),
             stall_restarts: 0,
@@ -316,39 +322,69 @@ impl LiveCheck {
 
     /// Forgets everything tied to the pipeline that was just replaced.
     fn pipeline_replaced(&mut self) {
-        self.source.reset();
         self.last_frames = 0;
         self.last_progress = Instant::now();
         self.caps_logged = false;
     }
 
-    async fn query_source(&mut self, device: &str) -> Option<CaptureSignal> {
+    fn probe(&mut self, device: &str) -> Option<Arc<CaptureProbe>> {
         if self.probe.is_none() {
             match CaptureProbe::open(device) {
-                Ok(p) => self.probe = Some(Arc::new(p)),
+                Ok(p) => {
+                    let p = Arc::new(p);
+                    if p.has_events() {
+                        info!("watching the HDMI receiver for relock storms");
+                        self.relock_events = Some(spawn_relock_counter(p.clone()));
+                    } else {
+                        warn!(
+                            "capture node has no source-change events; relock storms go undetected"
+                        );
+                    }
+                    self.probe = Some(p);
+                }
                 Err(e) => {
                     if !self.probe_error_logged {
-                        warn!(error = %format!("{e:#}"), "cannot query capture node; source change detection off");
+                        warn!(error = %format!("{e:#}"), "cannot open capture node for monitoring");
                         self.probe_error_logged = true;
                     }
-                    return None;
                 }
             }
         }
-        let probe = self.probe.clone()?;
-        tokio::task::spawn_blocking(move || probe.query()).await.ok()
+        self.probe.clone()
+    }
+
+    /// Replugs the source when the receiver is stuck relocking.
+    async fn check_relock(&mut self) {
+        let Some(counter) = &self.relock_events else { return };
+        let events = counter.swap(0, Ordering::Relaxed);
+        if events > 0 {
+            info!(events, "HDMI receiver reported a source change");
+        }
+        match self.relock.observe(std::time::Instant::now(), events) {
+            RelockVerdict::Quiet => {}
+            RelockVerdict::Storm { events } => {
+                debug!(events, "HDMI receiver still relocking; waiting before the next replug");
+            }
+            RelockVerdict::Replug { events, attempt } => {
+                warn!(events, attempt, "HDMI receiver is stuck relocking, replugging the source");
+                match tokio::task::spawn_blocking(|| pulse_hotplug(REPLUG_LOW)).await {
+                    Ok(Ok(())) => info!("software replug done"),
+                    Ok(Err(e)) => warn!(error = %format!("{e:#}"), "software replug failed"),
+                    Err(e) => warn!(error = %e, "software replug task failed"),
+                }
+                // The signal drops while HPD is low; don't count that as a stall.
+                self.last_progress = Instant::now();
+            }
+        }
     }
 
     /// Returns why the running pipeline must be rebuilt, if it must.
     async fn check(&mut self, device: &str) -> Option<String> {
-        let (frames, size_changed, caps) = {
+        let (frames, caps) = {
             let guard = PIPELINE_MANAGER.lock().await;
             let m = guard.as_ref()?;
-            (m.raw_frames(), m.capture_size_changed(), m.capture_caps())
+            (m.raw_frames(), m.capture_caps())
         };
-        if size_changed {
-            return Some("capture buffer size changed".to_owned());
-        }
         if !self.caps_logged
             && let Some(caps) = caps
         {
@@ -359,19 +395,8 @@ impl LiveCheck {
             self.caps_logged = true;
         }
 
-        let signal = self.query_source(device).await;
-        if let Some(now) = signal {
-            match self.source.observe(now) {
-                SourceObservation::Baseline => info!(source = %now, "capture source baseline"),
-                SourceObservation::Pending => {
-                    info!(source = %now, "capture source changed, confirming")
-                }
-                SourceObservation::Changed { from } => {
-                    return Some(format!("capture source changed from [{from}] to [{now}]"));
-                }
-                SourceObservation::Steady | SourceObservation::NoSignal => {}
-            }
-        }
+        let probe = self.probe(device);
+        self.check_relock().await;
 
         if frames != self.last_frames {
             self.last_frames = frames;
@@ -379,6 +404,10 @@ impl LiveCheck {
             self.stall_restarts = 0;
             return None;
         }
+        let signal = match probe {
+            Some(p) => tokio::task::spawn_blocking(move || p.query()).await.ok(),
+            None => None,
+        };
         // Without a signal there is nothing to capture; wait for it to return.
         if signal.is_some_and(|s| s.timings.is_none()) {
             self.last_progress = Instant::now();
@@ -388,17 +417,39 @@ impl LiveCheck {
         let stalled = self.last_progress.elapsed();
         if stalled >= limit {
             self.stall_restarts = self.stall_restarts.saturating_add(1);
-            return Some(format!("no raw frame for {}s with a signal present", stalled.as_secs()));
+            let source = signal.map_or_else(|| "unknown".to_owned(), |s| s.to_string());
+            return Some(format!("no raw frame for {}s, source {source}", stalled.as_secs()));
         }
         None
     }
 }
 
-/// Keeps the pipeline matched to the HDMI source. It rebuilds the pipeline
-/// when its bus loop has died (GStreamer error, EOS, or a failed start at
-/// boot), when the receiver's format or timings change under it (the encoder
-/// would otherwise keep reading frames with the old layout), and when capture
-/// stalls while a signal is present. Failed restarts back off exponentially.
+/// Counts the receiver's source-change events on a thread of its own: the
+/// kernel keeps only the newest pending event, so a 2 s supervisor tick
+/// would see at most one of a once-a-second storm.
+fn spawn_relock_counter(probe: Arc<CaptureProbe>) -> Arc<AtomicU32> {
+    let count = Arc::new(AtomicU32::new(0));
+    let out = count.clone();
+    let spawned = std::thread::Builder::new().name("hdmirx-events".into()).spawn(move || {
+        while !SUPERVISOR_STOPPED.load(Ordering::Relaxed) {
+            let n = probe.take_source_changes();
+            if n > 0 {
+                count.fetch_add(n, Ordering::Relaxed);
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    });
+    if let Err(e) = spawned {
+        warn!(error = %e, "cannot start the HDMI event thread");
+    }
+    out
+}
+
+/// Keeps the capture pipeline healthy. It rebuilds the pipeline when its bus
+/// loop has died (GStreamer error, EOS, or a failed start at boot) or when
+/// capture stalls while a signal is present, and replugs the HDMI source in
+/// software when the receiver is stuck in a relock loop. Failed restarts back
+/// off exponentially.
 pub fn spawn_video_supervisor() {
     tokio::spawn(async move {
         let mut tick = interval(SUPERVISOR_PERIOD);
@@ -414,7 +465,7 @@ pub fn spawn_video_supervisor() {
             if is_video_pipeline_running().await {
                 failures = 0;
                 let Some(reason) = live.check(&video_config.device).await else { continue };
-                warn!(%reason, "video pipeline no longer matches the source, rebuilding");
+                warn!(%reason, "video capture stalled, rebuilding the pipeline");
             } else {
                 warn!(failures, "video pipeline is down, restarting");
             }

@@ -1,12 +1,20 @@
-//! Read-only queries of the HDMI capture node's live state, used to notice a
-//! source change (resolution, timings or pixel layout) while the GStreamer
-//! pipeline keeps streaming with the format it negotiated at start.
+//! The HDMI receiver's live state and its one recovery lever.
+//!
+//! After the host wakes from a long sleep the RK3588 receiver can fall into a
+//! relock loop: every lock ends in `hdmirx_format_change`, which queues a
+//! V4L2 source-change event even when nothing changed; v4l2src answers each
+//! event by restarting the stream; the restart relocks and queues the next
+//! event. The loop runs about once a second, frames are cut mid-DMA (green
+//! and magenta stripes), and it does not end on its own. A replug ends it, so
+//! the recovery is a software replug: drop hot-plug detect and raise it again.
 
+use std::collections::VecDeque;
 use std::os::fd::OwnedFd;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use rustix::fs::{Mode, OFlags, open};
-use rustix::ioctl::{Getter, Opcode, Updater, ioctl, opcode};
+use rustix::ioctl::{Getter, Opcode, Setter, Updater, ioctl, opcode};
 
 const V4L2_BUF_TYPE_VIDEO_CAPTURE: u32 = 1;
 const V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE: u32 = 9;
@@ -28,8 +36,41 @@ struct V4l2DvTimings {
     data: [u8; 128],
 }
 
+/// `struct v4l2_event_subscription`.
+#[repr(C)]
+struct V4l2EventSubscription {
+    ev_type: u32,
+    id: u32,
+    flags: u32,
+    reserved: [u32; 5],
+}
+
+/// `struct v4l2_event`: the union holds an `s64`, so it starts at offset 8
+/// and the struct is 136 bytes on 64-bit targets.
+#[repr(C, align(8))]
+struct V4l2Event {
+    ev_type: u32,
+    _pad: u32,
+    u: [u8; 64],
+    pending: u32,
+    sequence: u32,
+    timestamp: [i64; 2],
+    id: u32,
+    reserved: [u32; 8],
+}
+
 const _: () = assert!(std::mem::size_of::<V4l2Format>() == 208);
 const _: () = assert!(std::mem::size_of::<V4l2DvTimings>() == 132);
+const _: () = assert!(std::mem::size_of::<V4l2EventSubscription>() == 32);
+const _: () = assert!(std::mem::size_of::<V4l2Event>() == 136);
+
+const V4L2_EVENT_SOURCE_CHANGE: u32 = 5;
+const VIDIOC_DQEVENT: Opcode = opcode::read::<V4l2Event>(b'V', 89);
+const VIDIOC_SUBSCRIBE_EVENT: Opcode = opcode::write::<V4l2EventSubscription>(b'V', 90);
+
+/// The rockchip_hdmirx sysfs node: writing `off` drops hot-plug detect and
+/// `on` raises it again.
+const HDMIRX_HPD_NODE: &str = "/sys/class/hdmirx/hdmirx/status";
 
 const VIDIOC_G_FMT: Opcode = opcode::read_write::<V4l2Format>(b'V', 4);
 const VIDIOC_QUERY_DV_TIMINGS: Opcode = opcode::read::<V4l2DvTimings>(b'V', 99);
@@ -69,19 +110,6 @@ pub struct DvTimings {
 pub struct CaptureSignal {
     pub format: Option<CaptureFormat>,
     pub timings: Option<DvTimings>,
-}
-
-impl CaptureSignal {
-    /// Whether both readings describe the same frame layout and video mode.
-    /// The pixel clock is left out: the receiver's measurement wobbles by a
-    /// few kHz on a steady signal (593.95 vs 593.96 MHz on the T6), and
-    /// counting that as a change rebuilt the pipeline every 30 seconds.
-    pub fn same_source(&self, other: &Self) -> bool {
-        let layout = |f: &CaptureFormat| (f.fourcc, f.width, f.height, f.bytesperline);
-        let mode = |t: &DvTimings| (t.width, t.height, t.interlaced);
-        self.format.as_ref().map(layout) == other.format.as_ref().map(layout)
-            && self.timings.as_ref().map(mode) == other.timings.as_ref().map(mode)
-    }
 }
 
 impl std::fmt::Display for CaptureSignal {
@@ -151,16 +179,57 @@ pub fn parse_bt_timings(data: &[u8; 128]) -> DvTimings {
     }
 }
 
-/// A non-streaming handle on the capture node, kept open across polls.
+/// A non-streaming handle on the capture node, kept open across polls. It
+/// subscribes to source-change events so it sees every relock the driver
+/// reports, alongside whatever is streaming.
 pub struct CaptureProbe {
     fd: OwnedFd,
+    events: bool,
 }
 
 impl CaptureProbe {
     pub fn open(device: &str) -> Result<Self> {
         let fd = open(device, OFlags::RDWR | OFlags::NONBLOCK | OFlags::CLOEXEC, Mode::empty())
             .with_context(|| format!("open {device}"))?;
-        Ok(Self { fd })
+        let sub = V4l2EventSubscription {
+            ev_type: V4L2_EVENT_SOURCE_CHANGE,
+            id: 0,
+            flags: 0,
+            reserved: [0; 5],
+        };
+        // SAFETY: VIDIOC_SUBSCRIBE_EVENT's opcode is built from
+        // V4l2EventSubscription, which matches the kernel's 32-byte struct;
+        // the kernel only reads it.
+        let events = unsafe {
+            ioctl(&fd, Setter::<VIDIOC_SUBSCRIBE_EVENT, V4l2EventSubscription>::new(sub))
+        }
+        .is_ok();
+        Ok(Self { fd, events })
+    }
+
+    /// Whether the driver accepted the source-change subscription.
+    pub fn has_events(&self) -> bool {
+        self.events
+    }
+
+    /// Dequeues and counts pending source-change events. The kernel keeps
+    /// only the newest one per subscription, so this counts at most one per
+    /// call unless several arrived in between; callers poll often enough.
+    pub fn take_source_changes(&self) -> u32 {
+        if !self.events {
+            return 0;
+        }
+        let mut n = 0;
+        while n < 1024 {
+            // SAFETY: VIDIOC_DQEVENT's opcode is built from V4l2Event, which
+            // matches the kernel's 136-byte struct v4l2_event.
+            match unsafe { ioctl(&self.fd, Getter::<VIDIOC_DQEVENT, V4l2Event>::new()) } {
+                Ok(ev) if ev.ev_type == V4L2_EVENT_SOURCE_CHANGE => n += 1,
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        n
     }
 
     pub fn query(&self) -> CaptureSignal {
@@ -195,54 +264,91 @@ impl CaptureProbe {
     }
 }
 
-/// What one poll of the capture node means for the running pipeline.
+/// Drops hot-plug detect for `low_for`, then raises it, so the source sees an
+/// unplug and renegotiates the link from scratch. HPD is always raised again,
+/// with retries: leaving it low would blank the input for good.
+pub fn pulse_hotplug(low_for: Duration) -> Result<()> {
+    std::fs::write(HDMIRX_HPD_NODE, "off")
+        .with_context(|| format!("write off to {HDMIRX_HPD_NODE}"))?;
+    std::thread::sleep(low_for);
+    let mut last = None;
+    for _ in 0..5 {
+        match std::fs::write(HDMIRX_HPD_NODE, "on") {
+            Ok(()) => return Ok(()),
+            Err(e) => last = Some(e),
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    match last {
+        Some(e) => Err(e).with_context(|| format!("write on to {HDMIRX_HPD_NODE}")),
+        None => Ok(()),
+    }
+}
+
+/// What the latest source-change events mean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceObservation {
-    /// First reading with a signal; it becomes the reference.
-    Baseline,
-    Steady,
-    NoSignal,
-    /// Differs from the reference once; confirmed on the next poll.
-    Pending,
-    /// Differed on two polls in a row: the pipeline no longer matches the
-    /// source and must be rebuilt. Carries the old reference.
-    Changed {
-        from: CaptureSignal,
+pub enum RelockVerdict {
+    Quiet,
+    /// A relock storm, but the last replug was too recent to try again.
+    Storm {
+        events: u32,
+    },
+    /// A relock storm: replug now. `attempt` counts replugs in this episode.
+    Replug {
+        events: u32,
+        attempt: u32,
     },
 }
 
-/// Tracks the capture node's reported state against the state it had when
-/// the pipeline started. Losing the signal is not a change by itself; the
-/// signal coming back different is.
+/// Recognises the relock loop from source-change events. A healthy input
+/// reports none, a real mode change or a replug a few; the loop reports one
+/// a second without end. Replugs back off while the loop persists.
 #[derive(Debug, Default)]
-pub struct SourceWatch {
-    baseline: Option<CaptureSignal>,
-    pending: Option<CaptureSignal>,
+pub struct RelockWatch {
+    recent: VecDeque<(Instant, u32)>,
+    last_replug: Option<Instant>,
+    attempts: u32,
 }
 
-impl SourceWatch {
-    pub fn reset(&mut self) {
-        *self = Self::default();
+impl RelockWatch {
+    /// Window the events are counted over.
+    pub const WINDOW: Duration = Duration::from_secs(10);
+    /// Events within the window that make a storm.
+    pub const THRESHOLD: u32 = 6;
+    /// Quiet time after which an episode is over and backoff resets.
+    pub const SETTLE: Duration = Duration::from_secs(300);
+
+    fn backoff(attempts: u32) -> Duration {
+        Duration::from_secs(30)
+            .saturating_mul(1u32 << attempts.min(5))
+            .min(Duration::from_secs(600))
     }
 
-    pub fn observe(&mut self, now: CaptureSignal) -> SourceObservation {
-        if now.timings.is_none() {
-            self.pending = None;
-            return SourceObservation::NoSignal;
+    pub fn observe(&mut self, now: Instant, events: u32) -> RelockVerdict {
+        if events > 0 {
+            self.recent.push_back((now, events));
         }
-        let Some(baseline) = self.baseline else {
-            self.baseline = Some(now);
-            return SourceObservation::Baseline;
-        };
-        if now.same_source(&baseline) {
-            self.pending = None;
-            return SourceObservation::Steady;
+        while self.recent.front().is_some_and(|&(t, _)| now.duration_since(t) > Self::WINDOW) {
+            self.recent.pop_front();
         }
-        if self.pending.is_some_and(|p| p.same_source(&now)) {
-            self.reset();
-            return SourceObservation::Changed { from: baseline };
+        let total: u32 = self.recent.iter().map(|&(_, n)| n).sum();
+        if total < Self::THRESHOLD {
+            if self.last_replug.is_some_and(|t| now.duration_since(t) >= Self::SETTLE) {
+                self.attempts = 0;
+                self.last_replug = None;
+            }
+            return RelockVerdict::Quiet;
         }
-        self.pending = Some(now);
-        SourceObservation::Pending
+        let due = self.attempts == 0
+            || self
+                .last_replug
+                .is_none_or(|t| now.duration_since(t) >= Self::backoff(self.attempts - 1));
+        if !due {
+            return RelockVerdict::Storm { events: total };
+        }
+        self.attempts += 1;
+        self.last_replug = Some(now);
+        self.recent.clear();
+        RelockVerdict::Replug { events: total, attempt: self.attempts }
     }
 }

@@ -1,26 +1,13 @@
+use std::time::{Duration, Instant};
+
 use rustkvm::hardware::v4l2::{
-    CaptureFormat, CaptureSignal, DvTimings, SourceObservation, SourceWatch, parse_bt_timings,
-    parse_pix_format,
+    DvTimings, RelockVerdict, RelockWatch, parse_bt_timings, parse_pix_format,
 };
 
 const NV12: u32 = u32::from_le_bytes(*b"NV12");
-const NV24: u32 = u32::from_le_bytes(*b"NV24");
 
 fn put(buf: &mut [u8], offset: usize, value: u32) {
     buf[offset..offset + 4].copy_from_slice(&value.to_ne_bytes());
-}
-
-fn signal(fourcc: u32, width: u32, height: u32) -> CaptureSignal {
-    CaptureSignal {
-        format: Some(CaptureFormat {
-            width,
-            height,
-            fourcc,
-            bytesperline: width,
-            sizeimage: width * height * 3 / 2,
-        }),
-        timings: Some(DvTimings { width, height, interlaced: false, pixelclock: 594_000_000 }),
-    }
 }
 
 #[test]
@@ -61,70 +48,50 @@ fn parses_bt_timings() {
     );
 }
 
-#[test]
-fn source_change_needs_two_matching_polls() {
-    let mut watch = SourceWatch::default();
-    let before = signal(NV12, 3840, 2160);
-    let after = signal(NV24, 3840, 2160);
-    assert_eq!(watch.observe(before), SourceObservation::Baseline);
-    assert_eq!(watch.observe(before), SourceObservation::Steady);
-    assert_eq!(watch.observe(after), SourceObservation::Pending);
-    assert_eq!(watch.observe(after), SourceObservation::Changed { from: before });
-    // The next reading after a change becomes the new reference.
-    assert_eq!(watch.observe(after), SourceObservation::Baseline);
+/// Feeds one event per second, like the relock loop seen on the T6, and
+/// returns the verdict of each second.
+fn storm(watch: &mut RelockWatch, start: Instant, secs: u64) -> Vec<RelockVerdict> {
+    (0..secs).map(|s| watch.observe(start + Duration::from_secs(s), 1)).collect()
 }
 
 #[test]
-fn a_single_odd_reading_is_not_a_change() {
-    let mut watch = SourceWatch::default();
-    let normal = signal(NV12, 3840, 2160);
-    watch.observe(normal);
-    assert_eq!(watch.observe(signal(NV12, 1920, 1080)), SourceObservation::Pending);
-    assert_eq!(watch.observe(normal), SourceObservation::Steady);
-    assert_eq!(watch.observe(signal(NV12, 1920, 1080)), SourceObservation::Pending);
-}
-
-#[test]
-fn signal_loss_alone_does_not_trigger_but_a_different_return_does() {
-    let mut watch = SourceWatch::default();
-    let before = signal(NV12, 3840, 2160);
-    let lost = CaptureSignal { format: before.format, timings: None };
-    watch.observe(before);
-    assert_eq!(watch.observe(lost), SourceObservation::NoSignal);
-    assert_eq!(watch.observe(lost), SourceObservation::NoSignal);
-    assert_eq!(watch.observe(before), SourceObservation::Steady);
-
-    let after = signal(NV24, 3840, 2160);
-    assert_eq!(watch.observe(lost), SourceObservation::NoSignal);
-    assert_eq!(watch.observe(after), SourceObservation::Pending);
-    assert_eq!(watch.observe(after), SourceObservation::Changed { from: before });
-}
-
-#[test]
-fn pixel_clock_wobble_is_not_a_change() {
-    let mut watch = SourceWatch::default();
-    let mut a = signal(NV12, 3840, 2160);
-    let mut b = a;
-    if let (Some(ta), Some(tb)) = (a.timings.as_mut(), b.timings.as_mut()) {
-        ta.pixelclock = 593_950_000;
-        tb.pixelclock = 593_960_000;
+fn a_replug_or_mode_change_is_not_a_storm() {
+    let mut watch = RelockWatch::default();
+    let t = Instant::now();
+    for s in 0..3 {
+        assert_eq!(watch.observe(t + Duration::from_secs(s), 1), RelockVerdict::Quiet);
     }
-    assert_eq!(watch.observe(a), SourceObservation::Baseline);
-    for _ in 0..4 {
-        assert_eq!(watch.observe(b), SourceObservation::Steady);
-        assert_eq!(watch.observe(a), SourceObservation::Steady);
+    for s in 3..60 {
+        assert_eq!(watch.observe(t + Duration::from_secs(s), 0), RelockVerdict::Quiet);
     }
 }
 
 #[test]
-fn a_one_off_bogus_mode_is_not_a_change() {
-    let mut watch = SourceWatch::default();
-    let normal = signal(NV12, 3840, 2160);
-    let mut bogus = normal;
-    if let Some(t) = bogus.timings.as_mut() {
-        t.height = 547;
-    }
-    watch.observe(normal);
-    assert_eq!(watch.observe(bogus), SourceObservation::Pending);
-    assert_eq!(watch.observe(normal), SourceObservation::Steady);
+fn a_relock_loop_triggers_a_replug_then_backs_off() {
+    let mut watch = RelockWatch::default();
+    let t = Instant::now();
+    let verdicts = storm(&mut watch, t, 120);
+    let replugs: Vec<_> = verdicts
+        .iter()
+        .enumerate()
+        .filter_map(|(s, v)| match v {
+            RelockVerdict::Replug { attempt, .. } => Some((s, *attempt)),
+            _ => None,
+        })
+        .collect();
+    // First replug once the window holds THRESHOLD events, the next ones
+    // 30 s and then 60 s later.
+    assert_eq!(replugs, vec![(5, 1), (35, 2), (95, 3)]);
+    assert!(matches!(verdicts[20], RelockVerdict::Storm { .. }));
+}
+
+#[test]
+fn backoff_resets_after_the_input_settles() {
+    let mut watch = RelockWatch::default();
+    let t = Instant::now();
+    storm(&mut watch, t, 6);
+    let later = t + Duration::from_secs(6) + RelockWatch::SETTLE;
+    assert_eq!(watch.observe(later, 0), RelockVerdict::Quiet);
+    let verdicts = storm(&mut watch, later + Duration::from_secs(1), 6);
+    assert_eq!(verdicts[5], RelockVerdict::Replug { events: 6, attempt: 1 });
 }

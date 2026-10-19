@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 use gstreamer as gst;
@@ -130,9 +130,6 @@ pub struct VideoPipeline {
     capture_src: gst::Element,
     /// Raw frames the capture source has pushed, paused encoding included.
     raw_frames: Arc<AtomicU64>,
-    /// Set when a capture buffer's size differs from the first one: the driver
-    /// now writes a different layout than the caps the pipeline negotiated.
-    capture_size_changed: Arc<AtomicBool>,
 }
 
 impl VideoPipeline {
@@ -300,32 +297,13 @@ impl VideoPipeline {
         ])
         .context("Failed to link video pipeline elements")?;
 
-        // Counts raw frames for the stall check, and catches the driver changing
-        // the frame layout under negotiated caps (an HDMI source switching
-        // colour format or timings), which otherwise reaches the encoder as
-        // misread planes: green and magenta stripes rather than an error.
+        // Counts raw frames for the supervisor's stall check.
         let raw_frames = Arc::new(AtomicU64::new(0));
-        let capture_size_changed = Arc::new(AtomicBool::new(false));
         let probe_frames = raw_frames.clone();
-        let probe_size_changed = capture_size_changed.clone();
-        let first_size = AtomicUsize::new(0);
         v4l2src.static_pad("src").context("v4l2src has no src pad")?.add_probe(
             gst::PadProbeType::BUFFER,
-            move |_pad, info| {
+            move |_pad, _info| {
                 probe_frames.fetch_add(1, Ordering::Relaxed);
-                if let Some(buffer) = info.buffer() {
-                    let size = buffer.size();
-                    let first = first_size.load(Ordering::Relaxed);
-                    if first == 0 {
-                        first_size.store(size, Ordering::Relaxed);
-                    } else if first != size && !probe_size_changed.swap(true, Ordering::AcqRel) {
-                        warn!(
-                            expected = first,
-                            got = size,
-                            "capture buffer size changed under negotiated caps"
-                        );
-                    }
-                }
                 gst::PadProbeReturn::Ok
             },
         );
@@ -397,7 +375,6 @@ impl VideoPipeline {
             keyframe_requested_at,
             capture_src: v4l2src,
             raw_frames,
-            capture_size_changed,
         })
     }
 
@@ -929,12 +906,6 @@ impl PipelineManager {
     /// Raw frames captured since this pipeline was built.
     pub fn raw_frames(&self) -> u64 {
         self.video.raw_frames.load(Ordering::Relaxed)
-    }
-
-    /// Whether the capture buffer size changed since start; see the probe in
-    /// [`VideoPipeline::new`].
-    pub fn capture_size_changed(&self) -> bool {
-        self.video.capture_size_changed.load(Ordering::Acquire)
     }
 
     /// The caps the capture source negotiated, once it has.
