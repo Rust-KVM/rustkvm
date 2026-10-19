@@ -6,3 +6,4 @@ pub mod jiggler;
 pub mod native;
 pub mod tuning;
 pub mod usb;
+pub mod v4l2;

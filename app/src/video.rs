@@ -4,12 +4,13 @@ use std::sync::{Arc, OnceLock};
 use prometheus::Encoder;
 use serde_json as serde_json_crate;
 use tokio::sync::{RwLock, mpsc};
-use tokio::time::{Duration, interval};
+use tokio::time::{Duration, Instant, interval};
 use tracing::{debug, info, warn};
 use webrtc::media::Sample;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
 use crate::api::{JsonRpcProcessor, default_registry};
+use crate::hardware::v4l2::{CaptureProbe, CaptureSignal, SourceObservation, SourceWatch};
 use crate::pipeline::{AudioConfig, H264Profile, PipelineManager, VideoConfig};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -62,7 +63,10 @@ static H264_PROFILE: parking_lot::Mutex<Option<H264Profile>> = parking_lot::Mute
 static PIPELINE_CONFIG: OnceLock<(VideoConfig, Option<AudioConfig>)> = OnceLock::new();
 static SUPERVISOR_STOPPED: AtomicBool = AtomicBool::new(false);
 
-const SUPERVISOR_PERIOD: Duration = Duration::from_secs(5);
+const SUPERVISOR_PERIOD: Duration = Duration::from_secs(2);
+/// No raw frame for this long while the receiver reports a signal means the
+/// capture stream is wedged; repeat stalls back off like failed restarts.
+const STALL_LIMIT: Duration = Duration::from_secs(10);
 const RESTART_BACKOFF_BASE: Duration = Duration::from_secs(5);
 const RESTART_BACKOFF_MAX: Duration = Duration::from_secs(300);
 
@@ -286,23 +290,135 @@ pub fn restart_backoff(consecutive_failures: u32) -> Duration {
         .min(RESTART_BACKOFF_MAX)
 }
 
-/// Restarts the pipeline whenever its bus loop has died (GStreamer error, EOS, or a
-/// failed start at boot), backing off exponentially while restarts keep failing.
+/// Per-pipeline state the supervisor keeps between ticks.
+struct LiveCheck {
+    probe: Option<Arc<CaptureProbe>>,
+    probe_error_logged: bool,
+    source: SourceWatch,
+    last_frames: u64,
+    last_progress: Instant,
+    stall_restarts: u32,
+    caps_logged: bool,
+}
+
+impl LiveCheck {
+    fn new() -> Self {
+        Self {
+            probe: None,
+            probe_error_logged: false,
+            source: SourceWatch::default(),
+            last_frames: 0,
+            last_progress: Instant::now(),
+            stall_restarts: 0,
+            caps_logged: false,
+        }
+    }
+
+    /// Forgets everything tied to the pipeline that was just replaced.
+    fn pipeline_replaced(&mut self) {
+        self.source.reset();
+        self.last_frames = 0;
+        self.last_progress = Instant::now();
+        self.caps_logged = false;
+    }
+
+    async fn query_source(&mut self, device: &str) -> Option<CaptureSignal> {
+        if self.probe.is_none() {
+            match CaptureProbe::open(device) {
+                Ok(p) => self.probe = Some(Arc::new(p)),
+                Err(e) => {
+                    if !self.probe_error_logged {
+                        warn!(error = %format!("{e:#}"), "cannot query capture node; source change detection off");
+                        self.probe_error_logged = true;
+                    }
+                    return None;
+                }
+            }
+        }
+        let probe = self.probe.clone()?;
+        tokio::task::spawn_blocking(move || probe.query()).await.ok()
+    }
+
+    /// Returns why the running pipeline must be rebuilt, if it must.
+    async fn check(&mut self, device: &str) -> Option<String> {
+        let (frames, size_changed, caps) = {
+            let guard = PIPELINE_MANAGER.lock().await;
+            let m = guard.as_ref()?;
+            (m.raw_frames(), m.capture_size_changed(), m.capture_caps())
+        };
+        if size_changed {
+            return Some("capture buffer size changed".to_owned());
+        }
+        if !self.caps_logged
+            && let Some(caps) = caps
+        {
+            info!(%caps, "capture caps negotiated");
+            if !caps.contains("NV12") {
+                warn!("capture source is not NV12; frames are converted in software");
+            }
+            self.caps_logged = true;
+        }
+
+        let signal = self.query_source(device).await;
+        if let Some(now) = signal {
+            match self.source.observe(now) {
+                SourceObservation::Baseline => info!(source = %now, "capture source baseline"),
+                SourceObservation::Pending => {
+                    info!(source = %now, "capture source changed, confirming")
+                }
+                SourceObservation::Changed { from } => {
+                    return Some(format!("capture source changed from [{from}] to [{now}]"));
+                }
+                SourceObservation::Steady | SourceObservation::NoSignal => {}
+            }
+        }
+
+        if frames != self.last_frames {
+            self.last_frames = frames;
+            self.last_progress = Instant::now();
+            self.stall_restarts = 0;
+            return None;
+        }
+        // Without a signal there is nothing to capture; wait for it to return.
+        if signal.is_some_and(|s| s.timings.is_none()) {
+            self.last_progress = Instant::now();
+            return None;
+        }
+        let limit = STALL_LIMIT.max(restart_backoff(self.stall_restarts));
+        let stalled = self.last_progress.elapsed();
+        if stalled >= limit {
+            self.stall_restarts = self.stall_restarts.saturating_add(1);
+            return Some(format!("no raw frame for {}s with a signal present", stalled.as_secs()));
+        }
+        None
+    }
+}
+
+/// Keeps the pipeline matched to the HDMI source. It rebuilds the pipeline
+/// when its bus loop has died (GStreamer error, EOS, or a failed start at
+/// boot), when the receiver's format or timings change under it (the encoder
+/// would otherwise keep reading frames with the old layout), and when capture
+/// stalls while a signal is present. Failed restarts back off exponentially.
 pub fn spawn_video_supervisor() {
     tokio::spawn(async move {
         let mut tick = interval(SUPERVISOR_PERIOD);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut failures = 0u32;
+        let mut live = LiveCheck::new();
         loop {
             tick.tick().await;
             if SUPERVISOR_STOPPED.load(Ordering::SeqCst) {
                 return;
             }
-            if PIPELINE_CONFIG.get().is_none() || is_video_pipeline_running().await {
+            let Some((video_config, _)) = PIPELINE_CONFIG.get() else { continue };
+            if is_video_pipeline_running().await {
                 failures = 0;
-                continue;
+                let Some(reason) = live.check(&video_config.device).await else { continue };
+                warn!(%reason, "video pipeline no longer matches the source, rebuilding");
+            } else {
+                warn!(failures, "video pipeline is down, restarting");
             }
-            warn!(failures, "video pipeline is down, restarting");
+            live.pipeline_replaced();
             match restart_video_pipeline().await {
                 Ok(()) => failures = 0,
                 Err(e) => {

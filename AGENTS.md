@@ -111,7 +111,8 @@ lib.rs                   # module roots (see below)
 ├── webrtc.rs            # PeerConnection factory, ICE, data channels (incl. cdcacm route)
 ├── video.rs             # GStreamer + MPP pipeline; zero-copy `bytes::Bytes::from_owner(MappedBuffer)`
                          # frames into WebRTC RTP — no per-frame memcpy
-                         # supervisor restarts a dead pipeline (5s→300s backoff); `restartVideoPipeline` RPC
+                         # supervisor rebuilds the pipeline when it dies, when the HDMI source's format/timings
+                         # change under it, or when capture stalls (5s→300s backoff); `restartVideoPipeline` RPC
 ├── hardware/
 │   ├── usb/             # HID (keyboard/mouse), storage (virtual media), gadget, descriptors
 │   ├── native/          # Ctrl socket (SEQPACKET), JSON-RPC bridge
@@ -120,7 +121,8 @@ lib.rs                   # module roots (see below)
 │   ├── edid.rs          # EDID parsing + persistence
 │   ├── hw.rs            # Hardware probe / capability table, watchdog
 │   ├── jiggler.rs       # Mouse jiggler
-│   └── tuning.rs        # RK3588 big-core CPU governor / IRQ affinity
+│   ├── tuning.rs        # RK3588 big-core CPU governor / IRQ affinity
+│   └── v4l2.rs          # Read-only G_FMT / QUERY_DV_TIMINGS on the capture node (source-change watch)
 ├── cloud/               # CloudManager singleton via `get_cloud_manager()`; OIDC, WebSocket relay
 ├── middleware.rs        # Auth hoop (noPassword/password/cookie), dev mode
 ├── state.rs             # AppState (sessions, sockets, ICE queue)
