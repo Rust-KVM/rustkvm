@@ -99,3 +99,32 @@ fn signal_loss_alone_does_not_trigger_but_a_different_return_does() {
     assert_eq!(watch.observe(after), SourceObservation::Pending);
     assert_eq!(watch.observe(after), SourceObservation::Changed { from: before });
 }
+
+#[test]
+fn pixel_clock_wobble_is_not_a_change() {
+    let mut watch = SourceWatch::default();
+    let mut a = signal(NV12, 3840, 2160);
+    let mut b = a;
+    if let (Some(ta), Some(tb)) = (a.timings.as_mut(), b.timings.as_mut()) {
+        ta.pixelclock = 593_950_000;
+        tb.pixelclock = 593_960_000;
+    }
+    assert_eq!(watch.observe(a), SourceObservation::Baseline);
+    for _ in 0..4 {
+        assert_eq!(watch.observe(b), SourceObservation::Steady);
+        assert_eq!(watch.observe(a), SourceObservation::Steady);
+    }
+}
+
+#[test]
+fn a_one_off_bogus_mode_is_not_a_change() {
+    let mut watch = SourceWatch::default();
+    let normal = signal(NV12, 3840, 2160);
+    let mut bogus = normal;
+    if let Some(t) = bogus.timings.as_mut() {
+        t.height = 547;
+    }
+    watch.observe(normal);
+    assert_eq!(watch.observe(bogus), SourceObservation::Pending);
+    assert_eq!(watch.observe(normal), SourceObservation::Steady);
+}

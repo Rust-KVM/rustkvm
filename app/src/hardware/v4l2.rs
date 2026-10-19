@@ -71,6 +71,19 @@ pub struct CaptureSignal {
     pub timings: Option<DvTimings>,
 }
 
+impl CaptureSignal {
+    /// Whether both readings describe the same frame layout and video mode.
+    /// The pixel clock is left out: the receiver's measurement wobbles by a
+    /// few kHz on a steady signal (593.95 vs 593.96 MHz on the T6), and
+    /// counting that as a change rebuilt the pipeline every 30 seconds.
+    pub fn same_source(&self, other: &Self) -> bool {
+        let layout = |f: &CaptureFormat| (f.fourcc, f.width, f.height, f.bytesperline);
+        let mode = |t: &DvTimings| (t.width, t.height, t.interlaced);
+        self.format.as_ref().map(layout) == other.format.as_ref().map(layout)
+            && self.timings.as_ref().map(mode) == other.timings.as_ref().map(mode)
+    }
+}
+
 impl std::fmt::Display for CaptureSignal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.format {
@@ -221,11 +234,11 @@ impl SourceWatch {
             self.baseline = Some(now);
             return SourceObservation::Baseline;
         };
-        if now == baseline {
+        if now.same_source(&baseline) {
             self.pending = None;
             return SourceObservation::Steady;
         }
-        if self.pending == Some(now) {
+        if self.pending.is_some_and(|p| p.same_source(&now)) {
             self.reset();
             return SourceObservation::Changed { from: baseline };
         }
