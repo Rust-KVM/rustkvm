@@ -99,7 +99,7 @@ jobs:
         run: |
           f="docs/release-notes/v$VERSION.md"
           if [ -f "$f" ]; then echo "path=$f" >> "$GITHUB_OUTPUT"; fi
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           draft: true
           tag_name: v${{ env.VERSION }}
