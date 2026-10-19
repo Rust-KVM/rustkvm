@@ -84,6 +84,28 @@ pub async fn watch(peer: &Peer, cancelled: impl Fn() -> bool) -> Option<String> 
     }
 }
 
+/// Asks the browser to play frames as soon as they decode. By default WebRTC
+/// holds video in a jitter buffer (often 50-150 ms) to smooth playback, which
+/// on a LAN only delays the host's cursor behind the user's hand.
+/// `jitterBufferTarget` is the standard knob; `playoutDelayHint` is Chrome's
+/// older one. Browsers without either simply ignore the extra property.
+/// Audio keeps its buffer: without one it crackles on every late packet.
+fn play_out_immediately(ev: &RtcTrackEvent) {
+    let kind = js_sys::Reflect::get(ev, &"track".into())
+        .and_then(|t| js_sys::Reflect::get(&t, &"kind".into()))
+        .ok()
+        .and_then(|k| k.as_string());
+    if kind.as_deref() != Some("video") {
+        return;
+    }
+    let Ok(receiver) = js_sys::Reflect::get(ev, &"receiver".into()) else {
+        return;
+    };
+    for key in ["jitterBufferTarget", "playoutDelayHint"] {
+        let _ = js_sys::Reflect::set(&receiver, &key.into(), &0.into());
+    }
+}
+
 pub async fn connect(video: &HtmlVideoElement) -> Result<Peer, String> {
     let pc = RtcPeerConnection::new().map_err(js_err("RtcPeerConnection::new"))?;
 
@@ -95,6 +117,7 @@ pub async fn connect(video: &HtmlVideoElement) -> Result<Peer, String> {
     {
         let video = video.clone();
         let on_track = Closure::<dyn FnMut(RtcTrackEvent)>::new(move |ev: RtcTrackEvent| {
+            play_out_immediately(&ev);
             if let Some(stream) = ev.streams().get(0).dyn_ref::<MediaStream>() {
                 video.set_src_object(Some(stream));
             }
