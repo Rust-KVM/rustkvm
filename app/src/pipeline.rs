@@ -127,6 +127,9 @@ pub struct VideoPipeline {
     /// When the oldest unanswered keyframe request was made; the encoder
     /// output probe logs how long it took to produce the keyframe.
     keyframe_requested_at: Arc<parking_lot::Mutex<Option<std::time::Instant>>>,
+    capture_src: gst::Element,
+    /// Raw frames the capture source has pushed, paused encoding included.
+    raw_frames: Arc<AtomicU64>,
 }
 
 impl VideoPipeline {
@@ -145,6 +148,7 @@ impl VideoPipeline {
         let pipeline = gst::Pipeline::new();
 
         let v4l2src = gst::ElementFactory::make("v4l2src")
+            .name("capture_src")
             .property("device", &config.device)
             .build()
             .context("Failed to create v4l2src")?;
@@ -293,6 +297,17 @@ impl VideoPipeline {
         ])
         .context("Failed to link video pipeline elements")?;
 
+        // Counts raw frames for the supervisor's stall check.
+        let raw_frames = Arc::new(AtomicU64::new(0));
+        let probe_frames = raw_frames.clone();
+        v4l2src.static_pad("src").context("v4l2src has no src pad")?.add_probe(
+            gst::PadProbeType::BUFFER,
+            move |_pad, _info| {
+                probe_frames.fetch_add(1, Ordering::Relaxed);
+                gst::PadProbeReturn::Ok
+            },
+        );
+
         let raw_frame_waiters: Arc<RawFrameWaiters> = Arc::default();
         let raw_frame_requested = Arc::new(AtomicBool::new(false));
         // The probe only takes a buffer ref when a snapshot is pending, so the
@@ -358,6 +373,8 @@ impl VideoPipeline {
             raw_frame_waiters,
             raw_frame_requested,
             keyframe_requested_at,
+            capture_src: v4l2src,
+            raw_frames,
         })
     }
 
@@ -884,6 +901,16 @@ impl PipelineManager {
 
     pub fn request_raw_frame(&self) -> tokio::sync::oneshot::Receiver<gst::Sample> {
         self.video.request_raw_frame()
+    }
+
+    /// Raw frames captured since this pipeline was built.
+    pub fn raw_frames(&self) -> u64 {
+        self.video.raw_frames.load(Ordering::Relaxed)
+    }
+
+    /// The caps the capture source negotiated, once it has.
+    pub fn capture_caps(&self) -> Option<String> {
+        self.video.capture_src.static_pad("src")?.current_caps().map(|c| c.to_string())
     }
 
     /// Requests an IDR from the encoder.
