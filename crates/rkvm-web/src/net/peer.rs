@@ -95,6 +95,13 @@ pub async fn connect(video: &HtmlVideoElement) -> Result<Peer, String> {
     {
         let video = video.clone();
         let on_track = Closure::<dyn FnMut(RtcTrackEvent)>::new(move |ev: RtcTrackEvent| {
+            // Play frames as soon as they decode: the default adaptive jitter
+            // buffer grows on every keyframe burst and leaves the picture (and
+            // the remote cursor in it) trailing the user's hand.
+            if let Ok(receiver) = js_sys::Reflect::get(&ev, &"receiver".into()) {
+                let _ = js_sys::Reflect::set(&receiver, &"jitterBufferTarget".into(), &0.into());
+                let _ = js_sys::Reflect::set(&receiver, &"playoutDelayHint".into(), &0.into());
+            }
             if let Some(stream) = ev.streams().get(0).dyn_ref::<MediaStream>() {
                 video.set_src_object(Some(stream));
             }

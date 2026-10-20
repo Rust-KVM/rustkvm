@@ -12,6 +12,15 @@ use crate::video::VideoInputState;
 
 type RawFrameWaiters = parking_lot::Mutex<Vec<tokio::sync::oneshot::Sender<gst::Sample>>>;
 
+/// Seconds between periodic IDRs when no GOP is configured. A 4K IDR is
+/// 10-30x a P-frame and takes tens of ms to deliver, so a 1 s GOP stalls the
+/// stream every second; viewers get keyframes on demand (new session, PLI).
+const DEFAULT_GOP_SECONDS: i32 = 10;
+
+/// Minimum spacing of keyframes forced by PLI, so a viewer that keeps losing
+/// packets cannot make every frame an IDR.
+const KEYFRAME_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
 #[derive(Debug, Clone)]
 pub struct VideoConfig {
     pub device: String,
@@ -127,6 +136,8 @@ pub struct VideoPipeline {
     /// When the oldest unanswered keyframe request was made; the encoder
     /// output probe logs how long it took to produce the keyframe.
     keyframe_requested_at: Arc<parking_lot::Mutex<Option<std::time::Instant>>>,
+    /// When the last keyframe was forced, to rate-limit PLI-driven requests.
+    keyframe_forced_at: parking_lot::Mutex<Option<std::time::Instant>>,
     capture_src: gst::Element,
     /// Raw frames the capture source has pushed, paused encoding included.
     raw_frames: Arc<AtomicU64>,
@@ -350,11 +361,12 @@ impl VideoPipeline {
                         && let Ok(info) = gst_video::VideoInfo::from_caps(&caps)
                     {
                         let fps = info.fps();
-                        let gop = fps.numer() / fps.denom().max(1);
+                        let gop = fps.numer() / fps.denom().max(1) * DEFAULT_GOP_SECONDS;
                         encoder_clone.set_property("gop", gop);
                         info!(
-                            "Set dynamic GOP to {} based on source {:.1}fps",
+                            "Set dynamic GOP to {} ({}s) based on source {:.1}fps",
                             gop,
+                            DEFAULT_GOP_SECONDS,
                             fps.numer() as f64 / fps.denom() as f64
                         );
                     }
@@ -373,6 +385,7 @@ impl VideoPipeline {
             raw_frame_waiters,
             raw_frame_requested,
             keyframe_requested_at,
+            keyframe_forced_at: parking_lot::Mutex::new(None),
             capture_src: v4l2src,
             raw_frames,
         })
@@ -934,6 +947,15 @@ impl PipelineManager {
                 return;
             }
         }
+        if self
+            .video
+            .keyframe_forced_at
+            .lock()
+            .is_some_and(|at| at.elapsed() < KEYFRAME_MIN_INTERVAL)
+        {
+            debug!("keyframe forced recently, skipping request");
+            return;
+        }
         self.force_keyframe_now();
     }
 
@@ -941,6 +963,7 @@ impl PipelineManager {
     /// an IDR encoded after its connection is up, even if one is in flight.
     pub fn force_keyframe_now(&self) {
         self.video.keyframe_requested_at.lock().get_or_insert_with(std::time::Instant::now);
+        *self.video.keyframe_forced_at.lock() = Some(std::time::Instant::now());
         let mut builder = gst_video::UpstreamForceKeyUnitEvent::builder().all_headers(true);
         if let Some(running_time) = self.video.encoder.current_running_time() {
             builder = builder.running_time(running_time);
