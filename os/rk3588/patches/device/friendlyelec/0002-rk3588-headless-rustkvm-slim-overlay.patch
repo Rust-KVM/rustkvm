@@ -1,0 +1,44 @@
+diff --git a/rk3588/base.mk b/rk3588/base.mk
+index 3929936..9be5572 100644
+--- a/rk3588/base.mk
++++ b/rk3588/base.mk
+@@ -20,10 +20,9 @@ BUILDROOT_FILES+=(device/friendlyelec/rom-version)
+ BUILDROOT_FILES+=(device/friendlyelec/rk3588/disable-unnecessary-services)
+ BUILDROOT_FILES+=(device/friendlyelec/load-modules-service)
+ BUILDROOT_FILES+=(device/friendlyelec/rk3588/r8125)
+-BUILDROOT_FILES+=(device/friendlyelec/rk3588/set-pulse-audio-default-output-to-hdmi0)
+ BUILDROOT_FILES+=(device/friendlyelec/alsa-config)
+-BUILDROOT_FILES+=(device/friendlyelec/usbdevice-wrapper)
+ BUILDROOT_FILES+=(device/friendlyelec/rustkvm-files)
++BUILDROOT_FILES+=(device/friendlyelec/rustkvm-slim)
+ 
+ # U-boot
+ # 
+diff --git a/rustkvm-slim/install.sh b/rustkvm-slim/install.sh
+new file mode 100755
+index 0000000..00a6b12
+--- /dev/null
++++ b/rustkvm-slim/install.sh
+@@ -0,0 +1,22 @@
++#!/bin/bash
++# RustKVM: last overlay step. Drops what device/rockchip and the rockchip
++# fs-overlay install unconditionally but a headless KVM never uses.
++set -eu
++ROOTFS_DIR=$1
++
++(cd ${ROOTFS_DIR} && {
++	# Prebuilt tools: gdb, four perf builds, adb, frecon, benchmarks.
++	rm -rf usr/local/bin
++
++	# Fonts from device/rockchip/common/fonts (no display stack).
++	rm -rf usr/share/fonts
++
++	# Demo media in /oem and /userdata.
++	find oem userdata -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
++
++	# PulseAudio leftovers from board/rockchip/rk3588/fs-overlay.
++	rm -rf usr/share/pulseaudio etc/udev/rules.d/90-pulseaudio-rockchip.rules
++
++	# rkscript's USB gadget service: rustkvm_app owns configfs.
++	rm -f etc/init.d/S50usbdevice.sh etc/init.d/K50usbdevice.sh lib/udev/rules.d/61-usbdevice.rules
++})

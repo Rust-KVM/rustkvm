@@ -138,10 +138,20 @@ step_build() {
         sudo chown -R "$(id -u):$(id -g)" u-boot kernel buildroot/output scripts/sd-fuse/out
     fi
     ln -sfn "$(readlink -f .current)/$BOARD_MK" .current_config.mk
+    # mk-buildroot.sh reuses an existing .config, and Buildroot never deletes
+    # the files of packages that were turned off: start the Buildroot output
+    # over whenever the defconfig (packages, root password) changes.
+    local br_out=buildroot/output/rockchip_rk3588 stamp
+    stamp=$(sha256sum buildroot/configs/rockchip_rk3588_defconfig | cut -d' ' -f1)
+    if [ -d "$br_out" ] && [ "$(cat "$br_out/.rustkvm-defconfig" 2>/dev/null)" != "$stamp" ]; then
+        log "defconfig changed: rebuild Buildroot output from scratch"
+        rm -rf "$br_out"
+    fi
     for part in uboot kernel buildroot; do
         log "build $part ($BOARD_MK)"
         ./build.sh "$part"
     done
+    echo "$stamp" >"$br_out/.rustkvm-defconfig"
     log "pack SD image"
     ./build.sh sd-img
     log "pack eMMC flasher image"
