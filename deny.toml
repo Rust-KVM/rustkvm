@@ -35,6 +35,14 @@ ignore = [
     # rustls-webpki 0.102 — panic in CRL parsing. "Applications that do not use CRLs
     # are not affected." rumqttc never parses CRLs.
     { id = "RUSTSEC-2026-0104", reason = "rumqttc does not parse CRLs; not affected" },
+    # rustls-webpki 0.102 — distrusted emSign intermediates. Fixed only in 0.103.16+
+    # (which the web server uses); rumqttc 0.25.1 is the latest release and pins 0.102.
+    # MQTT is off by default and talks only to the broker the operator configures.
+    { id = "RUSTSEC-2026-0382", reason = "rumqttc-only 0.102 copy; no fixed release; MQTT opt-in" },
+    # crypto-bigint 0.5 — timing leaks in constant-time ops; fixed only in 0.7.6.
+    # Pulled in by webrtc 0.17.2 (latest) via dtls → p256/p384 → elliptic-curve 0.13,
+    # which cannot take 0.7. Exposure is the per-session ephemeral DTLS key exchange.
+    { id = "RUSTSEC-2026-0387", reason = "webrtc-rs dtls via elliptic-curve 0.13; no compatible fix" },
 ]
 
 [licenses]

@@ -87,19 +87,26 @@ pub async fn set_network_settings(params: NetworkSettingsParams) -> Result<Value
     Ok(Value::Null)
 }
 
+/// Set by the dhcpcd init script (S41dhcpcd) while the daemon runs.
+const DHCPCD_PIDFILE: &str = "/var/run/dhcpcd/pid";
+
 pub async fn renew_dhcp_lease() -> Result<Value> {
     info!("DHCP lease renewal requested");
     let if_name = crate::network::NET_IF_NAME;
-    let status = tokio::process::Command::new("/sbin/udhcpc")
-        .args(["-i", if_name, "-q", "-n", "-t", "3"])
-        .status()
-        .await;
+    // Ask the running dhcpcd to rebind rather than starting a second client
+    // on the same NIC; older images without dhcpcd still use one-shot udhcpc.
+    let (client, args): (&str, Vec<&str>) = if std::path::Path::new(DHCPCD_PIDFILE).exists() {
+        ("dhcpcd", vec!["-n", if_name])
+    } else {
+        ("/sbin/udhcpc", vec!["-i", if_name, "-q", "-n", "-t", "3"])
+    };
+    let status = tokio::process::Command::new(client).args(&args).status().await;
     match status {
         Ok(s) if s.success() => Ok(Value::Null),
-        Ok(s) => Err(anyhow::anyhow!("udhcpc exited with status {}", s)),
+        Ok(s) => Err(anyhow::anyhow!("{client} exited with status {s}")),
         Err(e) => {
-            tracing::warn!("DHCP renewal via udhcpc failed: {e}");
-            Err(anyhow::anyhow!("udhcpc not available: {e}"))
+            tracing::warn!("DHCP renewal via {client} failed: {e}");
+            Err(anyhow::anyhow!("{client} not available: {e}"))
         }
     }
 }
