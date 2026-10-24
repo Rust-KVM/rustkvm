@@ -154,6 +154,9 @@ step_build() {
         ./build.sh "$part"
     done
     echo "$stamp" >"$br_out/.rustkvm-defconfig"
+    # The packers name images by date and never remove older ones (two ~8 GB raw
+    # images per build day); keep only the ones this build writes.
+    sudo rm -f out/*_sd.img out/*_sd.img.gz out/*_eflasher.img
     log "pack SD image"
     ./build.sh sd-img
     log "pack eMMC flasher image"

@@ -36,9 +36,15 @@ if [ -z "${REMOTE_HOST}" ]; then
   exit 1
 fi
 
-# 1. Build application
+# 1. Build application: the self-built stage2 toolchain if installed, else the Docker devkit
 echo "🔨 Building application..."
-cargo +stage2 build -Z build-std=std,panic_abort --target aarch64-unknown-linux-gnu -p rustkvm --bin rustkvm_app --release
+if rustup toolchain list 2>/dev/null | grep -q '^stage2'; then
+  cargo +stage2 build -Z build-std=std,panic_abort --target aarch64-unknown-linux-gnu -p rustkvm --bin rustkvm_app --release
+  APP_BIN=target/aarch64-unknown-linux-gnu/release/rustkvm_app
+else
+  "$(dirname "$0")/scripts/devkit.sh" run scripts/build-app.sh
+  APP_BIN=out/app/rustkvm_app-aarch64-unknown-linux-gnu
+fi
 
 # 2. Stop existing process gracefully, then clean up.
 #    rustkvm_app arms the hardware watchdog and only disarms it during graceful
@@ -62,7 +68,7 @@ ssh "${REMOTE_USER}@${REMOTE_HOST}" '
 echo "📦 Deploying to device..."
 ssh "${REMOTE_USER}@${REMOTE_HOST}" 'mkdir -p /userdata/rustkvm/bin'
 ssh "${REMOTE_USER}@${REMOTE_HOST}" 'mkdir -p /userdata/rustkvm/log'
-ssh "${REMOTE_USER}@${REMOTE_HOST}" "cat > /userdata/rustkvm/bin/rustkvm_app" < target/aarch64-unknown-linux-gnu/release/rustkvm_app
+ssh "${REMOTE_USER}@${REMOTE_HOST}" "cat > /userdata/rustkvm/bin/rustkvm_app" < "${APP_BIN}"
 ssh "${REMOTE_USER}@${REMOTE_HOST}" 'chmod +x /userdata/rustkvm/bin/rustkvm_app'
 
 # # 4. Start application

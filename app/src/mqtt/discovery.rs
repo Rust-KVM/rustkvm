@@ -520,7 +520,7 @@ impl MqttManager {
             state_topic: Some(self.topic(&["update", "state"])),
             device_class: Some("firmware".to_string()),
             entity_category: Some("config".to_string()),
-            release_url: Some("https://github.com/foxxcn/rustkvm/releases".to_string()),
+            release_url: Some("https://github.com/Rust-KVM/rustkvm/releases".to_string()),
             availability_topic: avail_topic.clone(),
             availability_template: avail_template.to_string(),
             device: Some(device.clone()),

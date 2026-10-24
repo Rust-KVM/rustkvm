@@ -79,12 +79,24 @@ RustKVM 的侧重点：RK3588 的 8 核算力与 H.264 / H.265 硬件编码；�
 
 完整步骤（刷机、接线、首次登录）见 [docs/getting-started.md](docs/getting-started.md)。
 
-1. 构建前端与设备程序（见下节），或直接使用 `dev_deploy.sh`
-2. 部署到设备：`./dev_deploy.sh -r <设备IP> -u root`
-3. 浏览器打开 `https://<设备IP>/` 或 `https://rustkvm.local/`，接受自签名证书
-4. 完成设置向导，点击画面即可开始控制
+1. 把固件镜像写入 microSD 卡（[docs/quickstart.md](docs/quickstart.md)），可用 Release 下载的，也可自己构建（见下节）；固件已自带 RustKVM
+2. 浏览器打开 `https://<设备IP>/` 或 `https://rustkvm.local/`，接受自签名证书
+3. 完成设置向导，点击画面即可开始控制
+4. 部署自己构建的程序（可选）：在 设置 → 安全 → SSH 访问 填入公钥，在 设置 → 系统 → 开发者 打开开发者模式，然后执行 `./dev_deploy.sh -r <设备IP>`（没有 stage2 工具链时自动在 devkit 容器里编译）
 
 ## 从源码构建
+
+**最快路径：任意装了 Docker 的 Linux 主机（含 WSL2）**，无需登录 GitHub 或 `docker login`，镜像都是公开的：
+
+```bash
+git clone https://github.com/Rust-KVM/rustkvm && cd rustkvm
+scripts/devkit.sh run scripts/build-app.sh   # → out/app/rustkvm_app-aarch64-unknown-linux-gnu，约 7 分钟
+scripts/devkit.sh firmware                   # → out/firmware/ SD 卡与 eMMC 镜像，首次需约 50 GB 空闲磁盘
+```
+
+版本固定、磁盘占用、代理与固件构建见 [docs/building.md](docs/building.md)；改主机名、界面名称、USB 标识和固件版本见 [docs/customizing.md](docs/customizing.md)。WSL2 下 Docker 和 Linux 文件都在 C 盘的虚拟磁盘里，可用空间以 C 盘为准。
+
+不用 Docker 时的手动步骤：
 
 ```bash
 # 1. 前端（任意主机，stable Rust）
@@ -95,7 +107,7 @@ cd crates/rkvm-web && trunk build --release && cd -
 sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 cargo +nightly test --workspace
 
-# 3. aarch64 设备构建（需 Buildroot RK3588 工具链 + 自建 stage2 Rust 工具链）
+# 3. aarch64 设备构建（需 /opt/rk3588-buildkit 工具链；stage2 是参考工作站自建的，也可换成 +nightly-2026-06-14）
 cargo +stage2 build -Z build-std=std,panic_abort \
   --target aarch64-unknown-linux-gnu -p rustkvm --bin rustkvm_app --release
 ```

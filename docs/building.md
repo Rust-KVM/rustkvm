@@ -11,6 +11,22 @@ only Docker installed:
 The scripts also run directly on a host that has the tools installed; the containers
 just pin those tools.
 
+Getting started from nothing:
+
+```bash
+git clone https://github.com/Rust-KVM/rustkvm && cd rustkvm
+scripts/devkit.sh run scripts/build-app.sh
+```
+
+No GitHub account or `docker login` is needed: the repository and the `ghcr.io/rust-kvm`
+images are public. Your user must be able to run `docker` (member of the `docker`
+group, or Docker Desktop's WSL integration).
+
+> [!NOTE]
+> **WSL2:** Docker and the Linux filesystem live in a virtual disk on the Windows system
+> drive, so free space on `C:` is the real limit, whatever `df /` says. Clone and build
+> on the Linux filesystem (`~/...`), not under `/mnt/c`.
+
 ## Pinned versions
 
 | What | Version | Where it is pinned |
@@ -33,8 +49,9 @@ scripts/devkit.sh run scripts/build-app.sh
 ```
 
 The first run pulls the published devkit image,
-`ghcr.io/rust-kvm/rustkvm-devkit:nightly-2026-06-14` (about 3 GB unpacked). `out/app/` then
-holds `rustkvm_app-aarch64-unknown-linux-gnu`, its `.sha256` (the same pair the OTA
+`ghcr.io/rust-kvm/rustkvm-devkit:nightly-2026-06-14` (about 3 GB unpacked) and takes
+about 7 minutes on 16 threads; it needs about 5 GB of disk in all (image, `target/` and
+the cargo cache in `~/.cache/rustkvm`). `out/app/` then holds `rustkvm_app-aarch64-unknown-linux-gnu`, its `.sha256` (the same pair the OTA
 updater installs) and `BUILD_INFO`.
 
 The devkit image sits on `ghcr.io/rust-kvm/rk3588-buildkit:20250527`, the cross gcc and
@@ -66,11 +83,11 @@ Deploy to a board on the network as before: `./dev_deploy.sh -r <device_ip>`.
 
 ## 2. Firmware image
 
-Costs of the first build (the disk figure is the reference workbench's SDK tree; network and time are estimates):
+Costs of the first build (the disk figure is measured on the reference workbench; network and time are estimates):
 
 | | |
 | --- | --- |
-| Disk | about 60 GB for the SDK checkout and build tree, plus about 10 GB of download and ccache under `~/.cache/rustkvm` |
+| Disk | about 40 GB for the SDK checkout and build tree (38 GB measured with the headless defconfig), plus about 2 GB of downloads and ccache under `~/.cache/rustkvm` and 2 GB for the builder image; keep 50 GB free |
 | Network | about 15 GB on the first sync (shallow clones plus Buildroot package sources) |
 | Time | several hours on 16 threads; later builds reuse the tree and ccache |
 
@@ -78,6 +95,11 @@ Costs of the first build (the disk figure is the reference workbench's SDK tree;
 scripts/devkit.sh run scripts/build-app.sh     # the image embeds out/app/
 scripts/devkit.sh firmware                     # sync, patch, build, collect
 ```
+
+The builder image (`rustkvm/firmware-builder:local`, Ubuntu 22.04 with the SDK's host
+packages) is not published; the first `firmware` run builds it from
+`ci/firmware/Dockerfile`, pulling `ubuntu:22.04` from Docker Hub. Every pinned SDK
+commit is fetched anonymously from `github.com/friendlyarm`.
 
 Steps can be run separately: `scripts/devkit.sh firmware patch build collect` skips the
 sync. The SDK checkout lives in `RUSTKVM_SDK_DIR` (default `~/rustkvm-sdk/rk3588`) and
@@ -96,7 +118,9 @@ belongs to the script: the patch step resets every patched project to its pinned
 set `FW_VERSION` to override it for a release.
 
 The firmware container runs `--privileged` because the SDK packs images through loop
-devices. What the SDK changes are and how to edit them: [`os/rk3588/README.md`](../os/rk3588/README.md).
+devices. An incremental rebuild after an application or overlay change
+(`scripts/devkit.sh firmware patch build collect`) takes 7 to 40 minutes, depending on what changed. What the SDK changes are and how to edit them: [`os/rk3588/README.md`](../os/rk3588/README.md).
+Your own hostname, name and version label: [customizing.md](customizing.md).
 
 ## Networks behind a proxy
 
