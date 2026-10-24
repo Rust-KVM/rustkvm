@@ -117,6 +117,8 @@ APP_VERSION=$app_version
 GIT_REVISION=$rev
 BOARD=${BOARD_MK%.mk}
 EOF
+    # Settings → About shows this one line (the app reads /etc/rustkvm-version).
+    echo "$FW_VERSION" >"$files/etc/rustkvm-version"
 
     [ -f "$APP" ] || die "application binary not found: $APP (run scripts/build-app.sh first)"
     # /userdata is its own (initially empty) partition mounted over the rootfs
