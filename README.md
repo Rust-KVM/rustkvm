@@ -219,16 +219,17 @@ What RustKVM focuses on:
 The full walkthrough, including flashing and wiring, is in
 [docs/getting-started.md](docs/getting-started.md).
 
-1. **Build** the frontend and the device binary (next section), or use `dev_deploy.sh`.
-2. **Deploy** to the device:
+1. **Flash** a firmware image to a microSD card ([docs/quickstart.md](docs/quickstart.md)),
+   from a release or built yourself (next section). It already runs RustKVM.
+2. **Open** `https://<device_ip>/` (or `https://rustkvm.local/`) and accept the
+   self-signed certificate.
+3. **Finish the setup wizard**, then click the video view to take control.
+4. **Deploy your own build** (optional): enable SSH under Settings → Security → SSH access
+   and Settings → System → Developer mode, then
 
    ```bash
-   ./dev_deploy.sh -r <device_ip> -u root
+   ./dev_deploy.sh -r <device_ip>   # builds in the devkit unless you have stage2
    ```
-
-3. **Open** `https://<device_ip>/` (or `https://rustkvm.local/`) and accept the
-   self-signed certificate.
-4. **Finish the setup wizard**, then click the video view to take control.
 
 Useful runtime flags (all also settable via `RUSTKVM_*` environment variables, see
 `rustkvm_app --help`):
@@ -251,9 +252,11 @@ scripts/devkit.sh run scripts/build-app.sh   # → out/app/rustkvm_app-aarch64-u
 scripts/devkit.sh firmware                   # → out/firmware/ SD and eMMC images
 ```
 
-Pinned versions, caches, proxies and the firmware build are covered in
-[`docs/building.md`](docs/building.md). The manual setup below is what the containers
-automate.
+Only Docker and git are needed; the images are public and pulled without a login.
+Pinned versions, disk space, caches, proxies and the firmware build are covered in
+[`docs/building.md`](docs/building.md); renaming and rebranding your build in
+[`docs/customizing.md`](docs/customizing.md). The manual setup below is what the
+containers automate, and you only need it to work without Docker.
 
 ### 1. Frontend (any host)
 
@@ -279,8 +282,10 @@ cargo +nightly test --workspace
 
 ### 3. Device build (aarch64 / RK3588)
 
-The production binary uses the Buildroot RK3588 host toolchain and a self-built Rust
-`stage2` toolchain with `-Z build-std`.
+Without Docker, the binary needs the Buildroot RK3588 host toolchain and a nightly Rust
+with `rust-src` (`-Z build-std`). The reference workbench uses a self-built `stage2`
+toolchain, which `rust-toolchain.toml` names; with the pinned nightly instead, set
+`RUSTUP_TOOLCHAIN=nightly-2026-06-14` (this is what the devkit does).
 
 <details>
 <summary><b>Step-by-step cross-compilation setup</b></summary>
@@ -302,21 +307,25 @@ sudo apt install pkg-config gcc-arm-linux-gnueabihf clang llvm-dev libclang-dev 
   python-is-python3 texinfo kmod cmake
 ```
 
-**Buildroot host toolchain.** Extract the RK3588 Buildroot SDK on a Linux filesystem
-(extracting on Windows breaks its symlinks) and build it:
+**Buildroot host toolchain.** Build the firmware once (`scripts/build-firmware.sh`, on a
+Linux filesystem; a Windows drive breaks the SDK's symlinks) and copy its host dir:
 
 ```bash
-mkdir -p buildroot-rk3588-20250527 && tar -xf buildroot-rk3588-20250527.tar -C buildroot-rk3588-20250527
-cd buildroot-rk3588-20250527
-./build.sh rk3588.mk
 sudo mkdir -p /opt/rk3588-buildkit
-sudo cp -r "$PWD"/buildroot/output/rockchip_rk3588/host/* /opt/rk3588-buildkit/
+sudo cp -r ~/rustkvm-sdk/rk3588/buildroot/output/rockchip_rk3588/host/* /opt/rk3588-buildkit/
+```
+
+Or copy it out of the published image:
+
+```bash
+docker create --name bk ghcr.io/rust-kvm/rk3588-buildkit:20250527
+sudo docker cp bk:/opt/rk3588-buildkit /opt/ && docker rm bk
 ```
 
 The [`buildkit`](.github/workflows/buildkit.yml) workflow can also build this toolchain
 and publish it as the `ghcr.io/<owner>/rk3588-buildkit` container image.
 
-**Rust stage2 toolchain.** In the `rust/` submodule, create `bootstrap.toml`:
+**Rust stage2 toolchain** (optional; skip it to use the pinned nightly). In the `rust/` submodule, create `bootstrap.toml`:
 
 ```toml
 [build]
@@ -344,6 +353,8 @@ profile sets `panic = "abort"`):
 cargo +stage2 build -Z build-std=std,panic_abort \
   --target aarch64-unknown-linux-gnu -p rustkvm --bin rustkvm_app --release
 # → target/aarch64-unknown-linux-gnu/release/rustkvm_app
+# without stage2: rustup toolchain install nightly-2026-06-14 --component rust-src \
+#   --target aarch64-unknown-linux-gnu, then replace +stage2 with +nightly-2026-06-14
 ```
 
 ## API overview
@@ -379,7 +390,10 @@ claude mcp add --transport http rustkvm https://rustkvm.local/mcp \
 
 ## Documentation
 
+- [`docs/quickstart.md`](docs/quickstart.md): flash a release image and log in
 - [`docs/getting-started.md`](docs/getting-started.md): flash, deploy, wire up and log in on an RK3588 board
+- [`docs/building.md`](docs/building.md): Docker devkit, application and firmware builds
+- [`docs/customizing.md`](docs/customizing.md): your own hostname, name, USB IDs and firmware version
 - [`docs/api.md`](docs/api.md): HTTP, JSON-RPC, MCP, HID-RPC and metrics reference
 - [`AGENTS.md`](AGENTS.md): architecture, module tree, coding conventions and gotchas
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): development workflow and quality gates
