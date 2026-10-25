@@ -20,20 +20,17 @@ pub struct TailscaleStatus {
 static CONTROL_URL: OnceCell<Mutex<String>> = OnceCell::new();
 
 pub fn get_status(_control_url: &str) -> Result<TailscaleStatus> {
-    let output = Command::new("tailscale")
-        .args(["status", "--json"])
-        .output()
-        .map_err(|source| Error::CommandExec { cmd: "tailscale status", source })?;
+    let output = match Command::new("tailscale").args(["status", "--json"]).output() {
+        Ok(output) => output,
+        // Tailscale is optional and not part of the default image.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(offline()),
+        Err(source) => return Err(Error::CommandExec { cmd: "tailscale status", source }),
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         warn!("tailscale status failed: {}", stderr);
-        return Ok(TailscaleStatus {
-            online: false,
-            hostname: None,
-            ip_addresses: None,
-            self_info: None,
-        });
+        return Ok(offline());
     }
 
     let raw: serde_json::Value = serde_json::from_slice(&output.stdout)?;
@@ -51,6 +48,10 @@ pub fn get_status(_control_url: &str) -> Result<TailscaleStatus> {
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
 
     Ok(TailscaleStatus { online, hostname, ip_addresses, self_info: raw.get("Self").cloned() })
+}
+
+fn offline() -> TailscaleStatus {
+    TailscaleStatus { online: false, hostname: None, ip_addresses: None, self_info: None }
 }
 
 pub fn set_control_url(url: &str) -> Result<String> {
