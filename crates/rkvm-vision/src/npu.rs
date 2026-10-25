@@ -29,6 +29,9 @@ pub const DET_MODEL_FILE: &str = "det.rknn";
 pub const DICT_FILE: &str = "ppocr_keys_v1.txt";
 
 const TILE_OVERLAP: u32 = 96;
+/// Narrower detectors miss body text on desktop screens; the zoo's 480x480
+/// model is what a conversion that kept the ONNX file's shape produces.
+const MIN_DET_WIDTH: u32 = 1280;
 const DEFAULT_MIN_SCORE: f32 = 0.5;
 /// PP-OCR pads recognizer input with zeros after normalising to -1..1; the
 /// models are converted with mean and std 127.5, so raw 128 is that zero.
@@ -163,9 +166,33 @@ impl Engine {
         let mut workers = Vec::with_capacity(cores.len());
         for core in cores {
             let det = Net::load(&runtime, &det_path, core)?;
+            if det.in_w < MIN_DET_WIDTH {
+                bail!(
+                    "{DET_MODEL_FILE} takes {}x{}, narrower than {MIN_DET_WIDTH} px; \
+                     reconvert it with scripts/vision-models.sh",
+                    det.in_w,
+                    det.in_h
+                );
+            }
             let mut recs = rec_paths
                 .iter()
-                .map(|p| Net::load(&runtime, p, core))
+                .map(|p| {
+                    let net = Net::load(&runtime, p, core)?;
+                    let named = p
+                        .file_stem()
+                        .and_then(|n| n.to_str())
+                        .and_then(|n| n.strip_prefix("rec_"))
+                        .and_then(|w| w.parse::<u32>().ok());
+                    if named != Some(net.in_w) {
+                        bail!(
+                            "{} takes input width {}, which its name does not match; \
+                             reconvert it with scripts/vision-models.sh",
+                            p.display(),
+                            net.in_w
+                        );
+                    }
+                    Ok(net)
+                })
                 .collect::<Result<Vec<_>>>()?;
             recs.sort_by_key(|n| n.in_w);
             workers.push((det, recs));

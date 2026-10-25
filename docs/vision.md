@@ -36,9 +36,14 @@ the rest of the app is unaffected.
    character, and rejoined with a space where the gap is word-sized. The
    space class of the model is decoded, so English keeps its spaces.
 4. Jobs are spread over three worker threads, each owning the models on one
-   NPU core. Measured on the device: detection about 20 ms per 480×480 tile,
-   recognition about 14 ms per line per core, about 146 lines/s on three
-   cores.
+   NPU core.
+
+Measured on a NanoPC-T6 with a 3840×2160 desktop screenshot (about 56 text
+lines, mixed Chinese and English): `fast` reads the whole screen in about
+1.5 s (detection 0.25-0.36 s, recognition 1.2-1.3 s), `full` in about 2.3 s,
+and a 1600×200 region in about 0.25 s. Recognition dominates. With all
+models loaded the NPU mappings add about 1.3 GB to the app's resident
+memory, since each core holds its own copy of every model.
 
 ## Installing the models
 
@@ -53,7 +58,7 @@ The script downloads the PP-OCRv4 ONNX models and dictionary from Rockchip's
 pinned), converts them with `rknn-toolkit2` 2.5.0 from PyPI, and fetches
 `librknnrt.so` 2.5.0. The device's `/userdata/rustkvm/vision/` then holds
 `det.rknn`, `rec_320.rknn`, `rec_640.rknn`, `rec_1280.rknn`,
-`ppocr_keys_v1.txt`, `librknnrt.so` and `LICENSE.librknnrt` (about 31 MB: 24 MB of models plus the 8 MB runtime).
+`ppocr_keys_v1.txt`, `librknnrt.so` and `LICENSE.librknnrt` (about 34 MB: 26 MB of models plus the 8 MB runtime).
 
 To try models without the app, cross-compile the example and run it on the
 device: `cargo +stage2 build -Z build-std=std,panic_abort --target
