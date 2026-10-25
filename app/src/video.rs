@@ -494,17 +494,23 @@ pub async fn shutdown_video_pipeline() {
     info!("Video pipeline shutdown complete");
 }
 
-pub async fn capture_screenshot_jpeg() -> anyhow::Result<bytes::Bytes> {
+/// The next raw (NV12) frame from the capture pipeline, taken before the
+/// encoder valve so it works while no viewer is connected.
+pub async fn capture_raw_frame() -> anyhow::Result<gstreamer::Sample> {
     let rx = PIPELINE_MANAGER
         .lock()
         .await
         .as_ref()
         .map(PipelineManager::request_raw_frame)
         .ok_or_else(|| anyhow::anyhow!("Pipeline not initialized"))?;
-    let sample = tokio::time::timeout(Duration::from_secs(2), rx)
+    tokio::time::timeout(Duration::from_secs(2), rx)
         .await
         .map_err(|_| anyhow::anyhow!("No video frame within 2s"))?
-        .map_err(|_| anyhow::anyhow!("Video pipeline stopped before a frame arrived"))?;
+        .map_err(|_| anyhow::anyhow!("Video pipeline stopped before a frame arrived"))
+}
+
+pub async fn capture_screenshot_jpeg() -> anyhow::Result<bytes::Bytes> {
+    let sample = capture_raw_frame().await?;
     tokio::task::spawn_blocking(move || crate::pipeline::encode_jpeg(&sample))
         .await
         .map_err(|e| anyhow::anyhow!("join error: {e}"))?

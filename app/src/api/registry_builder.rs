@@ -463,6 +463,27 @@ pub fn create_default_registry() -> RpcRegistry {
     registry.register_typed("setDefaultLogLevel", system::set_default_log_level);
     registry.register_typed("emitTestLog", system::emit_test_log);
     registry.register_typed("getRecentLogs", system::get_recent_logs);
+    registry.register_async("readScreenText", |params| {
+        Box::pin(async move {
+            let options: rkvm_vision::OcrOptions =
+                params.map(serde_json::from_value).transpose()?.unwrap_or_default();
+            Ok(serde_json::to_value(crate::vision::read_screen_text(options).await?)?)
+        })
+    });
+    registry.register_async("findScreenText", |params| {
+        Box::pin(async move {
+            let p: crate::vision::FindTextParams =
+                serde_json::from_value(params.ok_or(anyhow!("Missing params"))?)?;
+            Ok(serde_json::to_value(crate::vision::find_screen_text(p).await?)?)
+        })
+    });
+    registry.register_async("waitScreenStable", |params| {
+        Box::pin(async move {
+            let p: crate::vision::WaitStableParams =
+                params.map(serde_json::from_value).transpose()?.unwrap_or_default();
+            Ok(serde_json::to_value(crate::vision::wait_screen_stable(p).await?)?)
+        })
+    });
     registry.register_no_params("getTimezone", system::get_timezone);
     registry.register_async("getTimezones", |_params| {
         Box::pin(async move {

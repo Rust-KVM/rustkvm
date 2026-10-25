@@ -1,5 +1,5 @@
 [workspace]
-members = ["app", "crates/rkvm-core", "crates/rkvm-net", "crates/rkvm-proto"]
+members = ["app", "crates/rkvm-core", "crates/rkvm-net", "crates/rkvm-proto", "crates/rkvm-vision"]
 exclude = ["crates/rkvm-web", "rust"]
 resolver = "2"
 
@@ -27,7 +27,9 @@ hex                = { version = "0.4.3", default-features = false }
 httpdate           = "1.0.3"
 id_token_verifier  = { git = "https://github.com/foxxcn/id_token_verifier.git", tag = "rustkvm", features = ["tracing"] }
 if-addrs           = "0.15.0"
+image              = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 libc               = { version = "0.2.186", default-features = false }
+libloading         = "0.8"
 macaddr            = { version = "1.0.1", default-features = false }
 mdns-sd            = { version = "0.20.0", default-features = false }
 nbd                = "0.3.1"
@@ -40,6 +42,8 @@ reqwest            = { version = "0.12.28", default-features = false, features =
 rkvm-core          = { path = "crates/rkvm-core" }
 rkvm-net           = { path = "crates/rkvm-net" }
 rkvm-proto         = { path = "crates/rkvm-proto" }
+rkvm-vision        = { path = "crates/rkvm-vision" }
+rknpu2             = { version = "0.0.9", features = ["rk3576", "libloading"] } # rk3576 is the RK3576/RK3588 runtime; libloading so librknnrt is found at run time, not link time
 rumqttc            = { version = "0.25.1", default-features = false, features = ["use-rustls"] }
 rust-embed         = "8.11.0"
 rustix             = { version = "1.1.4", default-features = false, features = ["pty", "fs", "termios", "net", "system"] }
