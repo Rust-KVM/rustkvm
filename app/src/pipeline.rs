@@ -1015,38 +1015,84 @@ fn h264_sps_profile_idc(data: &[u8]) -> Option<u8> {
     None
 }
 
-pub fn encode_jpeg(sample: &gst::Sample) -> Result<bytes::Bytes> {
-    let caps = sample.caps_owned().context("Raw frame has no caps")?;
-    let encoder = gst::ElementFactory::make("mppjpegenc")
-        .build()
-        .or_else(|_| gst::ElementFactory::make("jpegenc").build())
-        .context("No JPEG encoder available (mppjpegenc or jpegenc)")?;
+/// A JPEG encoder pipeline kept across screenshots. mppjpegenc copies each
+/// input frame into a dma-heap buffer that is not released when its pipeline is
+/// torn down, so building a pipeline per screenshot leaked one raw frame
+/// (12 MB at 4K) per call. Rebuilt only when the input caps change or an
+/// encode fails.
+struct JpegEncoder {
+    pipeline: gst::Pipeline,
+    appsrc: gst_app::AppSrc,
+    appsink: gst_app::AppSink,
+    caps: gst::Caps,
+}
 
-    let pipeline = gst::Pipeline::new();
-    let appsrc = gst_app::AppSrc::builder().caps(&caps).format(gst::Format::Time).build();
-    let videoconvert = gst::ElementFactory::make("videoconvert")
-        .build()
-        .context("Failed to create videoconvert")?;
-    let appsink = gst_app::AppSink::builder().sync(false).build();
+static JPEG_ENCODER: parking_lot::Mutex<Option<JpegEncoder>> = parking_lot::Mutex::new(None);
 
-    pipeline
-        .add_many([appsrc.upcast_ref(), &videoconvert, &encoder, appsink.upcast_ref()])
-        .context("Failed to add elements to JPEG pipeline")?;
-    gst::Element::link_many([appsrc.upcast_ref(), &videoconvert, &encoder, appsink.upcast_ref()])
+impl JpegEncoder {
+    fn new(caps: &gst::Caps) -> Result<Self> {
+        let encoder = gst::ElementFactory::make("mppjpegenc")
+            .build()
+            .or_else(|_| gst::ElementFactory::make("jpegenc").build())
+            .context("No JPEG encoder available (mppjpegenc or jpegenc)")?;
+
+        let pipeline = gst::Pipeline::new();
+        let appsrc = gst_app::AppSrc::builder().caps(caps).format(gst::Format::Time).build();
+        let videoconvert = gst::ElementFactory::make("videoconvert")
+            .build()
+            .context("Failed to create videoconvert")?;
+        let appsink = gst_app::AppSink::builder().sync(false).build();
+
+        pipeline
+            .add_many([appsrc.upcast_ref(), &videoconvert, &encoder, appsink.upcast_ref()])
+            .context("Failed to add elements to JPEG pipeline")?;
+        gst::Element::link_many([
+            appsrc.upcast_ref(),
+            &videoconvert,
+            &encoder,
+            appsink.upcast_ref(),
+        ])
         .context("Failed to link JPEG pipeline elements")?;
 
-    pipeline
-        .set_state(gst::State::Playing)
-        .context("Failed to set JPEG pipeline to PLAYING state")?;
-    let encoded = appsrc
-        .push_sample(sample)
-        .map_err(|e| anyhow::anyhow!("push raw frame: {e:?}"))
-        .and_then(|_| {
-            appsink
-                .try_pull_sample(gst::ClockTime::from_seconds(5))
-                .context("JPEG encode produced no output within 5s")
-        });
-    let _ = pipeline.set_state(gst::State::Null);
+        pipeline
+            .set_state(gst::State::Playing)
+            .context("Failed to set JPEG pipeline to PLAYING state")?;
+        Ok(Self { pipeline, appsrc, appsink, caps: caps.clone() })
+    }
+
+    fn encode(&self, sample: &gst::Sample) -> Result<gst::Sample> {
+        self.appsrc.push_sample(sample).map_err(|e| anyhow::anyhow!("push raw frame: {e:?}"))?;
+        self.appsink
+            .try_pull_sample(gst::ClockTime::from_seconds(5))
+            .context("JPEG encode produced no output within 5s")
+    }
+}
+
+impl Drop for JpegEncoder {
+    fn drop(&mut self) {
+        let _ = self.pipeline.set_state(gst::State::Null);
+    }
+}
+
+pub fn encode_jpeg(sample: &gst::Sample) -> Result<bytes::Bytes> {
+    let caps = sample.caps_owned().context("Raw frame has no caps")?;
+    let encoded = {
+        let mut slot = JPEG_ENCODER.lock();
+        if slot.as_ref().is_none_or(|enc| enc.caps != caps) {
+            // Drop the old pipeline before building its replacement.
+            *slot = None;
+            *slot = Some(JpegEncoder::new(&caps)?);
+        }
+        let encoded = match slot.as_ref() {
+            Some(enc) => enc.encode(sample),
+            None => Err(anyhow::anyhow!("JPEG encoder unavailable")),
+        };
+        if encoded.is_err() {
+            // A late output from a failed encode must not answer the next request.
+            *slot = None;
+        }
+        encoded
+    };
 
     let buffer = encoded?.buffer_owned().context("JPEG sample has no buffer")?;
     let mapped = buffer
