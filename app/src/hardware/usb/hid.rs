@@ -339,9 +339,14 @@ impl Hid {
         let state_ref = Arc::clone(&self.keyboard_state);
         let stop = Arc::new(AtomicBool::new(false));
         let reader_stop = Arc::clone(&stop);
+        // The state-change callback spawns tokio tasks, so the reader thread runs
+        // inside the caller's runtime context.
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|e| anyhow::anyhow!("keyboard reader needs a tokio runtime: {e}"))?;
 
         let handle =
             std::thread::Builder::new().name("hid-kbd-reader".to_string()).spawn(move || {
+                let _runtime = runtime.enter();
                 let mut buf = [0u8; 8];
                 while !reader_stop.load(Ordering::Acquire) {
                     let result =
