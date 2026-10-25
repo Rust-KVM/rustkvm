@@ -72,6 +72,8 @@
   letter-spacing: -0.01em; }
 .card-sub { margin: 0 0 var(--space-5); color: var(--text-tertiary); }
 .card .callout { margin-bottom: var(--space-4); }
+/* One border per surface: inside a card the callout is a tint only. */
+.card .callout-danger { box-shadow: none; }
 .card .actions { display: flex; gap: var(--space-2); justify-content: flex-end; margin-top: var(--space-4); }
 .err { color: var(--text-danger-strong); margin-top: var(--space-3); min-height: var(--lh-xs);
   font-size: var(--text-xs); line-height: var(--lh-xs); }
@@ -86,7 +88,7 @@
   box-shadow: inset 0 0 0 var(--hairline) var(--border-tertiary); transition: all var(--dur) var(--ease); }
 .badge.on { background: var(--bg-success); color: var(--text-success); box-shadow: inset 0 0 0 var(--hairline) var(--border-success); }
 .chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 var(--space-2);
-  border-radius: var(--radius-full); background: var(--bg-hover); color: var(--text-tertiary);
+  border-radius: var(--radius-full); background: var(--bg-hover); color: var(--text-secondary);
   font-size: var(--text-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* Switch: checkbox inside label.toggle. Off: tertiary track with hairline;
@@ -95,14 +97,14 @@
   font-size: var(--text-sm); }
 .toggle input[type=checkbox] { appearance: none; -webkit-appearance: none; flex: none; position: relative;
   width: 36px; height: 20px; margin: 0; border-radius: var(--radius-full); cursor: pointer;
-  background: var(--border-tertiary); box-shadow: inset 0 0 0 var(--hairline) var(--border-secondary);
+  background: var(--border-secondary); box-shadow: none;
   transition: background var(--dur) var(--ease); }
 .toggle input[type=checkbox]::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
   border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2);
   transition: transform var(--dur) var(--ease); }
 .toggle input[type=checkbox]:checked { background: var(--border-info); box-shadow: none; }
 .toggle input[type=checkbox]:checked::after { transform: translateX(16px); }
-.toggle:hover input[type=checkbox]:not(:checked):not(:disabled) { background: var(--border-secondary); }
+.toggle:hover input[type=checkbox]:not(:checked):not(:disabled) { background: var(--border-primary); }
 .toggle:hover input[type=checkbox]:checked:not(:disabled) { filter: brightness(.94); }
 /* Press: the knob stretches toward where it is going. */
 .toggle input[type=checkbox]:active:not(:disabled)::after { width: 20px; }
@@ -114,14 +116,14 @@
    the rest are ghost. Used for theme, language, codec, rotation. */
 .seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: var(--radius-md);
   background: var(--bg-hover); }
-.seg button { display: inline-grid; place-items: center; min-width: 32px; height: 28px; padding: 0 var(--space-3);
+.seg button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 32px; height: 28px; padding: 0 var(--space-3);
   border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary);
   font: inherit; font-size: var(--text-xs); font-weight: 500; cursor: pointer; box-shadow: none;
   transition: background var(--dur) var(--ease), color var(--dur) var(--ease), transform var(--dur) var(--ease); }
 .seg button .icon { width: 16px; height: 16px; }
 .seg button:not(.on):not(:disabled):hover { background: var(--bg-hover); color: var(--text-primary); }
 .seg button:not(:disabled):active { transform: scale(.97); }
-.seg button.on { background: var(--bg-primary); color: var(--text-primary);
+.seg button.on { background: var(--bg-raised); color: var(--text-primary);
   box-shadow: 0 0 0 var(--hairline) var(--border-tertiary), var(--shadow-sm); }
 .seg button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .seg button:disabled { opacity: .5; cursor: default; }
