@@ -83,7 +83,8 @@ fn check(ret: c_int, what: &str) -> Result<()> {
 }
 
 fn c_string(chars: &[c_char]) -> String {
-    let bytes: Vec<u8> = chars.iter().take_while(|&&c| c != 0).map(|&c| c as u8).collect();
+    let bytes: Vec<u8> =
+        chars.iter().take_while(|&&c| c != 0).map(|c| c.to_ne_bytes()[0]).collect();
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
