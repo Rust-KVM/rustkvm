@@ -153,7 +153,9 @@ until the user picks one. `src/theme.rs` flips it from the sidebar.
   - When the device reports `otherSessionConnected` (a newer browser took
     the session), the old page does not reconnect: it says the device was
     opened in another window and offers "在这里继续使用". Two pages must
-    never take the session from each other in a loop.
+    never take the session from each other in a loop. As a backstop for a
+    lost notice, three sessions in a row that drop within 30 s of coming up
+    stop the automatic reconnect; a click starts it again.
   - The titlebar shows no title before the connection; the card names the
     device.
 - **Focus mode** hides sidebar and titlebar. A small handle at the top center

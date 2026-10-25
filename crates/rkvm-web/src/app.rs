@@ -84,6 +84,10 @@ pub fn App() -> impl IntoView {
     // Automatic reconnect attempt in progress (1-based), 0 when idle.
     let reconnecting = RwSignal::new(0_u32);
     let retry_timer = StoredValue::new_local(None::<Timeout>);
+    // When the current session came up (ms since epoch) and how many sessions
+    // in a row were lost within SHORT_SESSION_MS of coming up.
+    let connected_at = StoredValue::new_local(0.0_f64);
+    let quick_drops = StoredValue::new_local(0_u32);
 
     Effect::new(move |_| {
         spawn_local(async move {
@@ -187,6 +191,7 @@ pub fn App() -> impl IntoView {
                         hid_attached.set_value(true);
                     }
                     conn_state.set("connected".to_string());
+                    connected_at.set_value(js_sys::Date::now());
 
                     let generation = conn_gen.get_value();
                     let this_gen = generation.get() + 1;
@@ -214,8 +219,18 @@ pub fn App() -> impl IntoView {
                             } else {
                                 error.set(Some(reason));
                                 // Usually the device restarted or the network
-                                // blinked: try again on our own.
-                                reconnecting.set(1);
+                                // blinked: try again on our own. A session
+                                // that keeps dropping right after it comes up
+                                // is likely being taken by another client
+                                // whose notice got lost; stop after a few so
+                                // two pages never kick each other forever.
+                                let short = js_sys::Date::now() - connected_at.get_value()
+                                    < SHORT_SESSION_MS;
+                                let drops = if short { quick_drops.get_value() + 1 } else { 0 };
+                                quick_drops.set_value(drops);
+                                if drops < MAX_QUICK_DROPS {
+                                    reconnecting.set(1);
+                                }
                             }
                             conn_state.set("lost".to_string());
                         });
@@ -254,6 +269,7 @@ pub fn App() -> impl IntoView {
     let do_connect = move |_| {
         retry_timer.set_value(None);
         reconnecting.set(0);
+        quick_drops.set_value(0);
         connect();
     };
 
@@ -857,6 +873,10 @@ pub fn App() -> impl IntoView {
 
 /// Automatic reconnect attempts before the gate waits for a click.
 const RECONNECT_TRIES: u32 = 30;
+/// A session lost sooner than this after it came up counts as a quick drop.
+const SHORT_SESSION_MS: f64 = 30_000.0;
+/// Quick drops in a row after which the page stops reconnecting on its own.
+const MAX_QUICK_DROPS: u32 = 3;
 
 fn parse_video(p: &Value) -> VideoInfo {
     VideoInfo {
