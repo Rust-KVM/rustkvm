@@ -515,6 +515,9 @@ pub async fn start_storage_file_upload(filename: &str, size: i64) -> Result<Stor
     let upload_id = format!("upload_{}", Uuid::new_v4());
     {
         let mut map = PENDING_UPLOADS.lock().await;
+        // A resumed upload replaces any abandoned one for the same file, so a client that
+        // starts uploads and never finishes them does not pile up open file handles.
+        map.retain(|_, pu| pu.upload_path != upload_path);
         map.insert(
             upload_id.clone(),
             PendingUpload { file, size, already_uploaded_bytes, upload_path, final_path },
@@ -647,6 +650,10 @@ pub async fn get_storage_space() -> Result<StorageSpace> {
 pub async fn delete_storage_file(filename: &str) -> Result<()> {
     let filename = sanitize_filename(filename)?;
     let full_path = Path::new(IMAGES_FOLDER).join(&filename);
+    PENDING_UPLOADS
+        .lock()
+        .await
+        .retain(|_, pu| pu.upload_path != full_path && pu.final_path != full_path);
     if !full_path.exists() {
         return Err(anyhow!("file does not exist: {}", filename));
     }
