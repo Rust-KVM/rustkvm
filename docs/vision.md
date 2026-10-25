@@ -53,7 +53,7 @@ The script downloads the PP-OCRv4 ONNX models and dictionary from Rockchip's
 pinned), converts them with `rknn-toolkit2` 2.5.0 from PyPI, and fetches
 `librknnrt.so` 2.5.0. The device's `/userdata/rustkvm/vision/` then holds
 `det.rknn`, `rec_320.rknn`, `rec_640.rknn`, `rec_1280.rknn`,
-`ppocr_keys_v1.txt`, `librknnrt.so` and `LICENSE.librknnrt` (about 40 MB).
+`ppocr_keys_v1.txt`, `librknnrt.so` and `LICENSE.librknnrt` (about 31 MB: 24 MB of models plus the 8 MB runtime).
 
 To try models without the app, cross-compile the example and run it on the
 device: `cargo +stage2 build -Z build-std=std,panic_abort --target
