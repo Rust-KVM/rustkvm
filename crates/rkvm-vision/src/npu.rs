@@ -108,9 +108,12 @@ struct Shared {
     dict: Vec<String>,
 }
 
+/// Recognized text and its confidence.
+type Piece = (String, f32);
+
 enum Job {
     Det { shape: usize, input: Vec<u8>, reply: Sender<Result<Vec<TextBox>>> },
-    Rec { model: usize, input: Vec<u8>, reply: Sender<Result<(String, f32)>> },
+    Rec { model: usize, input: Vec<u8>, reply: Sender<Result<Piece>> },
 }
 
 /// Jobs waiting for a worker. Recognition-only workers skip detection jobs.
@@ -220,7 +223,7 @@ impl Worker {
         Ok(det::db_boxes(prob, s.width as usize, s.height as usize, &shared.det_params))
     }
 
-    fn recognize(&mut self, shared: &Shared, model: usize, input: &[u8]) -> Result<(String, f32)> {
+    fn recognize(&mut self, shared: &Shared, model: usize, input: &[u8]) -> Result<Piece> {
         let (ctx, m) = self
             .recs
             .get_mut(model)
@@ -632,7 +635,7 @@ struct DetPass {
 
 struct PendingLine {
     rect: Rect,
-    pieces: Vec<(Segment, Receiver<Result<(String, f32)>>)>,
+    pieces: Vec<(Segment, Receiver<Result<Piece>>)>,
 }
 
 fn median_height(boxes: &[TextBox]) -> Option<f32> {

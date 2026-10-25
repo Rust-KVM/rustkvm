@@ -1,7 +1,11 @@
-use rkvm_vision::det::{DbParams, TextBox, db_boxes, merge_boxes, plan_tiles, reading_order};
-use rkvm_vision::image::{RectF, RgbImage};
-use rkvm_vision::rec::{Segment, ctc_decode, load_dict, pick_width, split_line};
-use rkvm_vision::signature::{grid_changed, luma_grid};
+use rkvm_vision::det::{
+    DbParams, TextBox, choose_shape, db_boxes, merge_boxes, plan_tiles, reading_order,
+};
+use rkvm_vision::image::{Nv12Frame, RectF, RgbImage, blank_columns, sample_bgr};
+use rkvm_vision::rec::{
+    Segment, ctc_decode, ctc_decode_f16, f16_to_f32, load_dict, pick_width, split_line,
+};
+use rkvm_vision::signature::{fingerprint, grid_changed, luma_grid};
 use rkvm_vision::{OcrOptions, Rect};
 
 fn tb(x0: f32, y0: f32, x1: f32, y1: f32) -> TextBox {
@@ -156,23 +160,63 @@ fn nv12_converts_with_row_padding() {
         y[row * stride..row * stride + w].copy_from_slice(&[16, 235, 126, 82]);
     }
     let uv = vec![128u8; stride];
-    let img = RgbImage::from_nv12(w as u32, h as u32, &y, stride, &uv, stride).expect("convert");
+    let frame = Nv12Frame::new(w as u32, h as u32, &y, stride, &uv, stride).expect("frame");
+    let img = RgbImage::from_nv12(&frame);
     let px: Vec<&[u8]> = img.data().chunks(3).take(4).collect();
     assert_eq!(px[0], [0, 0, 0]);
     assert_eq!(px[1], [255, 255, 255]);
     assert!(px[2].iter().all(|&c| c.abs_diff(128) <= 1));
-    assert!(RgbImage::from_nv12(3, 2, &y, stride, &uv, stride).is_err(), "odd width");
-    assert!(RgbImage::from_nv12(4, 2, &y[..4], stride, &uv, stride).is_err(), "short plane");
+    assert!(Nv12Frame::new(3, 2, &y, stride, &uv, stride).is_err(), "odd width");
+    assert!(Nv12Frame::new(4, 2, &y[..4], stride, &uv, stride).is_err(), "short plane");
+}
+
+#[test]
+fn nv12_sampled_in_place_matches_converting_first() {
+    let (w, h) = (16usize, 8usize);
+    let y: Vec<u8> = (0..w * h).map(|i| (16 + (i * 37) % 220) as u8).collect();
+    // Flat chroma: converting first takes the nearest chroma sample while
+    // sampling in place interpolates it, so only the luma detail is compared.
+    let uv: Vec<u8> = (0..w * h / 2).map(|i| if i % 2 == 0 { 100 } else { 150 }).collect();
+    let frame = Nv12Frame::new(w as u32, h as u32, &y, w, &uv, w).expect("frame");
+    let rgb = RgbImage::from_nv12(&frame);
+    let src = RectF { x0: 0.0, y0: 0.0, x1: w as f32, y1: h as f32 };
+    let (mut a, mut b) = (vec![0u8; w * h * 3], vec![0u8; w * h * 3]);
+    sample_bgr(&frame, src, w, h, &mut a, w);
+    sample_bgr(&rgb, src, w, h, &mut b, w);
+    for (pa, pb) in a.chunks(3).zip(b.chunks(3)) {
+        assert!(pa.iter().zip(pb).all(|(x, y)| x.abs_diff(*y) <= 2), "{pa:?} vs {pb:?}");
+    }
 }
 
 #[test]
 fn bilinear_sampling_writes_bgr_inside_the_patch_only() {
     let img = RgbImage::new(2, 1, vec![10, 20, 30, 50, 60, 70]).expect("image");
     let mut out = vec![7u8; 3 * 3];
-    img.sample_bgr(RectF { x0: 0.0, y0: 0.0, x1: 2.0, y1: 1.0 }, 1, 1, &mut out, 3);
+    sample_bgr(&img, RectF { x0: 0.0, y0: 0.0, x1: 2.0, y1: 1.0 }, 1, 1, &mut out, 3);
     assert_eq!(&out[..3], &[50, 40, 30], "midpoint average, channels reversed");
     assert!(out[3..].iter().all(|&v| v == 7));
     assert!(RgbImage::new(2, 2, vec![0; 3]).is_err());
+}
+
+#[test]
+fn large_patches_are_sampled_in_parallel_identically() {
+    let (w, h) = (700usize, 400usize);
+    let data: Vec<u8> = (0..w * h * 3).map(|i| (i % 251) as u8).collect();
+    let img = RgbImage::new(w as u32, h as u32, data).expect("image");
+    let src = RectF { x0: 3.5, y0: 1.25, x1: 650.0, y1: 390.0 };
+    let mut big = vec![0u8; w * h * 3];
+    sample_bgr(&img, src, w, h, &mut big, w);
+    let mut row = vec![0u8; w * 3];
+    for oy in [0usize, 133, 399] {
+        let band = RectF {
+            y0: src.y0 + (src.y1 - src.y0) * oy as f32 / h as f32,
+            y1: src.y0 + (src.y1 - src.y0) * (oy + 1) as f32 / h as f32,
+            ..src
+        };
+        sample_bgr(&img, band, w, 1, &mut row, w);
+        let got = &big[oy * w * 3..(oy + 1) * w * 3];
+        assert!(got.iter().zip(&row).all(|(a, b)| a.abs_diff(*b) <= 1), "row {oy}");
+    }
 }
 
 #[test]
@@ -187,10 +231,77 @@ fn blank_columns_follow_ink() {
     }
     let img = RgbImage::new(w, h, data).expect("image");
     assert_eq!(
-        img.blank_columns(Rect::new(0, 0, w, h)),
+        blank_columns(&img, Rect::new(0, 0, w, h)),
         vec![true, false, true, true, false, true]
     );
-    assert!(img.blank_columns(Rect::new(10, 10, 2, 2)).is_empty());
+    assert!(blank_columns(&img, Rect::new(10, 10, 2, 2)).is_empty());
+}
+
+#[test]
+fn half_precision_decodes_like_f32() {
+    for (bits, value) in [
+        (0x3c00u16, 1.0f32),
+        (0x3800, 0.5),
+        (0x0000, 0.0),
+        (0xc000, -2.0),
+        (0x0001, 5.960_464_5e-8),
+        (0x7bff, 65504.0),
+    ] {
+        assert_eq!(f16_to_f32(bits), value, "{bits:#06x}");
+    }
+    let dict: Vec<String> = ["a", "b"].iter().map(|s| s.to_string()).collect();
+    // blank, a, a, blank, b over 4 classes (blank, a, b, space)
+    let probs = [
+        [0.9f32, 0.05, 0.03, 0.02],
+        [0.1, 0.8, 0.05, 0.05],
+        [0.1, 0.7, 0.1, 0.1],
+        [0.6, 0.2, 0.1, 0.1],
+        [0.1, 0.1, 0.75, 0.05],
+    ];
+    let flat: Vec<f32> = probs.iter().flatten().copied().collect();
+    let half: Vec<u16> = flat.iter().map(|&p| to_f16(p)).collect();
+    let (text, score) = ctc_decode(&flat, 5, 4, &dict);
+    let (text16, score16) = ctc_decode_f16(&half, 5, 4, &dict);
+    assert_eq!(text, "ab");
+    assert_eq!(text16, text);
+    assert!((score - score16).abs() < 1e-3);
+}
+
+/// f32 to half for test inputs (normal values only).
+fn to_f16(v: f32) -> u16 {
+    let bits = v.to_bits();
+    let exp = ((bits >> 23) & 0xff) as i32 - 127 + 15;
+    if v == 0.0 || exp <= 0 {
+        return 0;
+    }
+    ((exp as u16) << 10) | ((bits >> 13) & 0x3ff) as u16
+}
+
+#[test]
+fn detector_shape_is_the_cheapest_cover() {
+    let shapes = [(640, 224), (1920, 448), (1920, 1088)];
+    // A 1080p screen: three 1920x448 strips, one round on three cores.
+    assert_eq!(choose_shape(&shapes, 1920, 1080, 96, 3), Some(1));
+    // A small region fits one small tile.
+    assert_eq!(choose_shape(&shapes, 400, 150, 96, 3), Some(0));
+    // A 1600x200 strip: three small tiles in one round beat one big one.
+    assert_eq!(choose_shape(&shapes, 1600, 200, 96, 3), Some(0));
+    assert_eq!(choose_shape(&[(64, 64)], 100, 100, 96, 3), None, "tile not larger than overlap");
+}
+
+#[test]
+fn fingerprint_changes_with_one_pixel_only() {
+    let (w, h, stride) = (37u32, 5u32, 40usize);
+    let all = Rect::new(0, 0, w, h);
+    let mut y = vec![9u8; stride * h as usize];
+    let a = fingerprint(&y, stride, all);
+    let corner = fingerprint(&y, stride, Rect::new(0, 0, 8, 2));
+    y[stride * 2 + 38] = 1; // row padding is ignored
+    assert_eq!(fingerprint(&y, stride, all), a);
+    y[stride * 4 + 36] = 10;
+    assert_ne!(fingerprint(&y, stride, all), a);
+    assert_eq!(fingerprint(&y, stride, Rect::new(0, 0, 8, 2)), corner, "change outside the rect");
+    assert_ne!(fingerprint(&y, stride, Rect::new(0, 0, w - 1, h)), fingerprint(&y, stride, all));
 }
 
 #[test]
@@ -221,4 +332,8 @@ fn rect_clamping_and_options_json() {
     assert_eq!(opts.region, Some(Rect::new(1, 2, 3, 4)));
     let empty: OcrOptions = serde_json::from_value(serde_json::json!({})).expect("defaults");
     assert_eq!(empty, OcrOptions::default());
+    assert_eq!(empty.detail, rkvm_vision::Detail::Auto);
+    let waits: OcrOptions =
+        serde_json::from_value(serde_json::json!({ "waitStableMs": 500 })).expect("wait");
+    assert_eq!(waits.wait_stable_ms, Some(500));
 }

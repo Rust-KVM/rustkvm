@@ -477,6 +477,13 @@ pub fn create_default_registry() -> RpcRegistry {
             Ok(serde_json::to_value(crate::vision::find_screen_text(p).await?)?)
         })
     });
+    registry.register_async("waitForText", |params| {
+        Box::pin(async move {
+            let p: crate::vision::WaitForTextParams =
+                serde_json::from_value(params.ok_or(anyhow!("Missing params"))?)?;
+            Ok(serde_json::to_value(crate::vision::wait_for_text(p).await?)?)
+        })
+    });
     registry.register_async("waitScreenStable", |params| {
         Box::pin(async move {
             let p: crate::vision::WaitStableParams =

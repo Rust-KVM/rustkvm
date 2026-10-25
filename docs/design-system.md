@@ -158,6 +158,20 @@ until the user picks one. `src/theme.rs` flips it from the sidebar.
   strip.
 - **Other dialogs** (OCR) sit above the content on a scrim that starts right
   of the rail.
+- **OCR dialog** (`ocr.rs` state, markup in `app.rs`). Title "识别到的文字". A
+  status line (`.ocr-status`, `aria-live`) under the title says what is
+  happening, never a blank box:
+  - reading: spinner + "正在识别屏幕文字…"; before the first finished read
+    of the page it adds that the models load first and take a few seconds;
+  - done: "56 行 · 1.2 秒", the time the user waited, plus "· 全分辨率" when
+    the device re-read at native resolution and "· 画面未变，沿用上次结果"
+    when it answered from its cache; zero lines says so in words;
+  - errors are actionable: no models installed points to docs/vision.md and
+    the install path; other device errors show the device message.
+  The text well (textarea, mono) appears only when there is text. Actions:
+  关闭 (secondary), 重新识别 (secondary, disabled while reading), 复制
+  (primary, disabled without text); "已复制" joins the status line. Esc
+  closes; a read still running when the dialog closes is dropped.
 
 Remote-desktop titlebar actions, in order: Num/Caps/Scroll LED badges |
 mouse mode (absolute/relative) · quality − % + · audio | Ctrl+Alt+Del · OCR |

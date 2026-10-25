@@ -134,6 +134,7 @@ tryUpdate
 tryUpdateComponents
 typeText
 unmountImage
+waitForText
 waitScreenStable
 wakeHost
 wheelReport

@@ -83,5 +83,5 @@ aarch64-unknown-linux-gnu --release -p rkvm-vision --example ocr_image`, then
 | `librknnrt.so` 2.5.0 | [airockchip/rknn-toolkit2](https://github.com/airockchip/rknn-toolkit2) `rknpu2/runtime/Linux/librknn_api/aarch64` | Rockchip **RKNN SDK License**: closed-source binary, royalty-free use and redistribution for products built on Rockchip chips, no reverse engineering. Shipped next to the models with its licence text, never inside the app binary. |
 | `rknn-toolkit2` 2.5.0 | PyPI | Same RKNN SDK License; used only on the build host to convert models. |
 | PP-OCRv4 models and dictionary | PaddleOCR via rknn_model_zoo | Apache-2.0 |
-| `rknpu2`, `rknpu2-sys` crates | crates.io | MIT OR Apache-2.0 |
+| `rknpu2-sys` crate (C types) | crates.io | MIT OR Apache-2.0 |
 | RKNPU kernel driver | Rockchip / FriendlyELEC kernel | GPL-2.0 |
