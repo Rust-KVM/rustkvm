@@ -110,6 +110,9 @@ const HID_WARN_INTERVAL: Duration = Duration::from_secs(5);
 /// flag. Bounds how long `suspend_io` takes.
 const READER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+/// How long `resume_io` waits for the keyboard node to reappear after a bind.
+const HIDG_NODE_WAIT: Duration = Duration::from_secs(5);
+
 const HID_DEV_KEYBOARD: usize = 0;
 const HID_DEV_ABS_MOUSE: usize = 1;
 const HID_DEV_REL_MOUSE: usize = 2;
@@ -422,6 +425,11 @@ impl Hid {
     /// Reopens the LED reader and lets input reports through again after `suspend_io`.
     pub fn resume_io(&self) -> anyhow::Result<()> {
         self.io_suspended.store(false, Ordering::Release);
+        // After a UDC bind the /dev/hidgN nodes are recreated by mdev a moment later.
+        let deadline = Instant::now() + HIDG_NODE_WAIT;
+        while !Path::new(&self.keyboard_path).exists() && Instant::now() < deadline {
+            std::thread::sleep(READER_POLL_INTERVAL);
+        }
         self.open_keyboard_hid_file()?;
         info!("HID I/O resumed");
         Ok(())
