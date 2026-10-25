@@ -221,7 +221,7 @@ main.rs                  # WASM entry: panic hook + tracing-wasm + mount Leptos 
 ├── net/                 # peer.rs (WebRTC PeerConnection), rest.rs (HTTP), upload.rs (virtual media)
 ├── hid/                 # keymap.rs (re-exports rkvm_proto::keymap) + mod.rs (keyboard/mouse → hidrpc via rkvm-proto)
 ├── terminal.rs          # vt100 terminal view
-├── ocr.rs               # screen OCR via Tesseract.js (JS interop, CDN-loaded)
+├── ocr.rs               # screen OCR button: device-side readScreenText RPC (NPU)
 ├── settings.rs / settings_advanced.rs  # settings dialog sections
 ├── settings_nav.rs                      # settings dialog pages, search
 └── util.rs

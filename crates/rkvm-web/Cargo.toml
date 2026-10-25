@@ -66,8 +66,6 @@ web-sys = { version = "0.3", features = [
     "HtmlInputElement",
     "HtmlTextAreaElement",
     "HtmlSelectElement",
-    "HtmlCanvasElement",
-    "CanvasRenderingContext2d",
     "Navigator",
     "WebSocket",
     "Node",

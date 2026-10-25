@@ -112,7 +112,7 @@ The web UI is a single-page app served by the device itself.
 | Area | What you get |
 | --- | --- |
 | **Video view** | The live target screen. Click to capture keyboard and mouse; switch between absolute and relative pointer. |
-| **Toolbar** | Fullscreen, Ctrl+Alt+Del, stream quality up and down, device audio, OCR copy of on-screen text (Tesseract.js), serial terminal, reboot, settings. |
+| **Toolbar** | Fullscreen, Ctrl+Alt+Del, stream quality up and down, device audio, OCR copy of on-screen text (on the device NPU, Chinese and English; see docs/vision.md), serial terminal, reboot, settings. |
 | **Status indicators** | Caps / Num / Scroll Lock LEDs reported by the target. |
 | **Settings drawer** | Features (USB emulation, mass storage, jiggler), virtual media, USB devices, video codec and sleep, EDID, keyboard layout, network (DHCP / static), Wake-on-LAN, MQTT, display rotation and backlight, SSH key, password, log level, About. |
 | **Advanced settings** | ATX and DC power with restore policy, extension selection, keyboard macros, serial console, TLS (self-signed or custom), Tailscale control URL, cloud, developer mode, factory reset. |
