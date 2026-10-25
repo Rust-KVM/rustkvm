@@ -43,3 +43,23 @@ pub fn luma_grid(
 pub fn grid_changed(a: &[u8], b: &[u8], threshold: u8) -> bool {
     a.len() != b.len() || a.iter().zip(b).any(|(&x, &y)| x.abs_diff(y) > threshold)
 }
+
+/// A hash of every pixel of a `width`×`height` luma plane: equal only when
+/// the picture is the same, down to one pixel.
+pub fn fingerprint(y: &[u8], stride: usize, width: usize, height: usize) -> u64 {
+    const K: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut hash = (width as u64) << 32 | height as u64;
+    for row in y.chunks(stride.max(1)).take(height) {
+        let row = &row[..width.min(row.len())];
+        let mut words = row.chunks_exact(8);
+        for word in &mut words {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(word);
+            hash = (hash ^ u64::from_le_bytes(bytes)).wrapping_mul(K).rotate_left(29);
+        }
+        for &b in words.remainder() {
+            hash = (hash ^ u64::from(b)).wrapping_mul(K).rotate_left(29);
+        }
+    }
+    hash
+}

@@ -210,3 +210,29 @@ pub fn reading_order(boxes: &mut Vec<TextBox>) {
         boxes.extend(row);
     }
 }
+
+/// Detector passes cost about this many input pixels each on top of their
+/// size (input conversion, output copy, post-processing).
+const PASS_OVERHEAD_PIXELS: u64 = 50_000;
+
+/// Picks the detector input shape that covers a `width`×`height` area
+/// soonest on `cores` parallel NPU cores: tiles run in rounds of `cores`,
+/// and a round takes as long as one tile of that shape.
+pub fn choose_shape(
+    shapes: &[(u32, u32)],
+    width: u32,
+    height: u32,
+    overlap: u32,
+    cores: usize,
+) -> Option<usize> {
+    shapes
+        .iter()
+        .enumerate()
+        .filter(|(_, (w, h))| *w > overlap && *h > overlap)
+        .min_by_key(|&(_, &(w, h))| {
+            let tiles = plan_tiles(width, height, w, h, overlap).len();
+            let rounds = tiles.div_ceil(cores.max(1)) as u64;
+            (rounds * (u64::from(w) * u64::from(h) + PASS_OVERHEAD_PIXELS), tiles)
+        })
+        .map(|(i, _)| i)
+}

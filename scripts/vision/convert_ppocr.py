@@ -1,6 +1,8 @@
 """Converts PP-OCRv4 ONNX models to RKNN for the RK3588 NPU.
 
-det.rknn         detection, 1088x1920 input (one 1080p screen per pass), INT8
+det_<W>x<H>.rknn detection, INT8: 1920x448 strips (a 1080p screen is three
+                 overlapping strips, one per NPU core) and 640x224 tiles for
+                 small regions; the app picks the shape that costs least
 rec_<W>.rknn     recognition, 48xW input, FP16; the app picks the narrowest
                  width that fits a line and splits longer lines at gaps
 
@@ -17,16 +19,21 @@ import sys
 import tempfile
 
 import onnx
-from onnx import shape_inference
+from onnx import helper, shape_inference
 from rknn.api import RKNN
 
-DET_SHAPE = (1088, 1920)
+DET_SHAPES = ((448, 1920), (224, 640))
 REC_HEIGHT = 48
 REC_WIDTHS = (320, 640, 1280)
 
 
-def reshape_onnx(src, dst, height, width):
-    """Writes a copy of `src` whose single NCHW input is height x width."""
+def reshape_onnx(src, dst, height, width, output_4d=False):
+    """Writes a copy of `src` whose single NCHW input is height x width.
+
+    With `output_4d` the (N, T, C) output gets a unit axis, (N, T, 1, C).
+    The NPU computes the recognizer head in that shape, and rknn-toolkit2
+    otherwise appends a Reshape back to 3D that runs on the CPU.
+    """
     model = onnx.load(src)
     if len(model.graph.input) != 1:
         sys.exit(f"{src}: expected one input, found {len(model.graph.input)}")
@@ -35,6 +42,13 @@ def reshape_onnx(src, dst, height, width):
     dims[2].dim_value = height
     dims[3].ClearField("dim_param")
     dims[3].dim_value = width
+    if output_4d:
+        output = model.graph.output[0]
+        # The models are opset 12, where Unsqueeze takes its axes as an attribute.
+        model.graph.node.append(
+            helper.make_node("Unsqueeze", [output.name], ["output_4d"], axes=[2])
+        )
+        output.name = "output_4d"
     # Drop the stale intermediate and output shapes so inference redoes them.
     del model.graph.value_info[:]
     for output in model.graph.output:
@@ -43,11 +57,11 @@ def reshape_onnx(src, dst, height, width):
     onnx.save(model, dst)
 
 
-def build(onnx_path, out, input_size, mean, std, dataset=None):
+def build(onnx_path, out, input_size, mean, std, dataset=None, output_4d=False):
     _, _, height, width = input_size
     with tempfile.TemporaryDirectory() as tmp:
         reshaped = os.path.join(tmp, "model.onnx")
-        reshape_onnx(onnx_path, reshaped, height, width)
+        reshape_onnx(onnx_path, reshaped, height, width, output_4d)
         rknn = RKNN(verbose=False)
         rknn.config(mean_values=[mean], std_values=[std], target_platform="rk3588")
         if rknn.load_onnx(model=reshaped) != 0:
@@ -68,14 +82,15 @@ def main():
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
-    build(
-        args.det,
-        f"{args.out}/det.rknn",
-        (1, 3, *DET_SHAPE),
-        [123.675, 116.28, 103.53],
-        [58.395, 57.12, 57.375],
-        dataset=args.dataset,
-    )
+    for height, width in DET_SHAPES:
+        build(
+            args.det,
+            f"{args.out}/det_{width}x{height}.rknn",
+            (1, 3, height, width),
+            [123.675, 116.28, 103.53],
+            [58.395, 57.12, 57.375],
+            dataset=args.dataset,
+        )
     for width in REC_WIDTHS:
         build(
             args.rec,
@@ -83,6 +98,7 @@ def main():
             (1, 3, REC_HEIGHT, width),
             [127.5, 127.5, 127.5],
             [127.5, 127.5, 127.5],
+            output_4d=True,
         )
 
 
