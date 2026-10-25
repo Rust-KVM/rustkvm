@@ -497,17 +497,29 @@ pub async fn shutdown_video_pipeline() {
 /// The next raw (NV12) frame from the capture pipeline, taken before the
 /// encoder valve so it works while no viewer is connected.
 pub async fn capture_raw_frame() -> anyhow::Result<gstreamer::Sample> {
-    let rx = PIPELINE_MANAGER
-        .lock()
-        .await
-        .as_ref()
-        .map(PipelineManager::request_raw_frame)
-        .ok_or_else(|| anyhow::anyhow!("Pipeline not initialized"))?;
-    tokio::time::timeout(Duration::from_secs(2), rx)
-        .await
-        .map_err(|_| anyhow::anyhow!("No video frame within 2s"))?
-        .map_err(|_| anyhow::anyhow!("Video pipeline stopped before a frame arrived"))
+    // A pipeline rebuild (restartVideoPipeline, signal change, self-heal) briefly
+    // leaves no pipeline or drops pending requests; wait it out instead of failing
+    // screenshots and OCR that land in that window.
+    let deadline = tokio::time::Instant::now() + RAW_FRAME_RESTART_GRACE;
+    loop {
+        let rx = PIPELINE_MANAGER.lock().await.as_ref().map(PipelineManager::request_raw_frame);
+        let err = match rx {
+            None => anyhow::anyhow!("Pipeline not initialized"),
+            Some(rx) => match tokio::time::timeout(Duration::from_secs(2), rx).await {
+                Ok(Ok(sample)) => return Ok(sample),
+                Ok(Err(_)) => anyhow::anyhow!("Video pipeline stopped before a frame arrived"),
+                Err(_) => anyhow::bail!("No video frame within 2s"),
+            },
+        };
+        if tokio::time::Instant::now() >= deadline {
+            return Err(err);
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }
+
+/// How long `capture_raw_frame` waits for a pipeline that is being rebuilt.
+const RAW_FRAME_RESTART_GRACE: Duration = Duration::from_secs(5);
 
 pub async fn capture_screenshot_jpeg() -> anyhow::Result<bytes::Bytes> {
     let sample = capture_raw_frame().await?;
