@@ -14,7 +14,7 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024
 const INSTRUCTIONS: &str = "RustKVM controls a physical computer over HDMI capture and USB HID. \
 Call screenshot to see the screen, then type_text / press_combo / mouse_click to act. \
 read_screen_text reads on-screen text with the device NPU (cheaper than a screenshot), \
-find_text returns click coordinates for a piece of text, and wait_until_stable waits for the screen to settle. \
+find_text returns click coordinates for a piece of text, wait_for_text waits for text to appear, and wait_until_stable waits for the screen to settle. \
 Pointer coordinates are video pixels unless normalized=true (0..32767). \
 get_health reports video, USB, network and failsafe state. \
 rpc_call reaches any device JSON-RPC method listed by list_rpc_methods.";
@@ -111,6 +111,7 @@ pub fn rpc_method_for_tool(name: &str) -> Option<&'static str> {
         "read_screen_text" => "readScreenText",
         "find_text" => "findScreenText",
         "wait_until_stable" => "waitScreenStable",
+        "wait_for_text" => "waitForText",
         _ => return None,
     })
 }
@@ -230,12 +231,14 @@ pub fn tool_definitions() -> Vec<Value> {
             json!({
                 "type": "object",
                 "properties": {
-                    "detail": {
-                        "type": "string",
-                        "enum": ["fast", "full"],
-                        "description": "fast scales the screen to about 1080p first; full reads small text on 4K screens, slower"
-                    },
-                    "region": ocr_region()
+                    "detail": ocr_detail(),
+                    "region": ocr_region(),
+                    "waitStableMs": {
+                        "type": "integer",
+                        "minimum": 100,
+                        "maximum": 60000,
+                        "description": "First wait until the screen has not changed for this long"
+                    }
                 }
             }),
             true,
@@ -247,7 +250,24 @@ pub fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "text": { "type": "string", "description": "Case and whitespace are ignored" },
-                    "detail": { "type": "string", "enum": ["fast", "full"] },
+                    "detail": ocr_detail(),
+                    "region": ocr_region()
+                },
+                "required": ["text"]
+            }),
+            true,
+        ),
+        tool(
+            "wait_for_text",
+            "Wait until text appears on the screen (on-device OCR, re-read while the screen changes) and \
+             return where to click it",
+            json!({
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string", "description": "Case and whitespace are ignored" },
+                    "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 300000 },
+                    "intervalMs": { "type": "integer", "minimum": 100, "maximum": 10000 },
+                    "detail": ocr_detail(),
                     "region": ocr_region()
                 },
                 "required": ["text"]
@@ -281,6 +301,15 @@ pub fn tool_definitions() -> Vec<Value> {
             false,
         ),
     ]
+}
+
+fn ocr_detail() -> Value {
+    json!({
+        "type": "string",
+        "enum": ["auto", "fast", "full"],
+        "description": "auto (default) reads at about 1080p and re-reads at native resolution when \
+                        the text is small; fast never re-reads; full always reads at native resolution"
+    })
 }
 
 fn ocr_region() -> Value {

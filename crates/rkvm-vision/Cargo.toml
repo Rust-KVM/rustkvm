@@ -12,7 +12,8 @@ workspace = true
 [dependencies]
 anyhow.workspace     = true
 libloading.workspace = true
-rknpu2.workspace     = true
+rknpu2-sys.workspace = true
+rkvm-proto.workspace = true
 serde.workspace      = true
 tracing.workspace    = true
 

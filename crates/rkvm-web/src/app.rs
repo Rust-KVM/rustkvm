@@ -60,7 +60,9 @@ pub fn App() -> impl IntoView {
     // back in as an overlay while the pointer is on it.
     let focus_mode = RwSignal::new(false);
     let peek = RwSignal::new(false);
-    let ocr_text = RwSignal::new(Option::<String>::None);
+    let ocr_view = RwSignal::new(Option::<crate::ocr::OcrView>::None);
+    // Whether a read has finished in this page, i.e. the models are loaded.
+    let ocr_loaded = RwSignal::new(false);
 
     let rpc_store = StoredValue::new_local(None::<Rc<RpcClient>>);
     let peer_store = StoredValue::new_local(None::<Rc<peer::Peer>>);
@@ -280,25 +282,26 @@ pub fn App() -> impl IntoView {
         });
     };
 
+    let ocr_copy_msg = RwSignal::new(String::new());
     let do_ocr = move |_| {
         let Some(client) = rpc_store.get_value() else { return };
-        ocr_text
-            .set(Some(i.t_now("正在识别屏幕文字…", "Reading text from the screen…").to_string()));
+        if ocr_view.get_untracked().is_some_and(|v| v.is_busy()) {
+            return;
+        }
+        ocr_copy_msg.set(String::new());
+        ocr_view.set(Some(crate::ocr::OcrView::Reading { first: !ocr_loaded.get_untracked() }));
         spawn_local(async move {
-            match crate::ocr::recognize(&client).await {
-                Ok(text) if text.trim().is_empty() => ocr_text.set(Some(
-                    i.t_now("屏幕上没有识别到文字。", "No text found on the screen.").to_string(),
-                )),
-                Ok(text) => ocr_text.set(Some(text)),
-                Err(e) => ocr_text.set(Some(format!(
-                    "{}{e}",
-                    i.t_now("无法识别文字：", "Could not read text: ")
-                ))),
+            let view = crate::ocr::recognize(&client).await;
+            if matches!(view, crate::ocr::OcrView::Done { .. }) {
+                ocr_loaded.set(true);
+            }
+            // The dialog may have been closed while the device was reading.
+            if ocr_view.get_untracked().is_some() {
+                ocr_view.set(Some(view));
             }
         });
     };
 
-    let ocr_copy_msg = RwSignal::new(String::new());
     let ocr_ref = NodeRef::<html::Div>::new();
     // Take focus when the dialog opens so Esc reaches it, not the host.
     Effect::new(move |_| {
@@ -307,7 +310,9 @@ pub fn App() -> impl IntoView {
         }
     });
     let copy_ocr = move |_| {
-        let text = ocr_text.get_untracked().unwrap_or_default();
+        let Some(text) = ocr_view.get_untracked().and_then(|v| v.text().map(str::to_string)) else {
+            return;
+        };
         spawn_local(async move {
             ocr_copy_msg.set(match crate::util::copy_text(&text).await {
                 Ok(()) => i.t_now("已复制", "Copied").to_string(),
@@ -663,7 +668,7 @@ pub fn App() -> impl IntoView {
                 />
             </Show>
 
-            <Show when=move || ocr_text.get().is_some()>
+            <Show when=move || ocr_view.get().is_some()>
                 <div class="scrim"></div>
                 <div
                     class="dialog"
@@ -675,27 +680,57 @@ pub fn App() -> impl IntoView {
                     on:keydown=move |ev: web_sys::KeyboardEvent| {
                         if ev.key() == "Escape" {
                             ocr_copy_msg.set(String::new());
-                            ocr_text.set(None);
+                            ocr_view.set(None);
                         }
                     }
                 >
                     <div class="card">
                         <h1 class="card-title">{move || i.t("识别到的文字", "Recognized text")}</h1>
-                        <p class="card-sub">{move || ocr_copy_msg.get()}</p>
-                        <textarea rows="10" readonly=true prop:value=move || {
-                            ocr_text.get().unwrap_or_default()
-                        }></textarea>
+                        <p class="card-sub ocr-status" aria-live="polite">
+                            <Show when=move || ocr_view.get().is_some_and(|v| v.is_busy())>
+                                <span class="spinner"></span>
+                            </Show>
+                            {move || {
+                                let copied = ocr_copy_msg.get();
+                                let status = ocr_view.get().map(|v| v.status(i)).unwrap_or_default();
+                                if copied.is_empty() { status } else { format!("{status} · {copied}") }
+                            }}
+                        </p>
+                        <Show when=move || ocr_view.get().is_some_and(|v| v.text().is_some())>
+                            <textarea rows="10" readonly=true prop:value=move || {
+                                ocr_view
+                                    .get()
+                                    .and_then(|v| v.text().map(str::to_string))
+                                    .unwrap_or_default()
+                            }></textarea>
+                        </Show>
                         <div class="actions">
                             <Button
                                 variant=Variant::Secondary
                                 on:click=move |_| {
                                     ocr_copy_msg.set(String::new());
-                                    ocr_text.set(None);
+                                    ocr_view.set(None);
                                 }
                             >
                                 {move || i.t("关闭", "Close")}
                             </Button>
-                            <Button on:click=copy_ocr>{move || i.t("复制", "Copy")}</Button>
+                            <Button
+                                variant=Variant::Secondary
+                                disabled=Signal::derive(move || {
+                                    ocr_view.get().is_none_or(|v| v.is_busy())
+                                })
+                                on:click=do_ocr
+                            >
+                                {move || i.t("重新识别", "Read again")}
+                            </Button>
+                            <Button
+                                disabled=Signal::derive(move || {
+                                    ocr_view.get().is_none_or(|v| v.text().is_none())
+                                })
+                                on:click=copy_ocr
+                            >
+                                {move || i.t("复制", "Copy")}
+                            </Button>
                         </div>
                     </div>
                 </div>

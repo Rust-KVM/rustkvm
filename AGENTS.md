@@ -42,7 +42,7 @@ rustkvm/                     # root workspace
     rkvm-core/               # startup wall-clock sync
     rkvm-net/                # mDNS, WoL, Tailscale CLI, local-IP enumeration
     rkvm-proto/              # shared protocol types (hidrpc binary + JSON-RPC), used by app + rkvm-web
-    rkvm-vision/             # screen OCR on the RK3588 NPU (PP-OCRv4 via rknpu2, librknnrt loaded at run time)
+    rkvm-vision/             # screen OCR on the RK3588 NPU (PP-OCRv4, librknnrt dlopened at run time)
     rkvm-web/                # Leptos 0.8 CSR WASM frontend (excluded; own Cargo.lock + toolchain)
   assets/images/             # disk images → BuiltinImages
   docs/                      # ReleaseNote.md
@@ -138,7 +138,7 @@ lib.rs                   # module roots (see below)
 ├── dev_mode.rs          # Dev mode marker file + SSH keys
 ├── network.rs           # NetworkConfig, hostname init, 30s state broadcast
 ├── mcp.rs               # MCP server (`POST /mcp`, protected): initialize, tools/list, tools/call → RpcRegistry::call; screenshot returns a JPEG image block
-├── vision.rs            # readScreenText/findScreenText/waitScreenStable: raw NV12 frame → rkvm_vision::Engine (lazy, models in /userdata/rustkvm/vision)
+├── vision.rs            # readScreenText/findScreenText/waitForText/waitScreenStable: raw NV12 frame → rkvm_vision::Engine (lazy, models in /userdata/rustkvm/vision); last read cached by frame fingerprint
 ├── hidrpc/              # Binary HID-RPC over WebRTC data channels
 │   ├── codec.rs         # `pub use rkvm_proto::hidrpc::*` (framing + zero-copy KeyboardReport)
 │   ├── dispatcher.rs    # In-process routing to USB HID; `play_macro` runs keyboard macros (typeText/pressCombo/executeKeyboardMacro RPCs)
@@ -185,16 +185,18 @@ lib.rs                   # exposes `error` (Error/Result), `local_ip`, `mdns`, `
 
 ### `crates/rkvm-vision/src/`
 
-Screen OCR on the RK3588 NPU, used in-process by `app::vision`. `librknnrt.so` is `dlopen`ed through the `rknpu2` crate, so builds and hosts without it work; see [`docs/vision.md`](docs/vision.md) for models, licences and installation.
+Screen OCR on the RK3588 NPU, used in-process by `app::vision`. `librknnrt.so` is `dlopen`ed by `rknn.rs` (types from `rknpu2-sys`), so builds and hosts without it work; see [`docs/vision.md`](docs/vision.md) for models, licences and installation.
 
 ```
-lib.rs                   # re-exports Engine, RgbImage and the option/result types
-├── npu.rs               # Engine: det + rec models per NPU core, one worker thread each; tiling → detect → merge → recognize
-├── det.rs               # DB post-processing (components + unclip), tile plan, same-line box merge, reading order
-├── rec.rs               # dictionary, CTC decode (incl. space class), long-line split at blank columns, width buckets
-├── image.rs             # RgbImage: NV12 → RGB, bilinear BGR sampling into model inputs, blank-column profile
-├── signature.rs         # coarse luma grid for "has the screen changed"
-└── types.rs             # Detail, Rect, OcrOptions, TextLine, OcrResult (JSON camelCase)
+lib.rs                   # re-exports Engine, Frame, Nv12Frame, RgbImage and the option/result types
+├── rknn.rs              # thin librknnrt binding: contexts, core mask, shared internal memory, FP16 raw output
+├── npu.rs               # Engine: two workers per NPU core (det+rec, rec only) on a job queue; detector shape per call;
+│                        # auto = fast, then full for small text; CTC decode on the workers
+├── det.rs               # DB post-processing (components + unclip), tile plan, detector shape choice, box merge, reading order
+├── rec.rs               # dictionary, CTC decode (f32 and raw FP16, incl. space class), long-line split, width buckets
+├── image.rs             # Frame trait (RgbImage, Nv12Frame read in place), row-parallel bilinear BGR sampling, blank columns
+├── signature.rs         # coarse luma grid ("has the screen changed") and exact frame fingerprint (OCR cache)
+└── types.rs             # re-exports rkvm_proto::vision (Detail, Rect, OcrOptions, TextLine, OcrResult)
 ```
 
 ### `crates/rkvm-proto/src/`
@@ -205,7 +207,8 @@ Protocol types shared by the backend and the WASM frontend (no I/O, no platform 
 lib.rs                   # re-exports hidrpc + jsonrpc
 ├── hidrpc.rs            # binary HID-RPC: VERSION, MessageType, framing, KeyboardReport
 ├── keymap.rs            # DOM code/alias → HID usage, US-layout text → macro steps, key combos
-└── jsonrpc.rs           # JSON-RPC 2.0 request / response / error / event structs
+├── jsonrpc.rs           # JSON-RPC 2.0 request / response / error / event structs
+└── vision.rs            # screen OCR options and result (readScreenText), used by rkvm-vision and the OCR dialog
 ```
 
 ### `crates/rkvm-web/src/` (frontend, workspace-excluded)
@@ -221,7 +224,7 @@ main.rs                  # WASM entry: panic hook + tracing-wasm + mount Leptos 
 ├── net/                 # peer.rs (WebRTC PeerConnection), rest.rs (HTTP), upload.rs (virtual media)
 ├── hid/                 # keymap.rs (re-exports rkvm_proto::keymap) + mod.rs (keyboard/mouse → hidrpc via rkvm-proto)
 ├── terminal.rs          # vt100 terminal view
-├── ocr.rs               # screen OCR button: device-side readScreenText RPC (NPU)
+├── ocr.rs               # OCR dialog state: device-side readScreenText (NPU), progress, line count and time, actionable errors
 ├── settings.rs / settings_advanced.rs  # settings dialog sections
 ├── settings_nav.rs                      # settings dialog pages, search
 └── util.rs
@@ -336,4 +339,4 @@ nohup setsid /userdata/rustkvm/bin/rustkvm_app </dev/null >>/userdata/rustkvm/lo
 14. **Zero-copy invariants** — GStreamer→WebRTC path MUST stay zero-copy: `sample.buffer_owned() → into_mapped_buffer_readable() → bytes::Bytes::from_owner(mapped)`. Never `.to_vec()` a GStreamer mapped buffer.
 15. **Reboot semantics** — `reboot` RPC emits `willReboot` event, sleeps 250ms, then calls `/sbin/reboot`. Network ipv4-mode changes also emit `willReboot`.
 16. **Setup wizard** — `Config::default().local_auth_mode = ""`. `/device/status` returns `is_setup: false` → frontend triggers setup.
-17. **librknnrt is loaded at run time** — keep `rknpu2`'s `libloading` feature; linking `rknnrt` would make the app fail to start on devices or hosts without it. `rknpu2::RKNN::new_with_library` unwraps its own `dlopen`, and the app aborts on panic, so `rkvm_vision::Engine::load` opens the library once itself first and returns an error instead.
+17. **librknnrt is loaded at run time** — `rkvm_vision::rknn` `dlopen`s it and looks up every symbol up front, returning an error (never panicking) when one is missing; linking `rknnrt` would make the app fail to start on devices or hosts without it. `rknpu2-sys` is used for its C types only. Two librknnrt 2.5.0 traps: `rknn_dup_context` duplicates running at the same time overwrite each other's outputs (each worker loads its own contexts instead), and the GStreamer capture buffer is uncached, so OCR copies it once into a reused buffer before sampling (the video path itself stays zero-copy).

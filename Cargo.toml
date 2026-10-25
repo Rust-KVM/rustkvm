@@ -43,7 +43,7 @@ rkvm-core          = { path = "crates/rkvm-core" }
 rkvm-net           = { path = "crates/rkvm-net" }
 rkvm-proto         = { path = "crates/rkvm-proto" }
 rkvm-vision        = { path = "crates/rkvm-vision" }
-rknpu2             = { version = "0.0.9", features = ["rk3576", "libloading"] } # rk3576 is the RK3576/RK3588 runtime; libloading so librknnrt is found at run time, not link time
+rknpu2-sys         = { version = "0.0.2", features = ["libloading"] } # types only; librknnrt is dlopened at run time by rkvm-vision, so nothing links it
 rumqttc            = { version = "0.25.1", default-features = false, features = ["use-rustls"] }
 rust-embed         = "8.11.0"
 rustix             = { version = "1.1.4", default-features = false, features = ["pty", "fs", "termios", "net", "system"] }

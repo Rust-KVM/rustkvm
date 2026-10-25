@@ -113,3 +113,4 @@
 @keyframes termblink { 0%, 50% { background: var(--accent-soft); color: #141413; }
   50.01%, 100% { background: transparent; color: inherit; } }
 .term header .icon, .settings .close .icon { width: 16px; height: 16px; }
+.ocr-status { display: flex; align-items: center; gap: var(--space-2); min-height: 17px; }

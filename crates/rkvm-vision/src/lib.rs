@@ -6,9 +6,10 @@ pub mod det;
 pub mod image;
 pub mod npu;
 pub mod rec;
+pub mod rknn;
 pub mod signature;
 pub mod types;
 
-pub use image::RgbImage;
+pub use image::{Frame, Nv12Frame, RgbImage};
 pub use npu::Engine;
 pub use types::{Detail, OcrOptions, OcrResult, Rect, TextLine, Timings};
