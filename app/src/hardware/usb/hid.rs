@@ -3,13 +3,13 @@ use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use parking_lot::{Mutex, RwLock};
-use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
-use tracing::{trace, warn};
+use tracing::{info, trace, warn};
 
 pub const KEYBOARD_LED_MASK_NUM_LOCK: u8 = 1 << 0;
 pub const KEYBOARD_LED_MASK_CAPS_LOCK: u8 = 1 << 1;
@@ -106,6 +106,10 @@ const HID_WRITE_TIMEOUT: Duration = Duration::from_millis(100);
 
 const HID_WARN_INTERVAL: Duration = Duration::from_secs(5);
 
+/// How long the keyboard LED reader waits in poll() before re-checking its stop
+/// flag. Bounds how long `suspend_io` takes.
+const READER_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
 const HID_DEV_KEYBOARD: usize = 0;
 const HID_DEV_ABS_MOUSE: usize = 1;
 const HID_DEV_REL_MOUSE: usize = 2;
@@ -115,15 +119,18 @@ enum HidWriteCmd {
     AbsMouse([u8; 6]),
     AbsWheel([u8; 2]),
     RelMouse([u8; 4]),
+    /// Close every gadget fd, then acknowledge.
+    CloseFiles(mpsc::SyncSender<()>),
 }
 
 impl HidWriteCmd {
-    fn device_and_payload(&self) -> (usize, &[u8]) {
+    fn device_and_payload(&self) -> Option<(usize, &[u8])> {
         match self {
-            Self::Keyboard(b) => (HID_DEV_KEYBOARD, b.as_slice()),
-            Self::AbsMouse(b) => (HID_DEV_ABS_MOUSE, b.as_slice()),
-            Self::AbsWheel(b) => (HID_DEV_ABS_MOUSE, b.as_slice()),
-            Self::RelMouse(b) => (HID_DEV_REL_MOUSE, b.as_slice()),
+            Self::Keyboard(b) => Some((HID_DEV_KEYBOARD, b.as_slice())),
+            Self::AbsMouse(b) => Some((HID_DEV_ABS_MOUSE, b.as_slice())),
+            Self::AbsWheel(b) => Some((HID_DEV_ABS_MOUSE, b.as_slice())),
+            Self::RelMouse(b) => Some((HID_DEV_REL_MOUSE, b.as_slice())),
+            Self::CloseFiles(_) => None,
         }
     }
 }
@@ -138,7 +145,15 @@ struct HidWriter {
 impl HidWriter {
     fn run(mut self, rx: mpsc::Receiver<HidWriteCmd>) {
         while let Ok(cmd) = rx.recv() {
-            let (dev, payload) = cmd.device_and_payload();
+            if let HidWriteCmd::CloseFiles(ack) = &cmd {
+                self.files = [None, None, None];
+                // The requester may have timed out waiting; nothing to do then.
+                let _ = ack.send(());
+                continue;
+            }
+            let Some((dev, payload)) = cmd.device_and_payload() else {
+                continue;
+            };
             if let Err(e) = self.write_report(dev, payload) {
                 self.files[dev] = None;
                 let mut dropped = 0usize;
@@ -199,7 +214,15 @@ impl HidWriter {
 }
 
 fn poll_writable(fd: std::os::fd::RawFd, timeout: Duration) -> std::io::Result<bool> {
-    let mut pfd = libc::pollfd { fd, events: libc::POLLOUT, revents: 0 };
+    poll_fd(fd, libc::POLLOUT, timeout)
+}
+
+fn poll_fd(
+    fd: std::os::fd::RawFd,
+    events: libc::c_short,
+    timeout: Duration,
+) -> std::io::Result<bool> {
+    let mut pfd = libc::pollfd { fd, events, revents: 0 };
     let timeout_ms = timeout.as_millis().min(i32::MAX as u128) as libc::c_int;
     // SAFETY: `pfd` is a valid pollfd for the writer's open gadget fd and we
     // pass nfds=1 matching the single-element array.
@@ -221,8 +244,10 @@ pub struct Hid {
     write_tx: mpsc::SyncSender<HidWriteCmd>,
     last_full_warn: Mutex<Option<Instant>>,
 
-    keyboard_reader_cancel: Mutex<CancellationToken>,
-    keyboard_reader_handle: Mutex<Option<JoinHandle<()>>>,
+    /// Stop flag and thread of the keyboard LED reader, while it runs.
+    keyboard_reader: Mutex<Option<(Arc<AtomicBool>, JoinHandle<()>)>>,
+    /// Set while the UDC is unbound or being rebound: no gadget fd may be open then.
+    io_suspended: AtomicBool,
 
     keyboard_state: Arc<RwLock<KeyboardState>>,
     on_keyboard_state_change: RwLock<Option<Arc<KeyboardStateCallback>>>,
@@ -256,8 +281,8 @@ impl Hid {
             keyboard_path,
             write_tx,
             last_full_warn: Mutex::new(None),
-            keyboard_reader_cancel: Mutex::new(CancellationToken::new()),
-            keyboard_reader_handle: Mutex::new(None),
+            keyboard_reader: Mutex::new(None),
+            io_suspended: AtomicBool::new(false),
             keyboard_state: Arc::new(RwLock::new(KeyboardState::default())),
             on_keyboard_state_change: RwLock::new(None),
             keys_down: Mutex::new(KeysDownState::default()),
@@ -267,6 +292,10 @@ impl Hid {
 
     fn enqueue(&self, cmd: HidWriteCmd) -> anyhow::Result<()> {
         self.reset_user_input_time();
+        if self.io_suspended.load(Ordering::Acquire) {
+            trace!("HID I/O suspended; dropping input report");
+            return Ok(());
+        }
         match self.write_tx.try_send(cmd) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Full(_)) => {
@@ -291,7 +320,8 @@ impl Hid {
     }
 
     pub fn open_keyboard_hid_file(&self) -> anyhow::Result<()> {
-        if self.keyboard_reader_handle.lock().is_some() {
+        let mut reader = self.keyboard_reader.lock();
+        if reader.is_some() {
             return Ok(());
         }
 
@@ -299,58 +329,96 @@ impl Hid {
             anyhow::bail!("keyboard HID path not found: {}", self.keyboard_path);
         }
 
-        let mut cancel_guard = self.keyboard_reader_cancel.lock();
-        cancel_guard.cancel();
-        *cancel_guard = CancellationToken::new();
-        let reader_cancel = cancel_guard.clone();
-
-        let _ = self.keyboard_reader_handle.lock().take();
-
-        let mut file_for_read = OpenOptions::new().read(true).open(&self.keyboard_path)?;
+        // Non-blocking fd + poll with a timeout: the thread never sleeps inside
+        // f_hidg_read, so it can be stopped before the UDC is rebound (see `suspend_io`).
+        let mut file_for_read = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&self.keyboard_path)?;
         let on_change = self.on_keyboard_state_change.read().clone();
         let state_ref = Arc::clone(&self.keyboard_state);
+        let stop = Arc::new(AtomicBool::new(false));
+        let reader_stop = Arc::clone(&stop);
 
-        let handle = tokio::task::spawn_blocking(move || {
-            let mut buf = [0u8; 8];
-            loop {
-                if reader_cancel.is_cancelled() {
-                    trace!("keyboard reader cancelled");
-                    break;
-                }
-                match read_exact_at_least_one(&mut file_for_read, &mut buf) {
-                    Ok(n) => {
-                        trace!("read from keyboard hid: n={}", n);
-                        if n != 1 {
-                            continue;
-                        }
-                        let b = buf[0];
-                        if b & !KEYBOARD_LED_VALID_MASKS != 0 {
-                            trace!("ignored invalid LED bits: {:02x}", b);
-                            continue;
-                        }
-                        let new_state = parse_keyboard_state(b);
-                        let mut changed = false;
-                        {
-                            let mut guard = state_ref.write();
-                            if *guard != new_state {
-                                *guard = new_state;
-                                changed = true;
+        let handle =
+            std::thread::Builder::new().name("hid-kbd-reader".to_string()).spawn(move || {
+                let mut buf = [0u8; 8];
+                while !reader_stop.load(Ordering::Acquire) {
+                    let result =
+                        poll_fd(file_for_read.as_raw_fd(), libc::POLLIN, READER_POLL_INTERVAL)
+                            .and_then(
+                                |ready| if ready { file_for_read.read(&mut buf) } else { Ok(0) },
+                            );
+                    match result {
+                        Ok(1) => {
+                            let b = buf[0];
+                            if b & !KEYBOARD_LED_VALID_MASKS != 0 {
+                                trace!("ignored invalid LED bits: {:02x}", b);
+                                continue;
+                            }
+                            let new_state = parse_keyboard_state(b);
+                            let mut changed = false;
+                            {
+                                let mut guard = state_ref.write();
+                                if *guard != new_state {
+                                    *guard = new_state;
+                                    changed = true;
+                                }
+                            }
+                            if changed && let Some(cb) = &on_change {
+                                cb(new_state);
                             }
                         }
-                        if changed && let Some(cb) = &on_change {
-                            cb(new_state);
+                        Ok(n) => trace!("read from keyboard hid: n={}", n),
+                        Err(e)
+                            if matches!(
+                                e.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                            ) => {}
+                        Err(e) => {
+                            warn!("keyboard reader error: {}", e);
+                            for _ in 0..10 {
+                                if reader_stop.load(Ordering::Acquire) {
+                                    break;
+                                }
+                                std::thread::sleep(READER_POLL_INTERVAL);
+                            }
                         }
                     }
-                    Err(e) => {
-                        warn!("keyboard reader error: {}", e);
-                        std::thread::sleep(std::time::Duration::from_millis(1000));
-                        continue;
-                    }
                 }
-            }
-        });
+                trace!("keyboard reader stopped");
+            })?;
 
-        *self.keyboard_reader_handle.lock() = Some(handle);
+        *reader = Some((stop, handle));
+        Ok(())
+    }
+
+    /// Stops the LED reader and closes every gadget fd, and drops input reports until
+    /// `resume_io`. Must run before the UDC is unbound or rebound: the 6.1 f_hid
+    /// re-initialises its wait queues on bind, and a task still waiting on the old
+    /// queue corrupts the list when it wakes (kernel BUG in `f_hidg_read`).
+    pub fn suspend_io(&self) {
+        self.io_suspended.store(true, Ordering::Release);
+        if let Some((stop, handle)) = self.keyboard_reader.lock().take() {
+            stop.store(true, Ordering::Release);
+            if handle.join().is_err() {
+                warn!("keyboard reader thread panicked");
+            }
+        }
+        let (ack_tx, ack_rx) = mpsc::sync_channel(1);
+        if self.write_tx.send(HidWriteCmd::CloseFiles(ack_tx)).is_ok()
+            && ack_rx.recv_timeout(Duration::from_secs(10)).is_err()
+        {
+            warn!("HID writer did not close its files in time");
+        }
+        info!("HID I/O suspended");
+    }
+
+    /// Reopens the LED reader and lets input reports through again after `suspend_io`.
+    pub fn resume_io(&self) -> anyhow::Result<()> {
+        self.io_suspended.store(false, Ordering::Release);
+        self.open_keyboard_hid_file()?;
+        info!("HID I/O resumed");
         Ok(())
     }
 
@@ -417,17 +485,5 @@ impl Hid {
 
     fn reset_user_input_time(&self) {
         *self.last_user_input.lock() = Instant::now();
-    }
-}
-
-fn read_exact_at_least_one(file: &mut std::fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
-    let mut tmp = [0u8; 8];
-    match file.read(&mut tmp) {
-        Ok(0) => Ok(0),
-        Ok(n) => {
-            buf[..n].copy_from_slice(&tmp[..n]);
-            Ok(n)
-        }
-        Err(e) => Err(e),
     }
 }
