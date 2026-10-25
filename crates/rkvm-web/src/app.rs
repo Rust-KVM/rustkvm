@@ -281,11 +281,11 @@ pub fn App() -> impl IntoView {
     };
 
     let do_ocr = move |_| {
-        let Some(video) = video_store.get_value() else { return };
+        let Some(client) = rpc_store.get_value() else { return };
         ocr_text
             .set(Some(i.t_now("正在识别屏幕文字…", "Reading text from the screen…").to_string()));
         spawn_local(async move {
-            match crate::ocr::recognize(&video).await {
+            match crate::ocr::recognize(&client).await {
                 Ok(text) if text.trim().is_empty() => ocr_text.set(Some(
                     i.t_now("屏幕上没有识别到文字。", "No text found on the screen.").to_string(),
                 )),

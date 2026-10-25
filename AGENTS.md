@@ -25,10 +25,10 @@ cargo +nightly clippy --workspace --release --all-targets -- -D warnings
 
 ## Workspace layout
 
-Cargo workspace (`resolver = "2"`, `edition = "2024"`, MSRV `1.87`): one binary crate plus three internal crates. The WASM frontend is a **separate** crate, excluded from the workspace.
+Cargo workspace (`resolver = "2"`, `edition = "2024"`, MSRV `1.87`): one binary crate plus four internal crates. The WASM frontend is a **separate** crate, excluded from the workspace.
 
 ```toml
-members = ["app", "crates/rkvm-core", "crates/rkvm-net", "crates/rkvm-proto"]
+members = ["app", "crates/rkvm-core", "crates/rkvm-net", "crates/rkvm-proto", "crates/rkvm-vision"]
 exclude = ["crates/rkvm-web", "rust"]
 ```
 
@@ -42,6 +42,7 @@ rustkvm/                     # root workspace
     rkvm-core/               # startup wall-clock sync
     rkvm-net/                # mDNS, WoL, Tailscale CLI, local-IP enumeration
     rkvm-proto/              # shared protocol types (hidrpc binary + JSON-RPC), used by app + rkvm-web
+    rkvm-vision/             # screen OCR on the RK3588 NPU (PP-OCRv4 via rknpu2, librknnrt loaded at run time)
     rkvm-web/                # Leptos 0.8 CSR WASM frontend (excluded; own Cargo.lock + toolchain)
   assets/images/             # disk images → BuiltinImages
   docs/                      # ReleaseNote.md
@@ -68,6 +69,7 @@ RustKVM is a KVM-over-IP RK3588 appliance: a Rust backend (device binary) servin
 | Protocol types  | `rkvm-proto` (hidrpc framing + JSON-RPC request/response/event) |
 | MQTT            | `app::mqtt` over `rumqttc` (HA discovery, commands, publish)    |
 | MCP             | `app::mcp` (Streamable-HTTP JSON responses at `POST /mcp`; tools wrap RPC methods, `rpc_call` reaches any method) |
+| Screen OCR      | `app::vision` + `rkvm-vision` (NPU text detection/recognition, screen-stable wait; [`docs/vision.md`](docs/vision.md)) |
 | JSON-RPC        | `app::api` (120+ handlers + 5 broadcast events incl. `failsafeMode`/`willReboot`/`networkState`) |
 | HID-RPC         | `app::hidrpc` (binary protocol over WebRTC data channels, zero-copy `KeyboardReport`; codec re-exports `rkvm_proto::hidrpc`) |
 | Observability   | `app::observability` (`rustkvm_app_info` + frame/rpc counters + RPC latency histogram + live log-level reload) |
@@ -136,6 +138,7 @@ lib.rs                   # module roots (see below)
 ├── dev_mode.rs          # Dev mode marker file + SSH keys
 ├── network.rs           # NetworkConfig, hostname init, 30s state broadcast
 ├── mcp.rs               # MCP server (`POST /mcp`, protected): initialize, tools/list, tools/call → RpcRegistry::call; screenshot returns a JPEG image block
+├── vision.rs            # readScreenText/findScreenText/waitScreenStable: raw NV12 frame → rkvm_vision::Engine (lazy, models in /userdata/rustkvm/vision)
 ├── hidrpc/              # Binary HID-RPC over WebRTC data channels
 │   ├── codec.rs         # `pub use rkvm_proto::hidrpc::*` (framing + zero-copy KeyboardReport)
 │   ├── dispatcher.rs    # In-process routing to USB HID; `play_macro` runs keyboard macros (typeText/pressCombo/executeKeyboardMacro RPCs)
@@ -180,6 +183,20 @@ lib.rs                   # exposes `error` (Error/Result), `local_ip`, `mdns`, `
 └── wol.rs               # Wake-on-LAN magic-packet sender
 ```
 
+### `crates/rkvm-vision/src/`
+
+Screen OCR on the RK3588 NPU, used in-process by `app::vision`. `librknnrt.so` is `dlopen`ed through the `rknpu2` crate, so builds and hosts without it work; see [`docs/vision.md`](docs/vision.md) for models, licences and installation.
+
+```
+lib.rs                   # re-exports Engine, RgbImage and the option/result types
+├── npu.rs               # Engine: det + rec models per NPU core, one worker thread each; tiling → detect → merge → recognize
+├── det.rs               # DB post-processing (components + unclip), tile plan, same-line box merge, reading order
+├── rec.rs               # dictionary, CTC decode (incl. space class), long-line split at blank columns, width buckets
+├── image.rs             # RgbImage: NV12 → RGB, bilinear BGR sampling into model inputs, blank-column profile
+├── signature.rs         # coarse luma grid for "has the screen changed"
+└── types.rs             # Detail, Rect, OcrOptions, TextLine, OcrResult (JSON camelCase)
+```
+
 ### `crates/rkvm-proto/src/`
 
 Protocol types shared by the backend and the WASM frontend (no I/O, no platform deps — `anyhow`/`serde` only).
@@ -204,7 +221,7 @@ main.rs                  # WASM entry: panic hook + tracing-wasm + mount Leptos 
 ├── net/                 # peer.rs (WebRTC PeerConnection), rest.rs (HTTP), upload.rs (virtual media)
 ├── hid/                 # keymap.rs (re-exports rkvm_proto::keymap) + mod.rs (keyboard/mouse → hidrpc via rkvm-proto)
 ├── terminal.rs          # vt100 terminal view
-├── ocr.rs               # screen OCR via Tesseract.js (JS interop, CDN-loaded)
+├── ocr.rs               # screen OCR button: device-side readScreenText RPC (NPU)
 ├── settings.rs / settings_advanced.rs  # settings dialog sections
 ├── settings_nav.rs                      # settings dialog pages, search
 └── util.rs
@@ -315,7 +332,8 @@ nohup setsid /userdata/rustkvm/bin/rustkvm_app </dev/null >>/userdata/rustkvm/lo
     - `webrtc = 0.17.1` — latest stable; `0.20.0-alpha.1` is alpha-only.
     - `rustls = 0.23.x` (latest 0.23.40) — `0.24.0-dev` is dev-only.
     - `libc = 0.2.x` — `1.0.0` is alpha.
-13. **Internal crates are path deps** (`rkvm-core`, `rkvm-net`, `rkvm-proto`). When refactoring shared infra, prefer extending these crates over adding `pub mod` to `app/`.
+13. **Internal crates are path deps** (`rkvm-core`, `rkvm-net`, `rkvm-proto`, `rkvm-vision`). When refactoring shared infra, prefer extending these crates over adding `pub mod` to `app/`.
 14. **Zero-copy invariants** — GStreamer→WebRTC path MUST stay zero-copy: `sample.buffer_owned() → into_mapped_buffer_readable() → bytes::Bytes::from_owner(mapped)`. Never `.to_vec()` a GStreamer mapped buffer.
 15. **Reboot semantics** — `reboot` RPC emits `willReboot` event, sleeps 250ms, then calls `/sbin/reboot`. Network ipv4-mode changes also emit `willReboot`.
 16. **Setup wizard** — `Config::default().local_auth_mode = ""`. `/device/status` returns `is_setup: false` → frontend triggers setup.
+17. **librknnrt is loaded at run time** — keep `rknpu2`'s `libloading` feature; linking `rknnrt` would make the app fail to start on devices or hosts without it. `rknpu2::RKNN::new_with_library` unwraps its own `dlopen`, and the app aborts on panic, so `rkvm_vision::Engine::load` opens the library once itself first and returns an error instead.

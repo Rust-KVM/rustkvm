@@ -13,6 +13,8 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024
 
 const INSTRUCTIONS: &str = "RustKVM controls a physical computer over HDMI capture and USB HID. \
 Call screenshot to see the screen, then type_text / press_combo / mouse_click to act. \
+read_screen_text reads on-screen text with the device NPU (cheaper than a screenshot), \
+find_text returns click coordinates for a piece of text, and wait_until_stable waits for the screen to settle. \
 Pointer coordinates are video pixels unless normalized=true (0..32767). \
 get_health reports video, USB, network and failsafe state. \
 rpc_call reaches any device JSON-RPC method listed by list_rpc_methods.";
@@ -84,6 +86,9 @@ impl McpServer {
         };
 
         match outcome {
+            Ok(value) if name == "read_screen_text" => {
+                tool_text(&screen_text_listing(&value), false)
+            }
             Ok(value) => tool_text(&value_to_text(&value), false),
             Err(e) => tool_error(&format!("{e:#}")),
         }
@@ -103,6 +108,9 @@ pub fn rpc_method_for_tool(name: &str) -> Option<&'static str> {
         "dc_power" => "setDCPowerState",
         "get_dc_power_state" => "getDCPowerState",
         "wake_on_lan" => "sendWOLMagicPacket",
+        "read_screen_text" => "readScreenText",
+        "find_text" => "findScreenText",
+        "wait_until_stable" => "waitScreenStable",
         _ => return None,
     })
 }
@@ -215,6 +223,49 @@ pub fn tool_definitions() -> Vec<Value> {
             }),
             false,
         ),
+        tool(
+            "read_screen_text",
+            "Read the text on the screen with on-device OCR. Returns one line per text line as \
+             `x,y,width,height: text` in video pixels, top to bottom",
+            json!({
+                "type": "object",
+                "properties": {
+                    "detail": {
+                        "type": "string",
+                        "enum": ["fast", "full"],
+                        "description": "fast scales the screen to about 1080p first; full reads small text on 4K screens, slower"
+                    },
+                    "region": ocr_region()
+                }
+            }),
+            true,
+        ),
+        tool(
+            "find_text",
+            "Find text on the screen with on-device OCR and return where to click it (x, y in video pixels)",
+            json!({
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string", "description": "Case and whitespace are ignored" },
+                    "detail": { "type": "string", "enum": ["fast", "full"] },
+                    "region": ocr_region()
+                },
+                "required": ["text"]
+            }),
+            true,
+        ),
+        tool(
+            "wait_until_stable",
+            "Wait until the screen stops changing, e.g. after a click or while something loads",
+            json!({
+                "type": "object",
+                "properties": {
+                    "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 120000 },
+                    "stableMs": { "type": "integer", "minimum": 100, "maximum": 60000 }
+                }
+            }),
+            true,
+        ),
         tool("list_rpc_methods", "List every device JSON-RPC method", empty, true),
         tool(
             "rpc_call",
@@ -230,6 +281,38 @@ pub fn tool_definitions() -> Vec<Value> {
             false,
         ),
     ]
+}
+
+fn ocr_region() -> Value {
+    json!({
+        "type": "object",
+        "description": "Only read this part of the screen, in video pixels",
+        "properties": {
+            "x": { "type": "integer", "minimum": 0 },
+            "y": { "type": "integer", "minimum": 0 },
+            "width": { "type": "integer", "minimum": 1 },
+            "height": { "type": "integer", "minimum": 1 }
+        },
+        "required": ["x", "y", "width", "height"]
+    })
+}
+
+/// One `x,y,width,height: text` line per OCR line: a fraction of the tokens
+/// of the JSON result.
+fn screen_text_listing(value: &Value) -> String {
+    let Ok(result) = <rkvm_vision::OcrResult as serde::Deserialize>::deserialize(value) else {
+        return value_to_text(value);
+    };
+    if result.lines.is_empty() {
+        return format!("no text found ({}x{} screen)", result.width, result.height);
+    }
+    let mut out =
+        format!("{}x{} screen, {} lines\n", result.width, result.height, result.lines.len());
+    for line in &result.lines {
+        let r = line.rect;
+        out.push_str(&format!("{},{},{},{}: {}\n", r.x, r.y, r.width, r.height, line.text));
+    }
+    out
 }
 
 fn tool(name: &str, description: &str, input_schema: Value, read_only: bool) -> Value {
