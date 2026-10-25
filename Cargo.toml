@@ -47,6 +47,7 @@ rustls             = { version = "0.23.40", default-features = false, features =
 salvo              = { version = "0.93.0", features = ["oapi", "serve-static", "tower-compat", "websocket", "compression", "rustls"] }
 serde              = { version = "1.0.228", features = ["derive"] }
 serde_json         = "1.0.150"
+semver             = { version = "1.0.28", default-features = false, features = ["std"] }
 sha2               = { version = "0.11.0", default-features = false }
 socketioxide       = { version = "0.18.3", features = ["extensions", "state"] }
 tempfile           = "3.27.0"
