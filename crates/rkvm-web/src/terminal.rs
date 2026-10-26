@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::num::NonZeroU16;
 use std::rc::Rc;
 
 use js_sys::{ArrayBuffer, Function, Uint8Array};
@@ -21,8 +22,11 @@ pub fn Terminal(
     open: RwSignal<bool>,
     peer: StoredValue<Option<Rc<Peer>>, LocalStorage>,
 ) -> impl IntoView {
-    let parser: SharedParser =
-        StoredValue::new_local(Rc::new(RefCell::new(vt100::Parser::new(24, 80, SCROLLBACK_LEN))));
+    let parser: SharedParser = StoredValue::new_local(Rc::new(RefCell::new(vt100::Parser::new(
+        vt100::Parser::DEFAULT_ROWS,
+        vt100::Parser::DEFAULT_COLS,
+        SCROLLBACK_LEN,
+    ))));
     let version = RwSignal::new(0u32);
     let screen_ref = NodeRef::<html::Div>::new();
     let wired = StoredValue::new_local(false);
@@ -74,7 +78,10 @@ pub fn Terminal(
         let h = (el.client_height() as f64 - 20.0).max(0.0);
         let cols = (w / CHAR_W).floor().clamp(20.0, 500.0) as u16;
         let rows = (h / LINE_H).floor().clamp(6.0, 200.0) as u16;
-        parser.get_value().borrow_mut().screen_mut().set_size(rows, cols);
+        let (Some(nz_rows), Some(nz_cols)) = (NonZeroU16::new(rows), NonZeroU16::new(cols)) else {
+            return;
+        };
+        parser.get_value().borrow_mut().screen_mut().set_size(nz_rows, nz_cols);
         schedule();
 
         if let Some(p) = peer.get_value() {
@@ -142,7 +149,7 @@ pub fn Terminal(
         let cx = cx as usize;
 
         screen
-            .rows(0, cols)
+            .rows(0, cols.get())
             .enumerate()
             .map(|(r, line)| {
                 if show_cursor && r as u16 == cy {
