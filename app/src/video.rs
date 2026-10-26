@@ -266,9 +266,20 @@ async fn stop_pipeline() {
     }
 }
 
+/// Held for a whole stop + start. Without it a restartVideoPipeline call and the
+/// supervisor (which sees the pipeline down mid-restart) rebuilt concurrently: two
+/// encoders, the capture queue busy, and no frames until the stall check rebuilt
+/// it again about 10 s later.
+static RESTART_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Tears down and rebuilds the capture/encode pipeline with the boot-time configuration,
 /// keeping any attached WebRTC sink so connected viewers resume on the next keyframe.
 pub async fn restart_video_pipeline() -> anyhow::Result<()> {
+    let _restart = RESTART_LOCK.lock().await;
+    restart_pipeline_locked().await
+}
+
+async fn restart_pipeline_locked() -> anyhow::Result<()> {
     let (video_config, audio_config) = PIPELINE_CONFIG
         .get()
         .cloned()
@@ -462,15 +473,20 @@ pub fn spawn_video_supervisor() {
                 return;
             }
             let Some((video_config, _)) = PIPELINE_CONFIG.get() else { continue };
-            if is_video_pipeline_running().await {
-                failures = 0;
-                let Some(reason) = live.check(&video_config.device).await else { continue };
-                warn!(%reason, "video capture stalled, rebuilding the pipeline");
-            } else {
-                warn!(failures, "video pipeline is down, restarting");
-            }
-            live.pipeline_replaced();
-            match restart_video_pipeline().await {
+            let restarted = {
+                // Someone else is rebuilding right now; look again next tick.
+                let Ok(_restart) = RESTART_LOCK.try_lock() else { continue };
+                if is_video_pipeline_running().await {
+                    failures = 0;
+                    let Some(reason) = live.check(&video_config.device).await else { continue };
+                    warn!(%reason, "video capture stalled, rebuilding the pipeline");
+                } else {
+                    warn!(failures, "video pipeline is down, restarting");
+                }
+                live.pipeline_replaced();
+                restart_pipeline_locked().await
+            };
+            match restarted {
                 Ok(()) => failures = 0,
                 Err(e) => {
                     let delay = restart_backoff(failures);
