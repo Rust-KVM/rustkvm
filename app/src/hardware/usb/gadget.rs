@@ -278,8 +278,11 @@ impl UsbGadget {
                     "mass_storage.usb0".to_string(),
                     "lun.0".to_string(),
                 ],
+                // Idle LUN is an empty removable disk, not an empty optical
+                // drive: Windows hides empty removable drives but always lists
+                // an empty CD drive. Every mount sets the mode it needs.
                 attrs: HashMap::from([
-                    ("cdrom".to_string(), "1".to_string()),
+                    ("cdrom".to_string(), "0".to_string()),
                     ("ro".to_string(), "1".to_string()),
                     ("removable".to_string(), "1".to_string()),
                     ("file".to_string(), "\n".to_string()),

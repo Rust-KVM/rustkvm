@@ -146,6 +146,10 @@ pub async fn unmount_image() -> Result<()> {
         .unwrap_or_else(|e| warn!("failed to clear mass storage image: {}", e));
     sleep(Duration::from_millis(500)).await;
     stop_nbd();
+    // Back to the idle disk mode so the host is not left with an empty CD drive.
+    set_mass_storage_mode(false)
+        .await
+        .unwrap_or_else(|e| warn!("failed to reset mass storage mode: {}", e));
     *CURRENT_VIRTUAL_MEDIA_STATE.write() = None;
     set_current_remote_image_reader(None);
     Ok(())
