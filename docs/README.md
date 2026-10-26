@@ -7,7 +7,7 @@
 | [API reference](api.md) | HTTP routes, JSON-RPC, MCP tools, HID-RPC, MQTT, Prometheus metrics |
 | [Building](building.md) | Docker devkit, application package and firmware image, pinned versions |
 | [Customizing your build](customizing.md) | Your own hostname, UI name, USB IDs, firmware version and build images |
-| [Stability soak and repro log (中文)](stability-testing.md) | How the 2026-10 soak test was run, sampled and judged; repro, root cause and fix for each problem found |
+| [Stability soak and repro log (中文)](stability-testing.md) | Repro steps, root cause, fixing commit and on-device check for each problem the 2026-10 soak found |
 | [Releasing and shipping firmware](firmware-release.md) | Versioning, release checklist, flashing, factory state, acceptance test |
 | [Soak and leak testing](soak-testing.md) | Functional matrix over every RPC/MCP method, multi-hour load runs, leak criteria |
 | [Building from source manually](../README.md#building-from-source) | Frontend, x86_64 host build and the aarch64 cross toolchain without containers |

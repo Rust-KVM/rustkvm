@@ -1,15 +1,15 @@
 # 稳定性压测与复现记录（2026-10-25 ~ 26）
 
-本文记录一轮在真机上的全功能测试 + 长时间压测：怎么搭环境、怎么采样、每个问题怎么复现、根因是什么、在哪个提交修的、怎么验证的。下次做同类测试照此执行即可。
+本文是 2026 年 10 月那轮真机压测的中文记录，重点是**每个问题怎么复现、根因、修复提交和验证方式**。测试步骤、负载 worker、采样项、判据和注意事项以 [soak-testing.md](soak-testing.md) 为准，这里不再重复。
 
-测试脚本按项目规则是一次性的，**不进仓库**，下文只描述脚本做什么，照着描述重写即可。
+测试脚本按项目规则是一次性的，不进仓库。
 
 ## 结论
 
 - 功能：140 个 JSON-RPC 方法、18 个 MCP 工具逐项调用。修复后 138 通过 / 2 失败 / 24 跳过。2 个失败是没接 ATX 扩展时 `getATXState` 和 MCP `get_atx_state` 报错，属于现状，待改为友好状态。
 - 稳定性：共发现并修复 12 个问题，全部合入 dev（[PR #85](https://github.com/Rust-KVM/rustkvm/pull/85)，merge `47dde28`），其中 1 个会让内核崩溃重启，3 个是持续泄露（会话 socket + 内存、截图 dma-buf、放弃上传的 fd）。
 - 修复后 3 h 复测：216 万次操作，失败率 0.078 %（几乎全是无 ATX 扩展和脚本主动取消宏），0 次内核 BUG，0 条 app ERROR，帧率中位数 60，最高 51.8 °C；fd、线程、dma-buf、slab 都走平。
-- 修复后 8 h 长测（跑到约 4 h 停止）：fd 斜率 −0.14/h，线程 37，dma-buf 102 个不变，290 万次操作。匿名内存仍有锯齿式波动（215 → 302 MB，后半段约 9 MB/h）。跳变有涨有落、和任何单一事件都对不上，判断为 glibc 多线程 arena 扩张收缩，不是逐次操作的泄露。分配器 A/B 对照没有做，列在[后续](#后续)。
+- 修复后长测（5.9 h）：fd、线程、dma-buf 不增长；匿名内存仍有锯齿式波动，判断为 glibc arena 行为而非逐次泄露，分配器 A/B 对照没有做，见[残余内存锯齿](#残余内存锯齿)。
 
 ## 环境
 
@@ -20,67 +20,15 @@
 | 测试机 | WSL2 工作台（构建、部署、跑脚本），Mac（浏览器观看与网页审查） |
 | 版本 | 起点 dev `07e2c0b`（含 OCR #83），修复分支 `claude/project-thread-3za6p9`，终点 dev `47dde28` |
 
-构建部署按 [hardware-test-loop.md](hardware-test-loop.md)：WSL 里 `scripts/devkit.sh run scripts/build-app.sh`，设备上 `pkill -TERM -x rustkvm_app`，拷贝二进制到 `/userdata/rustkvm/bin/`，`/etc/init.d/S99rustkvm restart`。**不要用 `kill -9`**，看门狗会重启设备。
+构建部署按 [soak-testing.md 第 1 节](soak-testing.md#1-build-and-deploy)：SIGTERM 停止后等它退出，**不要用 `kill -9`**，看门狗会重启设备。
 
 测试前把 `/userdata/rustkvm/config.toml` 备份为 `config.toml.bak.pre-soak`，测完按备份恢复。
 
 ## 方法
 
-### 1. 功能矩阵
+构建部署、功能矩阵、各 worker 的频率、采样命令、泄露判据、观看器和会话 churn 验收，见 [soak-testing.md](soak-testing.md) 第 1 ~ 7 节。下面只补充网页界面审查。
 
-脚本做的事：
-
-1. 方法清单取自 [`app/tests/rpc_methods.txt`](../app/tests/rpc_methods.txt)，MCP 工具清单取自 `POST /mcp` 的 `tools/list`。
-2. 每个方法按 `app/src` 里的参数结构构造一次合法调用，经 `POST /device/rpc`（JSON-RPC 2.0）或 `POST /mcp` 发出，记录 `pass` / `fail`（返回错误）/ `harness`（参数形状写错，修脚本直到消失）/ `skip`。
-3. setter 先读当前值再原样写回，避免改动设备状态。
-4. 跳过会改网络、刷机、恢复出厂、重启设备、ATX/DC 电源的方法（共 24 个）。
-5. 每个 `fail` 附上 app 日志 `/userdata/rustkvm/log/rustkvm_app.log` 和 `dmesg` 的对应片段。
-
-### 2. 长时间压测
-
-一个主进程同时跑多个 worker，各自循环，所有调用计入 ok/fail，失败带上错误文本：
-
-| worker | 内容 | 频率 |
-| --- | --- | --- |
-| HID | `keyboardReport`、`absMouseReport`、`relMouseReport`、`wheelReport` | 持续 |
-| 宏 | `typeText`、`pressCombo`、`executeKeyboardMacro`，定时 `cancelKeyboardMacro` | 持续 |
-| MCP | `screenshot`、`type_text`、`find_text`、`read_screen_text` 等 | 持续 |
-| 截图 | `GET /device/screenshot` | 每 2 s |
-| 视频 | `restartVideoPipeline` | 间隔随机 |
-| USB | `setUsbEmulationState` false → true（UDC 重绑） | 每 30 min |
-| 虚拟媒体 | `mountBuiltInImage` / 卸载 | 周期性 |
-| 观看器 | 浏览器打开 4K WebRTC 画面，记录 `getStats` 的 fps、freeze、丢包 | 常开，每 5 或 15 min 重连一次 |
-
-先跑 15 min 空载基线（不开 worker），再跑满负载。
-
-### 3. 采样
-
-每 2 min 在设备上采一次，写 CSV：
-
-```sh
-PID=$(pidof rustkvm_app)
-grep -E 'VmRSS|RssAnon|RssFile|Threads' /proc/$PID/status
-grep -E '^(Pss|Anonymous)' /proc/$PID/smaps_rollup
-ls /proc/$PID/fd | wc -l                          # fd 总数
-ls -l /proc/$PID/fd | grep -c socket              # socket 数
-grep -c dmabuf /proc/$PID/maps                    # 映射的 dma-buf 数
-cat /sys/kernel/debug/dma_buf/bufinfo | tail -3   # dma-buf 总量（需 debugfs）
-ss -uanp | grep -c rustkvm_app                    # UDP socket
-grep -E 'Slab|MemAvailable' /proc/meminfo
-cat /sys/class/thermal/thermal_zone0/temp
-dmesg | tail -n 50                                # 只记新增行
-```
-
-另外记录 CPU 占用、观看器 fps、各 worker 的 ok/fail 增量，以及事件时间（重绑、管线重启、挂载、观看器重连）。
-
-### 4. 判据
-
-- 对每个指标做线性回归，前 1 h 视为预热不计。fd、线程、dma-buf、socket 的斜率应接近 0。
-- 匿名内存看后半段斜率和最高点是否还在刷新：最后 4 h 斜率 < 2 MB/h 或最高点不再刷新算收敛，否则当作疑似泄露，接着做定位。
-- 定位方法：把内存跳变和事件时间对齐；空闲时单独触发某类事件 10 次，每次记 `RssAnon`；在开头和结尾各抓一次 `/proc/$PID/smaps` 做差，看增长落在哪段映射。
-- 会话泄露的专项验收：连续建立并关闭 20 个会话（其中 5 次是第二个客户端接管），等 2 min，socket / udp / udp6 回到基线 ±2，`RssAnon` 增长 < 10 MB，线程回到基线，日志无 panic 和新 ERROR。
-
-### 5. 网页界面审查
+### 网页界面审查
 
 在 Mac 上用 Playwright 驱动 Chrome 走完每个页面和设置页：浅色/深色、中文/English、1440/1024/390 px 宽度，加 axe 无障碍扫描、键盘焦点顺序、接管、OCR、终端，以及 3 min 页面内存曲线。新前端没部署前，用一个本地代理提供本地构建的 `dist/`，其余请求（含 WebSocket）转发到设备。结果：没有页面报错，39 个可用性和一致性问题（9 个严重），修复在 [PR #84](https://github.com/Rust-KVM/rustkvm/pull/84)，还在等设备上的重连复测。
 
@@ -177,24 +125,20 @@ dmesg | tail -n 50                                # 只记新增行
 
 ## 残余内存锯齿
 
-`47dde28` 上 8 h 长测前 4 h 的数据：
+修复后的长测里匿名内存仍有锯齿式波动，最新数据（5.9 h 那轮的最后 4 h 约 17 MB/h，回落最多 35 MB）和 smaps 分析见 [soak-testing.md 的 Findings](soak-testing.md#findings-of-the-october-2026-pass)。要点：
 
-- anon 约每 0.5 h 一个点：215 → 245 → 247 → 288 → 284 → 300 → 302 MB，最高 322.5 MB；RSS 中位数 986 MB，最高 1017 MB。
-- RSS 里约 670 MB 是首次 OCR 加载的 NPU 模型，一次性常驻，不随时间增长。
-- 把相邻采样间 |Δanon| ≥ 8 MB 的 34 处跳变和事件对齐：22 处上涨、12 处回落，常常成对出现（例如 +24.5 → −23.0 → +31.2 → −20.8）；有 8 处上涨附近没有任何计划事件；大多数重绑、管线重启、挂载和观看器重连前后 anon 没有变化。没有哪一类事件每次都对应跳变。
-- 跳变幅度多是 10 ~ 12 MB 的整数倍，接近一帧 4K NV12（12.4 MB）。smaps 里最大的匿名区段是若干 64 MB 对齐的段，是典型的 glibc per-thread arena。
+- fd、线程、dma-buf 都没有增长，涨的只有匿名内存。
+- RSS 里约 670 MB 是首次 OCR 加载的 NPU 模型，一次性常驻。
+- 跳变有涨有落、常常成对出现，和重绑、管线重启、挂载、观看器重连都对不上；幅度多是 10 ~ 12 MB 的整数倍，接近一帧 4K NV12（12.4 MB）。
+- smaps 差分显示增长落在已有的两个 per-thread arena 里，不是新开 arena。
 
-判断：OCR/截图路径的大块临时分配落在不同 tokio/blocking 线程的 arena 里，free 后 arena 不一定还给系统，于是呈锯齿。这不是逐次操作的泄露，fd、线程、dma-buf 都没有变化。
+判断：OCR/截图路径的大块临时分配留在 glibc arena 里没有还给系统，属于分配器行为而非逐次操作泄露。分配器 A/B 对照还没做，仍是待定项。
 
 ## 后续
 
 - 分配器对照，每组 1 h、负载相同（OCR + 截图 + 观看器），记录 anon 斜率、峰值和 CPU：A 不改；B `MALLOC_ARENA_MAX=2`；C `MALLOC_MMAP_THRESHOLD_=1048576`（关闭动态阈值，大块分配始终走 mmap）。环境变量只在测试期间临时加进 `S99rustkvm`，测完恢复。若 C 明显压住增长，在代码里用 `mallopt` 固定阈值或复用帧缓冲作为正式修复。
-- 没接 ATX 扩展时 `getATXState` 返回友好状态而不是错误。
-- ICE 失败后前端自动重连（PR #84 已实现，待设备复测）。
+- 其余未解决项（无 ATX 扩展时报错、ICE 失败后前端不重连、`restartVideoPipeline` 偶发 CMA 分配失败、几个 USB 配置 setter 是空操作）见 [soak-testing.md](soak-testing.md#findings-of-the-october-2026-pass)。
 
 ## 注意事项
 
-- 结束后恢复现场：SIGTERM 正常重启 app，停掉所有 worker，按 `config.toml.bak.pre-soak` 恢复配置，去掉临时加进 `S99rustkvm` 的环境变量；被控机关掉测试中打开的窗口，删掉测试输入的文字和挂载的虚拟媒体。
-- 设备上一旦出现 BUG/Oops 并重启，先从 pstore 或串口拿完整栈，再继续压测。
-- 构建机磁盘要留足空间：Windows C 盘满会让 WSL 虚拟磁盘扩容失败，整个 WSL 被拆掉，看起来像随机掉线。
-- 测试脚本和压测数据只放在测试机本地，不提交到仓库任何分支。只有测试确认的问题，其修复代码才走 PR 进 dev。
+测试中的坑（WSL 磁盘、单会话接管、旧版本重绑崩溃、CMA 告警）以及对被控机和设备留下的改动、如何还原，见 [soak-testing.md](soak-testing.md#pitfalls)。
