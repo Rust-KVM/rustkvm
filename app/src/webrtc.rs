@@ -235,7 +235,9 @@ impl WebRTCApi {
             )
             .await?;
         let video_sender = video_transceiver.sender().await;
-        let video_sender_for_profile = Arc::clone(&video_sender);
+        // Weak: the ICE state handler below is reachable from the ICE agent, and the
+        // sender (like the tracks bound to it) holds the transports that own the agent.
+        let video_sender_for_profile = Arc::downgrade(&video_sender);
 
         let audio_transceiver = peer_connection
             .add_transceiver_from_track(
@@ -289,17 +291,20 @@ impl WebRTCApi {
         let app_state_for_close = config.app_state.clone();
 
         let session_id_clone = session.id.clone();
-        let video_track_clone = session.video_track.clone();
-        let audio_track_clone = session.audio_track.clone();
+        // Weak for the same reason as the sender: a strong ref here closes a cycle
+        // through the agent that kept every ended session's ICE agent, UDP sockets
+        // and buffers alive after pc.close().
+        let video_track_clone = session.video_track.as_ref().map(Arc::downgrade);
+        let audio_track_clone = session.audio_track.as_ref().map(Arc::downgrade);
         let is_connected = Arc::new(RwLock::new(false));
         let is_connected_clone = is_connected;
 
         peer_connection.on_ice_connection_state_change(Box::new(
             move |connection_state: RTCIceConnectionState| {
                 let session_id = session_id_clone.clone();
-                let video_track = video_track_clone.clone();
-                let audio_track = audio_track_clone.clone();
-                let video_sender = video_sender_for_profile.clone();
+                let video_track = video_track_clone.as_ref().and_then(std::sync::Weak::upgrade);
+                let audio_track = audio_track_clone.as_ref().and_then(std::sync::Weak::upgrade);
+                let video_sender = video_sender_for_profile.upgrade();
                 let is_connected = is_connected_clone.clone();
                 let app_state = app_state_for_close.clone();
                 Box::pin(async move {
@@ -316,13 +321,15 @@ impl WebRTCApi {
                                 drop(connected);
                                 info!("WebRTC session {} connected", session_id);
                                 increment_session_counter().await;
-                                let codecs = video_sender.get_parameters().await.rtp_parameters.codecs;
-                                match negotiated_h264_profile(&codecs) {
-                                    Some(profile) => video::set_h264_profile(profile).await,
-                                    None => warn!(
-                                        "session {} negotiated no H.264 profile the encoder can produce",
-                                        session_id
-                                    ),
+                                if let Some(sender) = &video_sender {
+                                    let codecs = sender.get_parameters().await.rtp_parameters.codecs;
+                                    match negotiated_h264_profile(&codecs) {
+                                        Some(profile) => video::set_h264_profile(profile).await,
+                                        None => warn!(
+                                            "session {} negotiated no H.264 profile the encoder can produce",
+                                            session_id
+                                        ),
+                                    }
                                 }
                                 if let Some(track) = video_track.clone() {
                                     video::attach_webrtc_sink(track).await;
