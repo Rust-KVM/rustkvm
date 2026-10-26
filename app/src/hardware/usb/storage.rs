@@ -663,12 +663,23 @@ pub async fn delete_storage_file(filename: &str) -> Result<()> {
     Ok(())
 }
 
+/// ISO 9660 images must be presented as a CD-ROM: as a removable disk Windows
+/// finds no file system it knows and offers to format it.
+fn built_in_image_mode(name: &str) -> VirtualMediaMode {
+    if Path::new(name).extension().is_some_and(|e| e.eq_ignore_ascii_case("iso")) {
+        VirtualMediaMode::CDROM
+    } else {
+        VirtualMediaMode::Disk
+    }
+}
+
 pub async fn mount_built_in_image(filename: &str) -> Result<()> {
     let name = sanitize_filename(filename)?;
     ensure_images_folder().await?;
     let image_path = Path::new(IMAGES_FOLDER).join(&name);
+    let mode = built_in_image_mode(&name);
     if image_path.exists() {
-        return mount_with_storage(&name, VirtualMediaMode::Disk).await;
+        return mount_with_storage(&name, mode).await;
     }
 
     if let Some(data) = BuiltinImages::get(&name) {
@@ -685,7 +696,7 @@ pub async fn mount_built_in_image(filename: &str) -> Result<()> {
         writer.flush().await.ok();
         drop(writer);
 
-        return mount_with_storage(&name, VirtualMediaMode::Disk).await;
+        return mount_with_storage(&name, mode).await;
     }
 
     Err(anyhow!("image not found in built-in resources: {}", name))
