@@ -40,3 +40,5 @@ Device: ssh root@192.168.1.6        RK3588, dropbear
 - **Strict config**: `/userdata/rustkvm/config.toml` is parsed with `deny_unknown_fields`. A key from a newer or older build crashes startup (deprecated `ai_*` keys are ignored with a warning; others are not). Back the file up (`cp config.toml config.toml.bak.<tag>`) before editing, and remove only the offending key.
 - **Harmless log line**: `Failed listening on '22'` comes from the init script's SSH daemon, not the app.
 - **Claude Code auto mode on the Mac**: plain `ssh foxx@192.168.1.173 '...'` and `ssh root@192.168.1.6 '...'` are allowed by rules in `~/.claude/settings.json` (rules load only in a new session; do not put options like `-o` before the host, it breaks the prefix match). These get blocked: piping a script into `wsl.exe`, chaining a local command after an ssh command, and running curl from the Mac against the device (curl from the device itself works). cmd.exe quoting is fragile, so a committed deploy script run through one of the allowed prefixes is the preferred next step.
+
+For multi-hour stability and leak runs on top of this loop, see [soak-testing.md](soak-testing.md).
