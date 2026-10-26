@@ -44,7 +44,7 @@ rumqttc            = { version = "0.25.1", default-features = false, features = 
 rust-embed         = "8.11.0"
 rustix             = { version = "1.1.4", default-features = false, features = ["pty", "fs", "termios", "net", "system"] }
 rustls             = { version = "0.23.40", default-features = false, features = ["ring"] }
-salvo              = { version = "0.93.0", features = ["oapi", "serve-static", "tower-compat", "websocket", "compression", "rustls"] }
+salvo              = { version = "1.0.1", features = ["oapi", "serve-static", "tower-compat", "websocket", "compression", "rustls"] }
 serde              = { version = "1.0.228", features = ["derive"] }
 serde_json         = "1.0.150"
 sha2               = { version = "0.11.0", default-features = false }
