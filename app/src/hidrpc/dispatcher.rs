@@ -1,9 +1,9 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytes::Bytes;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use webrtc::data_channel::RTCDataChannel;
@@ -17,11 +17,20 @@ use super::codec::{
 #[derive(Default)]
 struct DispatcherState {
     reliable_channel: Option<Arc<RTCDataChannel>>,
-    macro_task: Option<(JoinHandle<()>, CancellationToken)>,
+    /// The macro being typed and whether it came from the web UI's data channel.
+    running_macro: Option<(CancellationToken, bool)>,
 }
 
 static DISPATCHER: Lazy<Mutex<DispatcherState>> =
     Lazy::new(|| Mutex::new(DispatcherState::default()));
+
+/// Macros (typeText, pressCombo, keyboard macros, web UI paste) type one after
+/// another in arrival order; a new one never cuts off the one being typed.
+static MACRO_LANE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// Bumped by an explicit cancel: drops the running macro and every queued one.
+static CANCEL_ALL_EPOCH: AtomicU64 = AtomicU64::new(0);
+/// Bumped when the web UI's data channel closes: drops only macros it started.
+static CHANNEL_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 pub fn install_reliable_channel(ch: Arc<RTCDataChannel>) {
     DISPATCHER.lock().reliable_channel = Some(ch);
@@ -29,14 +38,11 @@ pub fn install_reliable_channel(ch: Arc<RTCDataChannel>) {
 }
 
 pub fn clear_reliable_channel() {
-    let prior_task = {
-        let mut s = DISPATCHER.lock();
-        s.reliable_channel = None;
-        s.macro_task.take()
-    };
-    if let Some((handle, token)) = prior_task {
+    let mut s = DISPATCHER.lock();
+    s.reliable_channel = None;
+    CHANNEL_EPOCH.fetch_add(1, Ordering::SeqCst);
+    if let Some((token, true)) = &s.running_macro {
         token.cancel();
-        handle.abort();
     }
 }
 
@@ -115,7 +121,8 @@ pub async fn dispatch(msg: DataChannelMessage) {
         },
         MessageType::KeyboardMacroReport => match message.keyboard_macro_report() {
             Ok(r) => {
-                start_macro(r.is_paste, r.steps).await;
+                // The UI learns the outcome from the macro state messages.
+                drop(start_macro(r.is_paste, r.steps, true));
             }
             Err(e) => warn!("hidrpc keyboard_macro_report parse: {e}"),
         },
@@ -134,29 +141,42 @@ fn usb_hid() -> Option<Arc<crate::hardware::usb::hid::Hid>> {
     crate::hardware::usb::get_usb_manager().map(|m| m.read().hid())
 }
 
-async fn start_macro(
+fn start_macro(
     is_paste: bool,
     steps: Vec<KeyboardMacroStep>,
+    from_channel: bool,
 ) -> tokio::sync::oneshot::Receiver<()> {
-    cancel_macro().await;
-
-    let begin = new_keyboard_macro_state_message(true, is_paste).marshal();
-    send_reliable(begin).await;
-
-    let token = CancellationToken::new();
-    let run_token = token.clone();
+    let epochs = (CANCEL_ALL_EPOCH.load(Ordering::SeqCst), CHANNEL_EPOCH.load(Ordering::SeqCst));
+    let cancelled = move || {
+        CANCEL_ALL_EPOCH.load(Ordering::SeqCst) != epochs.0
+            || (from_channel && CHANNEL_EPOCH.load(Ordering::SeqCst) != epochs.1)
+    };
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
 
-    let handle = tokio::spawn(async move {
-        let completed = run_macro(run_token, steps).await;
+    tokio::spawn(async move {
+        let _lane = MACRO_LANE.lock().await;
+        if cancelled() {
+            return;
+        }
+        let token = CancellationToken::new();
+        DISPATCHER.lock().running_macro = Some((token.clone(), from_channel));
+        // A cancel between the check above and publishing the token would miss it.
+        if cancelled() {
+            DISPATCHER.lock().running_macro = None;
+            return;
+        }
+
+        let begin = new_keyboard_macro_state_message(true, is_paste).marshal();
+        send_reliable(begin).await;
+        let completed = run_macro(token, steps).await;
         let end = new_keyboard_macro_state_message(false, is_paste).marshal();
         send_reliable(end).await;
+        DISPATCHER.lock().running_macro = None;
         if completed {
             let _ = done_tx.send(());
         }
     });
 
-    DISPATCHER.lock().macro_task = Some((handle, token));
     done_rx
 }
 
@@ -164,8 +184,7 @@ pub async fn play_macro(is_paste: bool, steps: Vec<KeyboardMacroStep>) -> anyhow
     if usb_hid().is_none() {
         anyhow::bail!("USB HID not initialized");
     }
-    start_macro(is_paste, steps)
-        .await
+    start_macro(is_paste, steps, false)
         .await
         .map_err(|_| anyhow::anyhow!("keyboard macro was cancelled or failed"))
 }
@@ -198,9 +217,11 @@ async fn run_macro(cancel: CancellationToken, steps: Vec<KeyboardMacroStep>) -> 
 }
 
 async fn cancel_macro() {
-    let task = DISPATCHER.lock().macro_task.take();
-    if let Some((handle, token)) = task {
+    CANCEL_ALL_EPOCH.fetch_add(1, Ordering::SeqCst);
+    if let Some((token, _)) = &DISPATCHER.lock().running_macro {
         token.cancel();
-        let _ = handle.await;
     }
+    // Returns once the running macro has released its keys and queued ones have
+    // dropped out (the lane is FIFO, so this waits behind them).
+    drop(MACRO_LANE.lock().await);
 }

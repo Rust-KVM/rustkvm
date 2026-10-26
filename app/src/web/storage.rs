@@ -40,6 +40,8 @@ pub(super) async fn handle_storage_upload(
             Ok(f) => f,
             Err(e) => {
                 warn!("failed to read request body {}: {}", upload_id, e);
+                // Keep the partial file for a resume but release the open handle.
+                let _ = crate::hardware::usb::storage::complete_upload(&upload_id).await;
                 return Err(
                     StatusError::internal_server_error().brief("Failed to read upload data")
                 );
@@ -56,6 +58,7 @@ pub(super) async fn handle_storage_upload(
                         .await
                 {
                     warn!("failed to write upload chunk {}: {}", upload_id, e);
+                    let _ = crate::hardware::usb::storage::complete_upload(&upload_id).await;
                     return Err(
                         StatusError::internal_server_error().brief("Failed to write upload data")
                     );

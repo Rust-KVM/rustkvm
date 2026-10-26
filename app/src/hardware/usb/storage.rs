@@ -515,6 +515,9 @@ pub async fn start_storage_file_upload(filename: &str, size: i64) -> Result<Stor
     let upload_id = format!("upload_{}", Uuid::new_v4());
     {
         let mut map = PENDING_UPLOADS.lock().await;
+        // A resumed upload replaces any abandoned one for the same file, so a client that
+        // starts uploads and never finishes them does not pile up open file handles.
+        map.retain(|_, pu| pu.upload_path != upload_path);
         map.insert(
             upload_id.clone(),
             PendingUpload { file, size, already_uploaded_bytes, upload_path, final_path },
@@ -647,6 +650,10 @@ pub async fn get_storage_space() -> Result<StorageSpace> {
 pub async fn delete_storage_file(filename: &str) -> Result<()> {
     let filename = sanitize_filename(filename)?;
     let full_path = Path::new(IMAGES_FOLDER).join(&filename);
+    PENDING_UPLOADS
+        .lock()
+        .await
+        .retain(|_, pu| pu.upload_path != full_path && pu.final_path != full_path);
     if !full_path.exists() {
         return Err(anyhow!("file does not exist: {}", filename));
     }
@@ -656,12 +663,23 @@ pub async fn delete_storage_file(filename: &str) -> Result<()> {
     Ok(())
 }
 
+/// ISO 9660 images must be presented as a CD-ROM: as a removable disk Windows
+/// finds no file system it knows and offers to format it.
+fn built_in_image_mode(name: &str) -> VirtualMediaMode {
+    if Path::new(name).extension().is_some_and(|e| e.eq_ignore_ascii_case("iso")) {
+        VirtualMediaMode::CDROM
+    } else {
+        VirtualMediaMode::Disk
+    }
+}
+
 pub async fn mount_built_in_image(filename: &str) -> Result<()> {
     let name = sanitize_filename(filename)?;
     ensure_images_folder().await?;
     let image_path = Path::new(IMAGES_FOLDER).join(&name);
+    let mode = built_in_image_mode(&name);
     if image_path.exists() {
-        return mount_with_storage(&name, VirtualMediaMode::Disk).await;
+        return mount_with_storage(&name, mode).await;
     }
 
     if let Some(data) = BuiltinImages::get(&name) {
@@ -678,7 +696,7 @@ pub async fn mount_built_in_image(filename: &str) -> Result<()> {
         writer.flush().await.ok();
         drop(writer);
 
-        return mount_with_storage(&name, VirtualMediaMode::Disk).await;
+        return mount_with_storage(&name, mode).await;
     }
 
     Err(anyhow!("image not found in built-in resources: {}", name))
