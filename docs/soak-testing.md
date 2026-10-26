@@ -165,7 +165,7 @@ Take a snapshot every 1.5–2 h. Watch the event log for the first 10 minutes an
 
 ## Findings of the October 2026 pass
 
-Fixed in PR #85 (all verified on hardware):
+Fixed in PR #85 (all verified on hardware; repro steps and root causes for each, in Chinese, are in [stability-testing.md](stability-testing.md)):
 
 - f_hid kernel BUG after a UDC rebind
 - WebRTC sessions never released: a reference cycle through the ICE state handler; 4 UDP sockets and about 11 MB per session
