@@ -8,6 +8,7 @@
 | [Building](building.md) | Docker devkit, application package and firmware image, pinned versions |
 | [Customizing your build](customizing.md) | Your own hostname, UI name, USB IDs, firmware version and build images |
 | [Releasing and shipping firmware](firmware-release.md) | Versioning, release checklist, flashing, factory state, acceptance test |
+| [Soak and leak testing](soak-testing.md) | Functional matrix over every RPC/MCP method, multi-hour load runs, leak criteria |
 | [Building from source manually](../README.md#building-from-source) | Frontend, x86_64 host build and the aarch64 cross toolchain without containers |
 | [Architecture and conventions](../AGENTS.md) | Module tree, coding rules, gotchas |
 | [Contributing](../CONTRIBUTING.md) | Workflow, CI gates, PR expectations, release process |
