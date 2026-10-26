@@ -12,7 +12,7 @@ use crate::i18n::{I18n, Lang, tr, use_i18n};
 use crate::net::peer::Peer;
 use crate::net::{rest, upload};
 use crate::rpc::RpcClient;
-use crate::settings_nav::{SettingsHeading, SettingsNav, SettingsSidebar};
+use crate::settings_nav::{SettingsEmpty, SettingsHeading, SettingsNav, SettingsSidebar};
 use crate::theme::{Theme, ThemeChoice};
 use crate::ui::{Icon, IconName};
 use crate::util::{Rpc, as_string, fire, fire_revert, fire_status, json_str};
@@ -37,6 +37,8 @@ pub fn Settings(
     peer: StoredValue<Option<Rc<Peer>>, LocalStorage>,
     no_password: RwSignal<bool>,
     theme: Theme,
+    /// Owned by the app so other views can open the dialog on a given page.
+    nav: SettingsNav,
 ) -> impl IntoView {
     let i = use_i18n();
     let codec = RwSignal::new(String::new());
@@ -548,6 +550,7 @@ pub fn Settings(
                     on:click=move |_| theme.set(choice)
                 >
                     <Icon name=icon/>
+                    <span>{move || i.t(zh, en)}</span>
                 </button>
             }
         };
@@ -566,21 +569,30 @@ pub fn Settings(
         }
     };
     let reboot = move |_| {
-        let ok = web_sys::window()
-            .and_then(|w| {
-                w.confirm_with_message(tr(
-                    "重启设备？视频和键鼠会断开，设备启动后需要重新连接。被控电脑不受影响。",
-                    "Reboot the device? Video and input disconnect until it is back; the controlled computer is not affected.",
-                ))
-                .ok()
-            })
-            .unwrap_or(false);
-        if ok {
+        if confirm(tr(
+            "重启设备？视频和键鼠会断开，设备回来后页面会自动重新连接。被控电脑不受影响。",
+            "Reboot the device? Video and input drop until it is back, then the page reconnects on its own. The controlled computer is not affected.",
+        )) {
             fire(rpc, "reboot", json!({ "force": false }));
         }
     };
 
-    let nav = SettingsNav::new();
+    let reset_config = move |_| {
+        if confirm(tr(
+            "要把所有设置恢复为默认值吗？密码、网络和上传的镜像会保留。",
+            "Reset all settings to their defaults? Password, network and uploaded images stay.",
+        )) {
+            fire(rpc, "resetConfig", Value::Null);
+        }
+    };
+    let factory_reset = move |_| {
+        if confirm(tr(
+            "恢复出厂设置会清除设备上的所有数据并重启，确定吗？",
+            "Factory reset: erase all data on the device and reboot?",
+        )) {
+            fire(rpc, "factoryReset", Value::Null);
+        }
+    };
     let panel_ref = NodeRef::<leptos::html::Div>::new();
     // Take focus when the dialog opens so Esc and Tab stay in it.
     Effect::new(move |_| {
@@ -617,10 +629,13 @@ pub fn Settings(
             >
                 <SettingsSidebar nav=nav i=i/>
                 <div class="set-body">
-                <button class="close" title=move || i.t("关闭", "Close") aria-label=move || i.t("关闭", "Close") on:click=move |_| open.set(false)>
-                    <Icon name=IconName::Close/>
-                </button>
-                <SettingsHeading nav=nav i=i/>
+                <div class="set-head">
+                    <SettingsHeading nav=nav i=i/>
+                    <button class="close" title=move || i.t("关闭", "Close") aria-label=move || i.t("关闭", "Close") on:click=move |_| open.set(false)>
+                        <Icon name=IconName::Close/>
+                    </button>
+                </div>
+                <SettingsEmpty nav=nav i=i/>
 
                 <section class:off=nav.off("appearance")>
                     <div class="set-row">
@@ -651,109 +666,160 @@ pub fn Settings(
                 </section>
 
                 <section class:off=nav.off("codec")>
-                    <h3>{move || i.t("视频编码", "Video codec")}</h3>
-                    <div class="seg" role="radiogroup" aria-label=move || i.t("视频编码", "Video codec")>
-                        {codec_btn("auto", "自动", "Auto")}
-                        {codec_btn("h264", "H.264", "H.264")}
-                        {codec_btn("h265", "H.265", "H.265")}
+                    <div class="set-row">
+                        <div>
+                            <h3>{move || i.t("视频编码", "Video codec")}</h3>
+                            <div class="hint">{move || i.t("自动会选择浏览器支持的编码。H.265 更省带宽，但不是所有浏览器都能播放。", "Auto picks what the browser supports. H.265 needs less bandwidth but not every browser plays it.")}</div>
+                        </div>
+                        <div class="seg" role="radiogroup" aria-label=move || i.t("视频编码", "Video codec")>
+                            {codec_btn("auto", "自动", "Auto")}
+                            {codec_btn("h264", "H.264", "H.264")}
+                            {codec_btn("h265", "H.265", "H.265")}
+                        </div>
                     </div>
                 </section>
 
                 <section class:off=nav.off("rotation")>
-                    <h3>{move || i.t("屏幕旋转", "Display rotation")}</h3>
-                    <div class="seg" role="radiogroup" aria-label=move || i.t("屏幕旋转", "Display rotation")>
-                        {rotation_btn("0")}
-                        {rotation_btn("90")}
-                        {rotation_btn("180")}
-                        {rotation_btn("270")}
+                    <div class="set-row">
+                        <div>
+                            <h3>{move || i.t("屏幕旋转", "Display rotation")}</h3>
+                            <div class="hint">{move || i.t("被控电脑的屏幕竖着放时使用。", "For a host screen mounted in portrait.")}</div>
+                        </div>
+                        <div class="seg" role="radiogroup" aria-label=move || i.t("屏幕旋转", "Display rotation")>
+                            {rotation_btn("0")}
+                            {rotation_btn("90")}
+                            {rotation_btn("180")}
+                            {rotation_btn("270")}
+                        </div>
                     </div>
                 </section>
 
                 <section class:off=nav.off("layout")>
-                    <h3>{move || i.t("键盘布局", "Keyboard layout")}</h3>
-                    <select on:change=set_layout>
-                        {KEYBOARD_LAYOUTS
-                            .iter()
-                            .map(|(code, zh, en)| {
-                                view! {
-                                    <option value=*code prop:selected=move || layout.get() == *code>
-                                        {move || i.t(zh, en)}
-                                    </option>
-                                }
-                            })
-                            .collect_view()}
-                    </select>
+                    <div class="set-row">
+                        <div>
+                            <h3>{move || i.t("键盘布局", "Keyboard layout")}</h3>
+                            <div class="hint">{move || i.t("和被控电脑系统里的键盘布局一致，输入的字符才正确。", "Match the layout set on the host so typed characters come out right.")}</div>
+                        </div>
+                        <select on:change=set_layout aria-label=move || i.t("键盘布局", "Keyboard layout")>
+                            {KEYBOARD_LAYOUTS
+                                .iter()
+                                .map(|(code, zh, en)| {
+                                    view! {
+                                        <option value=*code prop:selected=move || layout.get() == *code>
+                                            {move || i.t(zh, en)}
+                                        </option>
+                                    }
+                                })
+                                .collect_view()}
+                        </select>
+                    </div>
+                </section>
+
+                <section class:off=nav.off("jiggler")>
+                    <div class="set-row">
+                        <div>
+                            <h3>{move || i.t("鼠标防休眠", "Mouse jiggler")}</h3>
+                            <div class="hint">{move || i.t("没人操作时定时轻微移动鼠标，防止被控电脑锁屏或休眠。", "Nudges the mouse while idle so the host does not lock or sleep.")}</div>
+                        </div>
+                        <label class="toggle">
+                            <input
+                                type="checkbox"
+                                aria-label=move || i.t("鼠标防休眠", "Mouse jiggler")
+                                prop:checked=move || jiggler.get()
+                                on:change=move |ev| send_toggle(rpc, "setJigglerState", jiggler, &ev)
+                            />
+                        </label>
+                    </div>
                 </section>
 
                 <section class:off=nav.off("brightness")>
-                    <h3>{move || i.t("设备屏幕亮度", "Device screen brightness")}</h3>
-                    <div class="row">
-                        <input
-                            type="range"
-                            min="0"
-                            max="255"
-                            prop:value=move || brightness.get().to_string()
-                            on:change=set_brightness
-                        />
-                        <span class="muted">{move || brightness.get()}</span>
+                    <div class="set-row">
+                        <div>
+                            <h3>{move || i.t("设备屏幕亮度", "Device screen brightness")}</h3>
+                            <div class="hint">{move || i.t("仅在设备连接了屏幕时生效。", "Only applies when a screen is attached to the device.")}</div>
+                        </div>
+                        <div class="row">
+                            <input
+                                type="range"
+                                aria-label=move || i.t("设备屏幕亮度", "Device screen brightness")
+                                min="0"
+                                max="255"
+                                prop:value=move || brightness.get().to_string()
+                                on:change=set_brightness
+                            />
+                            <span class="status">{move || format!("{}%", brightness.get() * 100 / 255)}</span>
+                        </div>
                     </div>
-                    <div class="hint">{move || i.t("仅在设备连接了屏幕时生效。", "Only applies when a screen is attached to the device.")}</div>
                 </section>
 
                 <section class:off=nav.off("password")>
                     <h3>{move || i.t("密码", "Password")}</h3>
-                    <Show when=move || !no_password.get()>
-                        <input
-                            type="password"
-                            placeholder=move || i.t("当前密码", "Current password")
-                            prop:value=move || old_pw.get()
-                            on:input=move |ev| old_pw.set(event_target_value(&ev))
-                        />
-                    </Show>
-                    <input
-                        type="password"
-                        placeholder=move || i.t("新密码", "New password")
-                        prop:value=move || new_pw.get()
-                        on:input=move |ev| new_pw.set(event_target_value(&ev))
-                    />
-                    <input
-                        type="password"
-                        placeholder=move || i.t("再次输入新密码", "Repeat new password")
-                        prop:value=move || confirm_pw.get()
-                        on:input=move |ev| confirm_pw.set(event_target_value(&ev))
-                    />
-                    <button on:click=submit_password>
+                    <div class="hint">
                         {move || {
                             if no_password.get() {
-                                i.t("设置密码", "Set password")
+                                i.t("现在不需要密码就能登录。设置后，打开网页和 API 都要先登录。", "Anyone can sign in right now. With a password, the web page and the API ask for it first.")
                             } else {
-                                i.t("修改密码", "Update password")
+                                i.t("登录网页和调用 API 时需要这个密码。", "Needed to sign in to the web page and the API.")
                             }
                         }}
-                    </button>
-                    <div class="muted">{move || pw_msg.get()}</div>
+                    </div>
+                    <Show when=move || !no_password.get()>
+                        <label class="field">
+                            <span>{move || i.t("当前密码", "Current password")}</span>
+                            <input
+                                type="password"
+                                autocomplete="current-password"
+                                prop:value=move || old_pw.get()
+                                on:input=move |ev| old_pw.set(event_target_value(&ev))
+                            />
+                        </label>
+                    </Show>
+                    <label class="field">
+                        <span>{move || i.t("新密码", "New password")}</span>
+                        <input
+                            type="password"
+                            autocomplete="new-password"
+                            prop:value=move || new_pw.get()
+                            on:input=move |ev| new_pw.set(event_target_value(&ev))
+                        />
+                    </label>
+                    <label class="field">
+                        <span>{move || i.t("再次输入新密码", "Repeat new password")}</span>
+                        <input
+                            type="password"
+                            autocomplete="new-password"
+                            prop:value=move || confirm_pw.get()
+                            on:input=move |ev| confirm_pw.set(event_target_value(&ev))
+                        />
+                    </label>
+                    <div class="actions">
+                        <button class="primary" on:click=submit_password>
+                            {move || {
+                                if no_password.get() {
+                                    i.t("设置密码", "Set password")
+                                } else {
+                                    i.t("修改密码", "Update password")
+                                }
+                            }}
+                        </button>
+                        <span class="status">{move || pw_msg.get()}</span>
+                    </div>
                 </section>
 
                 <section class:off=nav.off("media")>
-                    <h3>{move || i.t("虚拟媒体", "Virtual media")}</h3>
-                    <div class="muted">
+                    <h3>{move || i.t("挂载镜像", "Mount an image")}</h3>
+                    <div class="hint">
                         {move || {
                             let err = mount_err.get();
                             if err.is_empty() { describe_mount(&mount_info.get(), i) } else { err }
                         }}
                     </div>
-                    <label class="field">
-                        <span>{move || i.t("镜像 URL", "Image URL")}</span>
-                        <input
-                            type="url"
-                            placeholder="https://example.com/image.iso"
-                            prop:value=move || mount_url.get()
-                            on:input=move |ev| mount_url.set(event_target_value(&ev))
-                        />
-                    </label>
-                    <label class="field">
-                        <span>{move || i.t("在主机上显示为", "Present to the host as")}</span>
+                    <div class="set-row">
+                        <div>
+                            <h3>{move || i.t("在主机上显示为", "Present to the host as")}</h3>
+                        </div>
                         <select
+                            aria-label=move || i.t("在主机上显示为", "Present to the host as")
                             on:change=move |ev| mount_mode.set(event_target_value(&ev))
                         >
                             <option value="CDROM" prop:selected=move || mount_mode.get() == "CDROM">
@@ -763,20 +829,37 @@ pub fn Settings(
                                 {move || i.t("U 盘", "USB disk")}
                             </option>
                         </select>
-                    </label>
-                    <div class="row">
-                        <button on:click=do_mount>{move || i.t("挂载 URL", "Mount URL")}</button>
-                        <button on:click=do_unmount>{move || i.t("卸载", "Unmount")}</button>
                     </div>
                     <label class="field">
-                        <span>{move || i.t("或从这台电脑上传镜像", "Or upload an image from this computer")}</span>
-                        <input type="file" on:change=on_file />
+                        <span>{move || i.t("从网址挂载", "Mount from a URL")}</span>
+                        <input
+                            type="url"
+                            placeholder="https://example.com/image.iso"
+                            prop:value=move || mount_url.get()
+                            on:input=move |ev| mount_url.set(event_target_value(&ev))
+                        />
                     </label>
-                    <div class="muted">{move || upload_state.get()}</div>
+                    <div class="actions">
+                        <button class="primary" on:click=do_mount>{move || i.t("挂载", "Mount")}</button>
+                        <button
+                            on:click=do_unmount
+                            disabled=move || mount_info.get().is_null()
+                        >
+                            {move || i.t("卸载", "Unmount")}
+                        </button>
+                    </div>
+                    <div class="field">
+                        <span>{move || i.t("或从这台电脑上传", "Or upload from this computer")}</span>
+                        <label class="file-pick">
+                            <input type="file" accept=".iso,.img,.raw,.bin" on:change=on_file />
+                            <span class="file-btn">{move || i.t("选择镜像文件…", "Choose image file…")}</span>
+                            <span class="status">{move || upload_state.get()}</span>
+                        </label>
+                    </div>
                 </section>
 
                 <section class:off=nav.off("network")>
-                    <h3>{move || i.t("网络", "Network")}</h3>
+                    <h3>{move || i.t("状态", "Status")}</h3>
                     <dl class="kv">
                         {move || {
                             describe_network(&network.get(), i)
@@ -785,38 +868,55 @@ pub fn Settings(
                                 .collect_view()
                         }}
                     </dl>
-                    <button on:click=renew_dhcp>{move || i.t("重新获取 DHCP 地址", "Renew DHCP lease")}</button>
+                    <Show when=move || net_dhcp.get()>
+                        <button on:click=renew_dhcp>{move || i.t("重新获取 IP 地址", "Renew DHCP lease")}</button>
+                    </Show>
                 </section>
 
-                <section class:off=nav.off("reboot")>
-                    <div class="set-row">
-                        <div>
-                            <h3>{move || i.t("重启设备", "Reboot device")}</h3>
-                            <div class="hint">{move || i.t("只重启 KVM 设备，被控电脑不受影响。会先确认。", "Restarts only the KVM device, not the controlled computer. Asks first.")}</div>
-                        </div>
-                        <button type="button" class="tb-danger" on:click=reboot>
-                            {move || i.t("重启", "Reboot")}
-                        </button>
-                    </div>
+                <section class:off=nav.off("about")>
+                    <h3>{move || i.t("关于", "About")}</h3>
+                    <dl class="kv">
+                        <dt>{move || i.t("设备 ID", "Device ID")}</dt>
+                        <dd>{move || or_dash(device_id.get())}</dd>
+                        <dt>{move || i.t("程序版本", "App version")}</dt>
+                        <dd>{move || or_dash(app_version.get())}</dd>
+                        <Show when=move || !sys_version.get().is_empty()>
+                            <dt>{move || i.t("系统版本", "System version")}</dt>
+                            <dd>{move || sys_version.get()}</dd>
+                        </Show>
+                    </dl>
                 </section>
 
                 <section class:off=nav.off("firmware")>
                     <h3>{move || i.t("固件更新", "Firmware update")}</h3>
-                    <div class="muted">{move || update_state.get()}</div>
-                    <div class="row">
+                    <div class="actions">
                         <button on:click=check_update>{move || i.t("检查更新", "Check for updates")}</button>
-                        <button
-                            on:click=apply_update
-                            disabled=move || !update_available.get()
-                            title=move || i.t("请先检查更新，有可用更新时才能点击", "Check for updates first; enabled when one is available")
-                        >
-                            {move || i.t("立即更新", "Update now")}
-                        </button>
+                        <Show when=move || update_available.get()>
+                            <button class="primary" on:click=apply_update>{move || i.t("立即更新", "Update now")}</button>
+                        </Show>
+                        <span class="status">{move || update_state.get()}</span>
                     </div>
+                    <label class="toggle">
+                        <input
+                            type="checkbox"
+                            prop:checked=move || auto_update.get()
+                            on:change=move |ev| send_toggle(rpc, "setAutoUpdateState", auto_update, &ev)
+                        />
+                        {move || i.t("自动安装更新", "Install updates automatically")}
+                    </label>
                 </section>
 
                 <section class:off=nav.off("usb")>
                     <h3>{move || i.t("USB 设备", "USB devices")}</h3>
+                    <div class="hint">{move || i.t("设备在被控电脑上模拟的 USB 设备。关闭总开关等于拔掉 USB 线。", "What the device presents to the host over USB. The main switch is like unplugging the cable.")}</div>
+                    <label class="toggle">
+                        <input
+                            type="checkbox"
+                            prop:checked=move || usb_emul.get()
+                            on:change=move |ev| send_toggle(rpc, "setUsbEmulationState", usb_emul, &ev)
+                        />
+                        {move || i.t("连接到被控电脑", "Connected to the host")}
+                    </label>
                     <label class="toggle">
                         <input
                             type="checkbox"
@@ -855,12 +955,13 @@ pub fn Settings(
                                 toggle_usb("massStorage", event_target_checked(&ev))
                             }
                         />
-                        {move || i.t("大容量存储", "Mass storage")}
+                        {move || i.t("大容量存储（虚拟媒体需要）", "Mass storage (for virtual media)")}
                     </label>
                 </section>
 
                 <section class:off=nav.off("edid")>
                     <h3>"EDID"</h3>
+                    <div class="hint">{move || i.t("设备向被控电脑报告的显示器信息，决定可选的分辨率。留空则恢复默认。", "The display identity the device reports to the host; it decides which resolutions are offered. Leave empty for the default.")}</div>
                     <label class="field">
                         <span>{move || i.t("EDID（十六进制）", "EDID (hex)")}</span>
                         <textarea
@@ -870,9 +971,10 @@ pub fn Settings(
                             on:input=move |ev| edid.set(event_target_value(&ev))
                         ></textarea>
                     </label>
-                    <div class="hint">{move || i.t("留空则恢复默认的显示器标识。", "Leave empty to restore the default display identity.")}</div>
-                    <button on:click=save_edid>{move || i.t("应用 EDID", "Apply EDID")}</button>
-                    <div class="muted">{move || edid_msg.get()}</div>
+                    <div class="actions">
+                        <button class="primary" on:click=save_edid>{move || i.t("应用", "Apply")}</button>
+                        <span class="status">{move || edid_msg.get()}</span>
+                    </div>
                 </section>
 
                 <section class:off=nav.off("wol")>
@@ -886,8 +988,10 @@ pub fn Settings(
                             on:input=move |ev| wol_mac.set(event_target_value(&ev))
                         />
                     </label>
-                    <button on:click=send_wol>{move || i.t("发送唤醒包", "Send magic packet")}</button>
-                    <div class="muted">{move || wol_msg.get()}</div>
+                    <div class="actions">
+                        <button class="primary" on:click=send_wol>{move || i.t("发送唤醒包", "Send magic packet")}</button>
+                        <span class="status">{move || wol_msg.get()}</span>
+                    </div>
                 </section>
 
                 <section class:off=nav.off("ip")>
@@ -929,56 +1033,15 @@ pub fn Settings(
                             />
                         </label>
                     </Show>
-                    <button on:click=save_network>{move || i.t("应用", "Apply")}</button>
-                    <div class="muted">{move || net_msg.get()}</div>
-                </section>
-
-                <section class:off=nav.off("features")>
-                    <h3>{move || i.t("功能", "Features")}</h3>
-                    <label class="toggle">
-                        <input
-                            type="checkbox"
-                            prop:checked=move || jiggler.get()
-                            on:change=move |ev| send_toggle(rpc, "setJigglerState", jiggler, &ev)
-                        />
-                        {move || i.t("鼠标防休眠", "Mouse jiggler")}
-                    </label>
-                    <label class="toggle">
-                        <input
-                            type="checkbox"
-                            prop:checked=move || usb_emul.get()
-                            on:change=move |ev| send_toggle(rpc, "setUsbEmulationState", usb_emul, &ev)
-                        />
-                        {move || i.t("USB 模拟", "USB emulation")}
-                    </label>
-                    <label class="toggle">
-                        <input
-                            type="checkbox"
-                            prop:checked=move || auto_update.get()
-                            on:change=move |ev| send_toggle(rpc, "setAutoUpdateState", auto_update, &ev)
-                        />
-                        {move || i.t("自动更新", "Auto-update")}
-                    </label>
-                </section>
-
-                <section class:off=nav.off("log")>
-                    <h3>{move || i.t("日志级别", "Log level")}</h3>
-                    <select on:change=set_log>
-                        {["TRACE", "DEBUG", "INFO", "WARN", "ERROR"]
-                            .iter()
-                            .map(|l| {
-                                view! {
-                                    <option value=*l prop:selected=move || log_level.get() == *l>
-                                        {*l}
-                                    </option>
-                                }
-                            })
-                            .collect_view()}
-                    </select>
+                    <div class="actions">
+                        <button class="primary" on:click=save_network>{move || i.t("保存", "Save")}</button>
+                        <span class="status">{move || net_msg.get()}</span>
+                    </div>
                 </section>
 
                 <section class:off=nav.off("ssh")>
                     <h3>{move || i.t("SSH 访问", "SSH access")}</h3>
+                    <div class="hint">{move || i.t("用这把公钥以 root 登录设备，还需要在 系统 → 开发者 中打开开发者模式。", "Sign in to the device as root with this key; developer mode under System → Developer must be on too.")}</div>
                     <label class="field">
                         <span>{move || i.t("授权公钥", "Authorized public key")}</span>
                         <textarea
@@ -988,8 +1051,10 @@ pub fn Settings(
                             on:input=move |ev| ssh_key.set(event_target_value(&ev))
                         ></textarea>
                     </label>
-                    <button on:click=save_ssh>{move || i.t("保存 SSH 密钥", "Save SSH key")}</button>
-                    <div class="muted">{move || ssh_msg.get()}</div>
+                    <div class="actions">
+                        <button class="primary" on:click=save_ssh>{move || i.t("保存", "Save")}</button>
+                        <span class="status">{move || ssh_msg.get()}</span>
+                    </div>
                 </section>
 
                 <section class:off=nav.off("mqtt")>
@@ -1000,71 +1065,113 @@ pub fn Settings(
                             prop:checked=move || mqtt_enabled.get()
                             on:change=move |ev| mqtt_enabled.set(event_target_checked(&ev))
                         />
-                        {move || i.t("发布到 MQTT 服务器", "Publish to an MQTT broker")}
+                        {move || i.t("发布到 MQTT 服务器（如 Home Assistant）", "Publish to an MQTT broker (e.g. Home Assistant)")}
                     </label>
-                    <label class="field">
-                        <span>{move || i.t("服务器地址", "Broker host")}</span>
-                        <input
-                            type="text"
-                            placeholder="homeassistant.local"
-                            prop:value=move || mqtt_broker.get()
-                            on:input=move |ev| mqtt_broker.set(event_target_value(&ev))
-                        />
-                    </label>
-                    <label class="field">
-                        <span>{move || i.t("端口", "Port")}</span>
-                        <input
-                            type="number"
-                            placeholder="1883"
-                            prop:value=move || mqtt_port.get().to_string()
-                            on:input=move |ev| mqtt_port.set(event_target_value(&ev).parse().unwrap_or(1883))
-                        />
-                    </label>
-                    <label class="field">
-                        <span>{move || i.t("用户名", "Username")}</span>
-                        <input
-                            type="text"
-                            placeholder=move || i.t("可选", "Optional")
-                            prop:value=move || mqtt_user.get()
-                            on:input=move |ev| mqtt_user.set(event_target_value(&ev))
-                        />
-                    </label>
-                    <label class="field">
-                        <span>{move || i.t("密码", "Password")}</span>
-                        <input
-                            type="password"
-                            placeholder=move || i.t("可选", "Optional")
-                            prop:value=move || mqtt_pass.get()
-                            on:input=move |ev| mqtt_pass.set(event_target_value(&ev))
-                        />
-                    </label>
-                    <label class="field">
-                        <span>{move || i.t("主题前缀", "Base topic")}</span>
-                        <input
-                            type="text"
-                            placeholder="rustkvm"
-                            prop:value=move || mqtt_topic.get()
-                            on:input=move |ev| mqtt_topic.set(event_target_value(&ev))
-                        />
-                    </label>
-                    <button on:click=save_mqtt>{move || i.t("应用 MQTT", "Apply MQTT")}</button>
-                    <div class="muted">{move || mqtt_msg.get()}</div>
+                    <Show when=move || mqtt_enabled.get()>
+                        <label class="field">
+                            <span>{move || i.t("服务器地址", "Broker host")}</span>
+                            <input
+                                type="text"
+                                placeholder="homeassistant.local"
+                                prop:value=move || mqtt_broker.get()
+                                on:input=move |ev| mqtt_broker.set(event_target_value(&ev))
+                            />
+                        </label>
+                        <label class="field">
+                            <span>{move || i.t("端口", "Port")}</span>
+                            <input
+                                type="number"
+                                placeholder="1883"
+                                prop:value=move || mqtt_port.get().to_string()
+                                on:input=move |ev| mqtt_port.set(event_target_value(&ev).parse().unwrap_or(1883))
+                            />
+                        </label>
+                        <label class="field">
+                            <span>{move || i.t("用户名（可选）", "Username (optional)")}</span>
+                            <input
+                                type="text"
+                                prop:value=move || mqtt_user.get()
+                                on:input=move |ev| mqtt_user.set(event_target_value(&ev))
+                            />
+                        </label>
+                        <label class="field">
+                            <span>{move || i.t("密码（可选）", "Password (optional)")}</span>
+                            <input
+                                type="password"
+                                prop:value=move || mqtt_pass.get()
+                                on:input=move |ev| mqtt_pass.set(event_target_value(&ev))
+                            />
+                        </label>
+                        <label class="field">
+                            <span>{move || i.t("主题前缀", "Base topic")}</span>
+                            <input
+                                type="text"
+                                placeholder="rustkvm"
+                                prop:value=move || mqtt_topic.get()
+                                on:input=move |ev| mqtt_topic.set(event_target_value(&ev))
+                            />
+                        </label>
+                    </Show>
+                    <div class="actions">
+                        <button class="primary" on:click=save_mqtt>{move || i.t("保存", "Save")}</button>
+                        <span class="status">{move || mqtt_msg.get()}</span>
+                    </div>
                 </section>
 
                 <crate::settings_advanced::AdvancedSettings open=open rpc=rpc nav=nav />
 
-                <section class:off=nav.off("about")>
-                    <h3>{move || i.t("关于", "About")}</h3>
-                    <dl class="kv">
-                        <dt>{move || i.t("设备 ID", "Device ID")}</dt>
-                        <dd>{move || or_dash(device_id.get())}</dd>
-                        <dt>{move || i.t("程序版本", "App version")}</dt>
-                        <dd>{move || or_dash(app_version.get())}</dd>
-                        <Show when=move || !sys_version.get().is_empty()>
-                            <dt>{move || i.t("系统版本", "System version")}</dt>
-                            <dd>{move || sys_version.get()}</dd>
-                        </Show>
-                    </dl>
+                <section class:off=nav.off("log")>
+                    <div class="set-row">
+                        <div>
+                            <h3>{move || i.t("日志级别", "Log level")}</h3>
+                            <div class="hint">{move || i.t("排查问题时调高，平时用 INFO。", "Raise it while troubleshooting; INFO otherwise.")}</div>
+                        </div>
+                        <select on:change=set_log aria-label=move || i.t("日志级别", "Log level")>
+                            {["TRACE", "DEBUG", "INFO", "WARN", "ERROR"]
+                                .iter()
+                                .map(|l| {
+                                    view! {
+                                        <option value=*l prop:selected=move || log_level.get() == *l>
+                                            {*l}
+                                        </option>
+                                    }
+                                })
+                                .collect_view()}
+                        </select>
+                    </div>
+                </section>
+
+                <section class:off=nav.off("reboot")>
+                    <div class="set-row">
+                        <div>
+                            <h3>{move || i.t("重启设备", "Reboot device")}</h3>
+                            <div class="hint">{move || i.t("只重启 KVM 设备，被控电脑不受影响。会先确认。", "Restarts only the KVM device, not the controlled computer. Asks first.")}</div>
+                        </div>
+                        <button type="button" class="tb-danger" on:click=reboot>
+                            {move || i.t("重启", "Reboot")}
+                        </button>
+                    </div>
+                </section>
+
+                <section class:off=nav.off("danger")>
+                    <div class="set-row">
+                        <div>
+                            <h3>{move || i.t("恢复默认设置", "Reset settings")}</h3>
+                            <div class="hint">{move || i.t("设置恢复为默认值，密码、网络和上传的镜像保留。", "Settings go back to their defaults; password, network and uploaded images stay.")}</div>
+                        </div>
+                        <button type="button" class="tb-danger" on:click=reset_config>
+                            {move || i.t("恢复默认", "Reset")}
+                        </button>
+                    </div>
+                    <div class="set-row">
+                        <div>
+                            <h3>{move || i.t("恢复出厂设置", "Factory reset")}</h3>
+                            <div class="hint">{move || i.t("清除设备上的所有数据（包括密码和镜像）并重启。", "Erases everything on the device, password and images included, and reboots.")}</div>
+                        </div>
+                        <button type="button" class="tb-danger" on:click=factory_reset>
+                            {move || i.t("恢复出厂", "Factory reset")}
+                        </button>
+                    </div>
                 </section>
                 </div>
             </div>
@@ -1110,6 +1217,10 @@ impl UsbDevices {
     }
 }
 
+fn confirm(msg: &str) -> bool {
+    web_sys::window().and_then(|w| w.confirm_with_message(msg).ok()).unwrap_or(false)
+}
+
 fn or_dash(s: String) -> String {
     if s.is_empty() { "—".to_string() } else { s }
 }
@@ -1123,8 +1234,9 @@ fn describe_network(v: &Value, i: I18n) -> Vec<(&'static str, String)> {
     let mut rows = vec![
         (i.t("地址", "Address"), or_dash(ip.clone())),
         (
-            i.t("链路", "Link"),
-            if online { i.t("在线", "Online") } else { i.t("离线", "Offline") }.to_string(),
+            i.t("网络连接", "Connection"),
+            if online { i.t("已连接", "Connected") } else { i.t("未连接", "Disconnected") }
+                .to_string(),
         ),
     ];
     let gateway = json_str(v, "gateway");
@@ -1142,13 +1254,7 @@ fn describe_network(v: &Value, i: I18n) -> Vec<(&'static str, String)> {
     let page_host =
         web_sys::window().and_then(|w| w.location().hostname().ok()).unwrap_or_default();
     if !ip.is_empty() && !page_host.is_empty() && page_host != ip {
-        rows.push((
-            i.t("本页面", "This page"),
-            match i.lang() {
-                crate::i18n::Lang::Zh => format!("通过 {page_host} 打开"),
-                crate::i18n::Lang::En => format!("opened via {page_host}"),
-            },
-        ));
+        rows.push((i.t("当前访问地址", "Opened via"), page_host));
     }
     rows
 }

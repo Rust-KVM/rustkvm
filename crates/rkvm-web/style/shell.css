@@ -46,7 +46,6 @@
 .sb-item:not(:disabled):hover { background: var(--bg-hover); color: var(--text-primary); }
 .sb-item.on { background: var(--bg-selected); color: var(--text-primary); font-weight: 500; }
 .sb-item:disabled { opacity: .45; cursor: default; }
-.sb-item .sb-meta { margin-left: auto; font-size: var(--text-xs); color: var(--text-tertiary); }
 .sb-foot { margin-top: auto; display: flex; flex-direction: column; gap: 2px; }
 .sb-status { display: flex; align-items: center; gap: var(--space-3); height: 45px; padding: 0 var(--space-2);
   margin-top: var(--space-1); border-top: var(--hairline) solid var(--border-tertiary); white-space: nowrap; }
@@ -102,6 +101,20 @@
 .stage-callout { position: absolute; top: var(--space-3); left: var(--space-3); z-index: 15;
   max-width: min(480px, calc(100% - 24px)); background: var(--bg-primary); box-shadow: var(--shadow-popover); }
 .stage-callout .icon-btn { margin: -6px -6px -6px 0; color: inherit; }
+.callout-row { display: flex; gap: var(--space-2); align-items: center; }
+.callout-row > span { flex: 1; }
+
+/* Narrow windows: the status chip, LEDs and quality stepper give their room
+   to the actions, the title goes first and the mouse button keeps only its
+   icon, so every action stays on screen down to a phone (390px). */
+@media (max-width: 720px) {
+  .titlebar .chip, .tb-leds, .tb-quality, .tb-right .vsep { display: none; }
+  .tb-mouse .tb-mouse-label { display: none; }
+}
+@media (max-width: 520px) {
+  .tb-title { display: none; }
+  .titlebar { padding-left: var(--space-2); }
+}
 
 /* Touch: every target at least 44px (WCAG 2.5.5). The titlebar row scrolls
    sideways when the actions no longer fit. */

@@ -35,6 +35,8 @@ pub fn App() -> impl IntoView {
     let video_ref = NodeRef::<html::Video>::new();
 
     let checking = RwSignal::new(true);
+    // Set once the page knows no sign-in is needed; an effect below connects.
+    let connect_on_load = RwSignal::new(false);
     let is_setup = RwSignal::new(true);
     let needs_login = RwSignal::new(false);
     let no_password = RwSignal::new(false);
@@ -54,6 +56,12 @@ pub fn App() -> impl IntoView {
     let mouse_relative = RwSignal::new(false);
 
     let show_settings = RwSignal::new(false);
+    let settings_nav = crate::settings_nav::SettingsNav::new();
+    // Opens Settings on the page that holds the password section.
+    let open_password = move |_| {
+        settings_nav.show(crate::settings_nav::Page::Security);
+        show_settings.set(true);
+    };
     let show_terminal = RwSignal::new(false);
     let sidebar_open = RwSignal::new(false);
     // Focus mode hides the sidebar and titlebar; `peek` slides the titlebar
@@ -71,6 +79,15 @@ pub fn App() -> impl IntoView {
     let hid_session = StoredValue::new_local(Session::default());
     let hid_attached = StoredValue::new_local(false);
     let conn_gen = StoredValue::new_local(Rc::new(Cell::new(0_u64)));
+    // Set when the device reports that a newer browser took the session.
+    let taken_over = RwSignal::new(false);
+    // Automatic reconnect attempt in progress (1-based), 0 when idle.
+    let reconnecting = RwSignal::new(0_u32);
+    let retry_timer = StoredValue::new_local(None::<Timeout>);
+    // When the current session came up (ms since epoch) and how many sessions
+    // in a row were lost within SHORT_SESSION_MS of coming up.
+    let connected_at = StoredValue::new_local(0.0_f64);
+    let quick_drops = StoredValue::new_local(0_u32);
 
     Effect::new(move |_| {
         spawn_local(async move {
@@ -81,6 +98,10 @@ pub fn App() -> impl IntoView {
                 no_password.set(rest::no_password().await);
             }
             checking.set(false);
+            // Nothing to choose on the connect card: go straight to the screen.
+            if setup_done && !needs_login.get_untracked() {
+                connect_on_load.set(true);
+            }
         });
     });
 
@@ -94,6 +115,9 @@ pub fn App() -> impl IntoView {
                     is_setup.set(true);
                     needs_login.set(rest::auth_required().await);
                     no_password.set(rest::no_password().await);
+                    if !needs_login.get_untracked() {
+                        connect_on_load.set(true);
+                    }
                 }
                 Err(e) => error.set(Some(e)),
             }
@@ -105,23 +129,29 @@ pub fn App() -> impl IntoView {
         let pw = password.get();
         spawn_local(async move {
             match rest::login_local(&pw).await {
-                Ok(()) => needs_login.set(false),
+                Ok(()) => {
+                    needs_login.set(false);
+                    connect_on_load.set(true);
+                }
                 Err(e) => error.set(Some(e)),
             }
         });
     };
 
-    let do_connect = move |_| {
+    let connect = move || {
         // A second click before the button re-renders as disabled would open a
         // second session and get the first one kicked by the device.
         if conn_state.get_untracked() == "connecting" {
             return;
         }
         error.set(None);
+        taken_over.set(false);
         conn_state.set("connecting".to_string());
         spawn_local(async move {
             let Some(video) = video_ref.get_untracked() else {
-                error.set(Some("video element not mounted".to_string()));
+                error.set(Some(
+                    i.t_now("页面未就绪，请刷新", "Page not ready: reload it").to_string(),
+                ));
                 conn_state.set("error".to_string());
                 return;
             };
@@ -136,6 +166,14 @@ pub fn App() -> impl IntoView {
                             "videoState" => video_info.set(parse_video(&params)),
                             "keyboardLedState" => leds.set(parse_leds(&params)),
                             _ => {}
+                        }
+                    });
+                    // The device tells the old session before it hands the
+                    // connection to a newer browser; that one must not be
+                    // fought for by reconnecting.
+                    client.on_event(move |method, _| {
+                        if method == "otherSessionConnected" {
+                            taken_over.set(true);
                         }
                     });
 
@@ -153,6 +191,7 @@ pub fn App() -> impl IntoView {
                         hid_attached.set_value(true);
                     }
                     conn_state.set("connected".to_string());
+                    connected_at.set_value(js_sys::Date::now());
 
                     let generation = conn_gen.get_value();
                     let this_gen = generation.get() + 1;
@@ -169,7 +208,30 @@ pub fn App() -> impl IntoView {
                             video_info.set(VideoInfo::default());
                             show_settings.set(false);
                             show_terminal.set(false);
-                            error.set(Some(reason));
+                            if taken_over.get_untracked() {
+                                error.set(Some(
+                                    i.t_now(
+                                        "这台设备已在另一个浏览器窗口中打开，这里已断开。",
+                                        "The device was opened in another browser window, so this one disconnected.",
+                                    )
+                                    .to_string(),
+                                ));
+                            } else {
+                                error.set(Some(reason));
+                                // Usually the device restarted or the network
+                                // blinked: try again on our own. A session
+                                // that keeps dropping right after it comes up
+                                // is likely being taken by another client
+                                // whose notice got lost; stop after a few so
+                                // two pages never kick each other forever.
+                                let short = js_sys::Date::now() - connected_at.get_value()
+                                    < SHORT_SESSION_MS;
+                                let drops = if short { quick_drops.get_value() + 1 } else { 0 };
+                                quick_drops.set_value(drops);
+                                if drops < MAX_QUICK_DROPS {
+                                    reconnecting.set(1);
+                                }
+                            }
                             conn_state.set("lost".to_string());
                         });
                     }
@@ -203,6 +265,46 @@ pub fn App() -> impl IntoView {
             }
         });
     };
+
+    let do_connect = move |_| {
+        retry_timer.set_value(None);
+        reconnecting.set(0);
+        quick_drops.set_value(0);
+        connect();
+    };
+
+    Effect::new(move |_| {
+        if connect_on_load.get() {
+            connect_on_load.set(false);
+            connect();
+        }
+    });
+
+    // Automatic reconnect after a lost connection: a few quick tries, then
+    // every few seconds for about two minutes (a device restart takes ~10 s,
+    // a reboot ~30 s). Stops on success, on a manual click and on takeover.
+    Effect::new(move |_| {
+        let state = conn_state.get();
+        let attempt = reconnecting.get_untracked();
+        if state == "connected" {
+            reconnecting.set(0);
+            return;
+        }
+        if attempt == 0 || !(state == "lost" || state == "error") {
+            return;
+        }
+        if attempt > RECONNECT_TRIES {
+            reconnecting.set(0);
+            return;
+        }
+        let delay = (attempt.min(5) * 1000).max(1000);
+        retry_timer.set_value(Some(Timeout::new(delay, move || {
+            if reconnecting.get_untracked() == attempt {
+                reconnecting.set(attempt + 1);
+                connect();
+            }
+        })));
+    });
 
     let toggle_audio = move |_| {
         let Some(client) = rpc_store.get_value() else { return };
@@ -258,8 +360,8 @@ pub fn App() -> impl IntoView {
                 }
                 Ok(_) => error.set(Some(
                     i.t_now(
-                        "相对鼠标未启用：请先在 设置 → USB 设备 中打开",
-                        "Relative mouse is disabled: enable it in Settings → USB devices first",
+                        "相对鼠标未启用：请先在 设置 → 键盘与鼠标 → USB 设备 中打开",
+                        "Relative mouse is disabled: enable it in Settings → Keyboard & mouse → USB devices first",
                     )
                     .to_string(),
                 )),
@@ -348,13 +450,17 @@ pub fn App() -> impl IntoView {
     let status = Signal::derive(move || match conn_state.get().as_str() {
         "connected" => (i.t("已连接", "Connected"), "on"),
         "connecting" => (i.t("连接中…", "Connecting…"), "warn"),
+        _ if reconnecting.get() > 0 => (i.t("正在重新连接…", "Reconnecting…"), "warn"),
         "lost" => (i.t("连接已断开", "Disconnected"), "warn"),
         "error" => (i.t("连接失败", "Connection failed"), ""),
         _ => (i.t("未连接", "Not connected"), ""),
     });
-    let title = Signal::derive(move || {
-        if connected.get() { i.t("远程桌面", "Remote desktop") } else { "rustkvm" }
-    });
+    let title =
+        Signal::derive(
+            move || {
+                if connected.get() { i.t("远程桌面", "Remote desktop") } else { "" }
+            },
+        );
     let chip = Signal::derive(move || {
         connected.get().then(|| {
             let v = video_info.get();
@@ -413,19 +519,25 @@ pub fn App() -> impl IntoView {
                         <Button
                             variant=Variant::Ghost
                             small=true
+                            class="tb-mouse"
                             title=Signal::derive(move || {
-                                i.t("切换绝对 / 相对鼠标", "Switch absolute / relative pointer")
+                                i.t(
+                                    "绝对：指针跟随你的鼠标位置；相对：像普通鼠标一样移动，适合游戏和 BIOS",
+                                    "Absolute: the pointer follows yours. Relative: moves like a plain mouse, for games and BIOS",
+                                )
                             })
                             on:click=toggle_mouse
                         >
                             <Icon name=IconName::Mouse/>
-                            {move || {
-                                if mouse_relative.get() {
-                                    i.t("相对", "Relative")
-                                } else {
-                                    i.t("绝对", "Absolute")
-                                }
-                            }}
+                            <span class="tb-mouse-label">
+                                {move || {
+                                    if mouse_relative.get() {
+                                        i.t("鼠标：相对", "Mouse: relative")
+                                    } else {
+                                        i.t("鼠标：绝对", "Mouse: absolute")
+                                    }
+                                }}
+                            </span>
                         </Button>
                         <span class="tb-quality">
                             <IconButton
@@ -435,8 +547,8 @@ pub fn App() -> impl IntoView {
                                 disabled=Signal::derive(move || quality.get() <= 0.15)
                                 on:click=quality_down
                             />
-                            <span title=move || i.t("画质", "Stream quality")>
-                                {move || format!("{:.0}%", quality.get() * 100.0)}
+                            <span title=move || i.t("画质：降低可减少带宽", "Stream quality: lower it to save bandwidth")>
+                                {move || format!("{} {:.0}%", i.t("画质", "Quality"), quality.get() * 100.0)}
                             </span>
                             <IconButton
                                 icon=IconName::Plus
@@ -461,11 +573,14 @@ pub fn App() -> impl IntoView {
                             on:click=toggle_audio
                         />
                         <span class="vsep"></span>
-                        <IconButton
-                            icon=IconName::Keyboard
-                            label=Signal::derive(move || i.t("发送 Ctrl+Alt+Del", "Send Ctrl+Alt+Del"))
+                        <Button
+                            variant=Variant::Ghost
+                            small=true
+                            title=Signal::derive(move || i.t("向被控电脑发送 Ctrl+Alt+Del", "Send Ctrl+Alt+Del to the host"))
                             on:click=send_cad
-                        />
+                        >
+                            "Ctrl+Alt+Del"
+                        </Button>
                         <IconButton
                             icon=IconName::ScanText
                             label=Signal::derive(move || {
@@ -517,15 +632,20 @@ pub fn App() -> impl IntoView {
                         }
                     ></video>
 
-                    <Show when=move || connected.get() && no_password.get() && !nopw_dismissed.get()>
+                    <Show when=move || {
+                        connected.get() && no_password.get() && !nopw_dismissed.get() && !focus_mode.get()
+                    }>
                         <Callout class="stage-callout">
-                            <div style="display:flex;gap:8px;align-items:flex-start">
-                                <span style="flex:1">
+                            <div class="callout-row">
+                                <span>
                                     {move || i.t(
-                                        "未设置密码：同一网络中的任何人都能控制这台电脑，并打开设备的 root 终端。请在 设置 → 密码 中设置。",
-                                        "No password set: anyone on this network can control this machine and open a root shell on the device. Set one in Settings → Password.",
+                                        "未设置密码：同一网络中的任何人都能控制这台电脑，并打开设备的 root 终端。",
+                                        "No password set: anyone on this network can control this machine and open a root shell on the device.",
                                     )}
                                 </span>
+                                <Button small=true on:click=open_password>
+                                    {move || i.t("设置密码", "Set password")}
+                                </Button>
                                 <IconButton
                                     icon=IconName::Close
                                     small=true
@@ -628,8 +748,8 @@ pub fn App() -> impl IntoView {
                                             <Show when=move || no_password.get()>
                                                 <Callout>
                                                     {move || i.t(
-                                                        "未设置密码。同一网络中的任何人都能连接、控制这台电脑，并打开设备的 root 终端。连接后请在 设置 → 密码 中设置。",
-                                                        "No password is set. Anyone on this network can connect, control this machine and open a root shell on the device. After connecting, set a password in Settings → Password.",
+                                                        "未设置密码。同一网络中的任何人都能连接、控制这台电脑，并打开设备的 root 终端。连接后可在 设置 → 访问与安全 中设置密码。",
+                                                        "No password is set. Anyone on this network can connect, control this machine and open a root shell on the device. After connecting, set one in Settings → Access & security.",
                                                     )}
                                                 </Callout>
                                             </Show>
@@ -638,12 +758,14 @@ pub fn App() -> impl IntoView {
                                                 disabled=Signal::derive(move || conn_state.get() == "connecting")
                                                 on:click=do_connect
                                             >
-                                                <Show when=move || conn_state.get() == "connecting">
+                                                <Show when=move || conn_state.get() == "connecting" || reconnecting.get() != 0>
                                                     <span class="spinner"></span>
                                                 </Show>
                                                 {move || match conn_state.get().as_str() {
+                                                    _ if reconnecting.get() > 0 => i.t("正在重新连接…", "Reconnecting…"),
                                                     "connecting" => i.t("连接中…", "Connecting…"),
-                                                    "lost" => i.t("重新连接", "Reconnect"),
+                                                    "lost" if taken_over.get() => i.t("在这里继续使用", "Use it here instead"),
+                                                    "lost" | "error" => i.t("重新连接", "Reconnect"),
                                                     _ => i.t("连接", "Connect"),
                                                 }}
                                             </Button>
@@ -665,6 +787,7 @@ pub fn App() -> impl IntoView {
                     peer=peer_store
                     no_password=no_password
                     theme=theme
+                    nav=settings_nav
                 />
             </Show>
 
@@ -674,6 +797,7 @@ pub fn App() -> impl IntoView {
                     class="dialog"
                     role="dialog"
                     aria-modal="true"
+                    aria-labelledby="ocr-title"
                     data-modal="1"
                     tabindex="-1"
                     node_ref=ocr_ref
@@ -685,7 +809,15 @@ pub fn App() -> impl IntoView {
                     }
                 >
                     <div class="card">
-                        <h1 class="card-title">{move || i.t("识别到的文字", "Recognized text")}</h1>
+                        <h1 class="card-title" id="ocr-title">
+                            {move || {
+                                if ocr_view.get().is_some_and(|v| v.is_busy()) {
+                                    i.t("正在识别屏幕文字", "Reading the screen")
+                                } else {
+                                    i.t("识别到的文字", "Recognized text")
+                                }
+                            }}
+                        </h1>
                         <p class="card-sub ocr-status" aria-live="polite">
                             <Show when=move || ocr_view.get().is_some_and(|v| v.is_busy())>
                                 <span class="spinner"></span>
@@ -697,7 +829,7 @@ pub fn App() -> impl IntoView {
                             }}
                         </p>
                         <Show when=move || ocr_view.get().is_some_and(|v| v.text().is_some())>
-                            <textarea rows="10" readonly=true prop:value=move || {
+                            <textarea rows="10" readonly=true aria-labelledby="ocr-title" prop:value=move || {
                                 ocr_view
                                     .get()
                                     .and_then(|v| v.text().map(str::to_string))
@@ -738,6 +870,13 @@ pub fn App() -> impl IntoView {
         </div>
     }
 }
+
+/// Automatic reconnect attempts before the gate waits for a click.
+const RECONNECT_TRIES: u32 = 30;
+/// A session lost sooner than this after it came up counts as a quick drop.
+const SHORT_SESSION_MS: f64 = 30_000.0;
+/// Quick drops in a row after which the page stops reconnecting on its own.
+const MAX_QUICK_DROPS: u32 = 3;
 
 fn parse_video(p: &Value) -> VideoInfo {
     VideoInfo {

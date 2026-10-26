@@ -33,13 +33,18 @@ pub fn Button(
     #[prop(into, optional)] disabled: MaybeProp<bool>,
     #[prop(into, optional)] title: MaybeProp<&'static str>,
     #[prop(into, optional)] active: MaybeProp<bool>,
+    /// Extra class for layout hooks (e.g. responsive hiding); not for restyling.
+    #[prop(optional)]
+    class: &'static str,
     children: Children,
 ) -> impl IntoView {
     let class = format!(
-        "btn {}{}{}",
+        "btn {}{}{}{}{}",
         variant.class(),
         if small { " sm" } else { "" },
-        if block { " block" } else { "" }
+        if block { " block" } else { "" },
+        if class.is_empty() { "" } else { " " },
+        class
     );
     view! {
         <button

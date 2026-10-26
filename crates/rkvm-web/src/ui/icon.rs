@@ -45,10 +45,10 @@ impl IconName {
                 "M3.5 6.5h7M15.5 6.5h1M11 6.5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0zM3.5 13.5h1M9.5 13.5h7M5 13.5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0z"
             }
             Self::Maximize => "M3.5 7.5v-4h4M12.5 3.5h4v4M16.5 12.5v4h-4M7.5 16.5h-4v-4",
-            // A window with its toolbar and sidebar marked: "hide the
-            // chrome". Deliberately unlike Maximize's four corners.
+            // A screen with a viewfinder inside: "only the remote screen".
+            // Unlike Maximize's four outer corners and the Sidebar window.
             Self::Focus => {
-                "M5 3.5h10a2.5 2.5 0 0 1 2.5 2.5v8a2.5 2.5 0 0 1 -2.5 2.5h-10a2.5 2.5 0 0 1 -2.5 -2.5v-8a2.5 2.5 0 0 1 2.5 -2.5zM2.5 7h15M6.5 7v9.5M10 10.5h4.5"
+                "M4.5 3.5h11a2 2 0 0 1 2 2v6.5a2 2 0 0 1 -2 2h-11a2 2 0 0 1 -2 -2v-6.5a2 2 0 0 1 2 -2zM7 16.5h6M10 14v2.5M6 7.5v-1.5h1.5M12.5 6h1.5v1.5M14 10v1.5h-1.5M7.5 11.5h-1.5v-1.5"
             }
             Self::Keyboard => {
                 "M4.5 5h11a2 2 0 0 1 2 2v6a2 2 0 0 1 -2 2h-11a2 2 0 0 1 -2 -2v-6a2 2 0 0 1 2 -2zM6 8.5h.01M8.67 8.5h.01M11.33 8.5h.01M14 8.5h.01M7 12h6"

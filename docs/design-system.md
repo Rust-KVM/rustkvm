@@ -48,6 +48,9 @@ documented exceptions: the stage and the terminal, which are always dark.
 | `--bg-tertiary` | `#faf9f5` | `#141413` | wells (OCR text, switch track) |
 | `--bg-sidebar` | `#f9f9f7` | `#1f1e1d` | sidebar and titlebar |
 | `--bg-selected` | `#f0efec` | `#30302e` | selected nav row, active icon button |
+| `--bg-raised` | `#ffffff` | `#4a4945` | selected segment |
+| `--bg-input` | `#ffffff` | `#262624` | inputs and selects in settings |
+| `--chevron` | tertiary | tertiary | select arrow (data-URI SVG) |
 | `--bg-hover` / `--bg-press` | 5% / 8% ink | 6% / 10% ink | hover and press fills |
 | `--bg-inverse` | `#141413` | `#faf9f5` | primary button |
 | `--text-primary` | `#141413` | `#faf9f5` | body text |
@@ -139,12 +142,41 @@ until the user picks one. `src/theme.rs` flips it from the sidebar.
   content box (`hid::content_rect`).
 - **Gates** (setup, sign-in, connect) are a centered card on
   `--bg-secondary` over the stage, so the video element stays mounted.
+  - The page connects on its own once it knows no sign-in is needed (and
+    right after sign-in or setup); the connect card only shows while that
+    runs or after it failed. A callout inside a card is a tint only (one
+    border per surface).
+  - A lost connection (device restart, network blink) reconnects on its own:
+    a try after 1, 2, 3, 4 s, then every 5 s, 30 tries in all. The card says
+    "正在重新连接…" with a spinner and the sidebar dot stays amber; a click
+    retries at once.
+  - When the device reports `otherSessionConnected` (a newer browser took
+    the session), the old page does not reconnect: it says the device was
+    opened in another window and offers "在这里继续使用". Two pages must
+    never take the session from each other in a loop. As a backstop for a
+    lost notice, three sessions in a row that drop within 30 s of coming up
+    stop the automatic reconnect; a click starts it again.
+  - The titlebar shows no title before the connection; the card names the
+    device.
 - **Focus mode** hides sidebar and titlebar. A small handle at the top center
   peeks the titlebar back in as a floating bar; it hides 600ms after the
   pointer leaves. When the sidebar is hidden, `.app.focus` switches the grid to
   a single `minmax(0, 1fr)` track: a hidden grid item frees its track, so
   keeping the two-column template would auto-place `.main` into the 0px
   column and collapse the whole stage into the top-left corner.
+- **Settings pages** (phase 2): a page is a list of sections with a hairline
+  between them. A single-value setting is a `.set-row`: title and one-line
+  hint left, the control right (segmented control, switch, select). A form
+  with several fields stacks `Field`s (label above every input, never a
+  placeholder as the only label) and ends in `.actions`: one primary button
+  ("保存" / "应用" / the action's verb), secondary buttons next to it, and a
+  `.status` line for the result. A switch inside a form takes effect with
+  that form's button; a switch in a `.set-row` takes effect at once. Fields
+  that only matter when a switch is on (MQTT, static IP) are shown only
+  then. Settings the device cannot act on are not shown. The page title and
+  close button sit in a sticky `.set-head`, so a long page never scrolls its
+  close button away. Native `<select>` uses `--chevron` and `--bg-input`;
+  the native file input is hidden behind a translated `.file-pick` button.
 - **Settings is a modal dialog** (`settings.rs`, `settings_nav.rs`), as in
   Claude Desktop: centered panel (max 960×720, radius 16) over a scrim that
   covers the whole app, sidebar included (z 50/51). Left column (240px,
@@ -174,9 +206,16 @@ until the user picks one. `src/theme.rs` flips it from the sidebar.
   closes; a read still running when the dialog closes is dropped.
 
 Remote-desktop titlebar actions, in order: Num/Caps/Scroll LED badges |
-mouse mode (absolute/relative) · quality − % + · audio | Ctrl+Alt+Del · OCR |
-focus mode · fullscreen. Focus mode and fullscreen use clearly different
-glyphs (window with chrome marked vs four corners).
+mouse mode ("鼠标：绝对 / 相对", tooltip explains both) · quality ("画质 −
+100% +") · audio | Ctrl+Alt+Del (a text button: no glyph says it) · OCR |
+focus mode · fullscreen. Focus mode (a screen with a viewfinder), fullscreen
+(four outer corners) and the sidebar button (window with a side panel) use
+three different glyphs.
+
+Below 720px the chip, LEDs, quality stepper and separators hide and the mouse
+button keeps only its icon; below 520px the title hides too, so every action
+stays on screen at phone width (390px). The no-password callout hides in
+focus mode so it never covers the host's screen.
 
 ### Keyboard ownership
 
@@ -208,11 +247,11 @@ every button, nav row and segment is at least 44px.
 | `IconButton` | 32px (28px `small`), radius 8/6, ghost; `active` → selected fill; `danger` → red glyph; `label` is tooltip and aria-label (required) | toolbar actions |
 | `Field` | 12px label above, control below, 16px bottom margin; inputs 40px, radius 8, 1px `--border-secondary`, focus ring | forms |
 | `Callout` | tinted fill, hairline, leading alert icon, 12px text | warnings (no-password) |
-| `.toggle` | switch 36×20, knob 16px, off = `--border-tertiary` track, on = `--border-info`; hover darkens the track, press stretches the knob, focus ring, disabled 50%. In settings the label sits left and the switch right | boolean settings |
-| `.seg` | segmented radio group: `button[role=radio]`, `.on` + `aria-checked` on the current one (raised `--bg-primary` chip), ghost hover on the others, press `scale(.97)`, focus ring. Icon-only segments carry `title` and `aria-label` | one-of-few choices (theme, language, codec, rotation) |
+| `.toggle` | switch 36×20, knob 16px, off = `--border-secondary` track, on = `--border-info`; hover darkens the track, press stretches the knob, focus ring, disabled 50%. In settings the label sits left and the switch right | boolean settings |
+| `.seg` | segmented radio group: `button[role=radio]`, `.on` + `aria-checked` on the current one (raised `--bg-raised` chip, lighter than the panel in dark), ghost hover on the others, press `scale(.97)`, focus ring. Icon-only segments carry `title` and `aria-label` | one-of-few choices (theme, language, codec, rotation) |
 | `.set-row` | label + hint left, control right | settings rows |
 | `.badge` | 20px mono, hairline; `.on` = success tint | LEDs |
-| `.chip` | 24px pill, hover fill, tabular numbers | status in titlebar |
+| `.chip` | 24px pill, hover fill, `--text-secondary` (AA contrast), tabular numbers | status in titlebar |
 | `.dot` | 8px; `.on` green, `.warn` amber, default grey | connection state |
 | `.toast` | bottom-center, popover shadow, auto-clears after 6s | transient errors |
 | `.spinner` | 14px, `currentColor` | in-progress buttons |
@@ -264,6 +303,7 @@ Rules:
   (sidebar, titlebar, stage, gates, toast, focus mode), zh/en for the shell,
   token restyle of settings sheet, terminal and OCR dialog.
 - **Phase 2**: settings rows in the Claude style (label and hint left,
-  control right, hairline between rows) built from `Field`, `Button` and a
-  `Switch` component. (zh/en and the settings dialog landed in phase 1.)
+  control right, hairline between rows). Landed for every page as markup
+  patterns (`.set-row`, `.field`, `.actions`); a `Switch` Rust component is
+  still to do.
 - **Phase 3**: virtual media page, terminal and OCR polish, remaining copy.
