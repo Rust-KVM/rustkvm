@@ -43,14 +43,6 @@ ignore = [
     # Pulled in by webrtc 0.17.2 (latest) via dtls → p256/p384 → elliptic-curve 0.13,
     # which cannot take 0.7. Exposure is the per-session ephemeral DTLS key exchange.
     { id = "RUSTSEC-2026-0387", reason = "webrtc-rs dtls via elliptic-curve 0.13; no compatible fix" },
-    # zstd 0.13 / zstd-safe 7 — fixed only in zstd 0.14.3 / zstd-safe 8.2, which need
-    # salvo 1.x. salvo 0.93 always builds salvo-compression with zstd, but the app
-    # enables gzip only (web/routes.rs) and never decompresses zstd, so none of the
-    # affected paths (reused stream contexts, Seekable, legacy-frame streaming
-    # decode) run.
-    { id = "RUSTSEC-2026-0391", reason = "zstd linked via salvo 0.93 only; app serves gzip, never zstd" },
-    { id = "RUSTSEC-2026-0398", reason = "Seekable API unused; zstd linked via salvo 0.93 only" },
-    { id = "RUSTSEC-2026-0403", reason = "no zstd decompression in the app; fixed only in zstd-safe 8.2" },
 ]
 
 [licenses]
