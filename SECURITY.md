@@ -5,12 +5,15 @@ vulnerabilities seriously.
 
 ## Supported versions
 
-RustKVM has not had a tagged release yet. Security fixes land on the `dev` branch,
-which is the only supported line until the first release.
+The only tagged release so far is [v0.1.0](https://github.com/Rust-KVM/rustkvm/releases/tag/v0.1.0),
+a developer preview (prerelease). Security fixes land on the `dev` branch only; they are
+not backported to prereleases. If you run a prerelease, update to a build of `dev` to
+get fixes.
 
 | Version | Supported |
 | --- | --- |
 | `dev` branch | Yes |
+| `v0.1.0` and other prereleases | No |
 | Anything older | No |
 
 ## Reporting a vulnerability

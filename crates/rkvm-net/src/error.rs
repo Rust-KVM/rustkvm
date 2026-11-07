@@ -26,9 +26,6 @@ pub enum Error {
     #[error("failed to parse JSON output: {0}")]
     Json(#[from] serde_json::Error),
 
-    #[error("control URL must start with http:// or https://")]
-    InvalidControlUrl,
-
     #[error("mDNS server already running")]
     MdnsAlreadyRunning,
 
