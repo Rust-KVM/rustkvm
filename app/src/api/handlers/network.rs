@@ -249,23 +249,6 @@ pub async fn set_cloud_url(params: CloudUrlParams) -> Result<Value> {
 }
 
 pub fn get_tailscale_status() -> Result<Value> {
-    let control_url = rkvm_net::tailscale::get_control_url();
-    let status = rkvm_net::tailscale::get_status(&control_url)?;
+    let status = rkvm_net::tailscale::get_status()?;
     Ok(serde_json::to_value(status)?)
-}
-
-pub fn get_tailscale_control_url() -> Result<String> {
-    Ok(rkvm_net::tailscale::get_control_url())
-}
-
-#[derive(Deserialize)]
-pub struct TailscaleControlUrlParams {
-    #[serde(rename = "controlURL")]
-    pub control_url: String,
-}
-
-pub fn set_tailscale_control_url(params: TailscaleControlUrlParams) -> Result<Value> {
-    let resolved = rkvm_net::tailscale::set_control_url(&params.control_url)?;
-    info!("Tailscale control URL set to {}", resolved);
-    Ok(Value::Null)
 }

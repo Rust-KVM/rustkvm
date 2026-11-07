@@ -568,8 +568,6 @@ pub fn create_default_registry() -> RpcRegistry {
     registry.register_async("getTailscaleStatus", |_params| {
         Box::pin(async move { network::get_tailscale_status() })
     });
-    registry.register_no_params("getTailscaleControlURL", network::get_tailscale_control_url);
-    registry.register_typed("setTailscaleControlURL", network::set_tailscale_control_url);
 
     registry.register_async("getMqttSettings", |_params| {
         Box::pin(async move {

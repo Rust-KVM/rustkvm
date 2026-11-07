@@ -179,7 +179,7 @@ lib.rs                   # exposes `error` (Error/Result), `local_ip`, `mdns`, `
 ├── error.rs             # crate Error/Result types
 ├── local_ip.rs          # first non-loopback IPv4 via `if-addrs`
 ├── mdns/                # mDNS-SD service registration wrapper (config.rs, server.rs, mod.rs)
-├── tailscale.rs         # `tailscale` CLI shell-out (status, control URL)
+├── tailscale.rs         # `tailscale` CLI shell-out (status)
 └── wol.rs               # Wake-on-LAN magic-packet sender
 ```
 

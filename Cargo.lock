@@ -3362,8 +3362,6 @@ dependencies = [
  "if-addrs",
  "macaddr",
  "mdns-sd",
- "once_cell",
- "parking_lot",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
