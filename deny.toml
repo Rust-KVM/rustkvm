@@ -43,6 +43,9 @@ ignore = [
     # Pulled in by webrtc 0.17.2 (latest) via dtls → p256/p384 → elliptic-curve 0.13,
     # which cannot take 0.7. Exposure is the per-session ephemeral DTLS key exchange.
     { id = "RUSTSEC-2026-0387", reason = "webrtc-rs dtls via elliptic-curve 0.13; no compatible fix" },
+    # pin-utils unmaintained (repo archived 2026-10-01), not a vulnerability. Only
+    # pulled in by nix 0.26 under webrtc-util 0.17.2 (latest); no safe upgrade.
+    { id = "RUSTSEC-2026-0441", reason = "unmaintained only; via webrtc-util's nix 0.26, no upgrade" },
 ]
 
 [licenses]
