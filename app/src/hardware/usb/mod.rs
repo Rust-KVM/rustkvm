@@ -6,7 +6,7 @@ use once_cell::sync::OnceCell;
 use parking_lot::RwLock;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 
 pub mod descriptors;
 pub mod gadget;
@@ -73,11 +73,15 @@ impl UsbManager {
         let state_path = self.udc_state_path.clone();
         let cancel = self.poll_cancel.clone();
         let state_ref = Arc::clone(&self.state);
+        let hid = Arc::clone(&self.hid);
 
         let handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(500));
+            let mut interval = tokio::time::interval(UDC_POLL_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             let mut last_state = String::new();
+            let mut udc_present = true;
+            // Unknown until the first sample: `init_usb` may or may not have opened them.
+            let mut hid_open: Option<bool> = None;
             loop {
                 tokio::select! {
                     _ = cancel.cancelled() => {
@@ -85,13 +89,23 @@ impl UsbManager {
                         break;
                     }
                     _ = interval.tick() => {
-                        if !Path::new(&state_path).exists() {
-                            continue;
+                        let present = Path::new(&state_path).exists();
+                        if present != udc_present {
+                            udc_present = present;
+                            if present {
+                                info!(path = %state_path, "UDC registered again (back in device role)");
+                            } else {
+                                warn!(
+                                    path = %state_path,
+                                    "UDC removed (Type-C port switched to host role or controller unbound)"
+                                );
+                            }
                         }
 
-                        let new_state = match read_trimmed(&state_path).await {
-                            Ok(state) => state,
-                            Err(_) => "unknown".to_string(),
+                        let new_state = if present {
+                            read_trimmed(&state_path).await.unwrap_or_else(|_| "unknown".to_string())
+                        } else {
+                            UDC_STATE_NOT_ATTACHED.to_string()
                         };
 
                         if new_state != last_state {
@@ -100,8 +114,13 @@ impl UsbManager {
 
                             info!(from = %prev_state, to = %new_state, "USB state changed");
 
-                            crate::api::broadcast_usb_state(new_state).await;
+                            crate::api::broadcast_usb_state(new_state.clone()).await;
                             let _ = crate::hardware::display::request_display_update(true).await;
+                        }
+
+                        let link_up = present && udc_link_up(&new_state);
+                        if hid_open != Some(link_up) {
+                            hid_open = Some(sync_hid_io(&hid, link_up, &new_state).await);
                         }
                     }
                 }
@@ -128,6 +147,49 @@ pub fn get_current_usb_state() -> String {
         return mgr.read().get_usb_state();
     }
     "unknown".to_string()
+}
+
+/// How often the UDC state is sampled. The gadget must have closed its HID files
+/// before the kernel rebinds it, which happens when the host reattaches after the
+/// Type-C port was in host role; sampling well under a second keeps that window safe.
+const UDC_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+const UDC_STATE_NOT_ATTACHED: &str = "not attached";
+
+/// Whether the UDC state means a host link exists. On "not attached" (and when the
+/// UDC disappears) the Type-C port manager may switch the controller to host role
+/// and back, which unbinds and rebinds the gadget under any open /dev/hidgN fd.
+pub fn udc_link_up(state: &str) -> bool {
+    !matches!(state, UDC_STATE_NOT_ATTACHED | "unknown" | "")
+}
+
+/// Closes (link down) or reopens (link up) the HID gadget files. Returns whether
+/// the files are open afterwards, so a failed reopen is retried on the next tick.
+async fn sync_hid_io(hid: &Arc<Hid>, link_up: bool, state: &str) -> bool {
+    let hid = Arc::clone(hid);
+    let result = tokio::task::spawn_blocking(move || {
+        if link_up {
+            hid.resume_io()
+        } else {
+            hid.suspend_io();
+            Ok(())
+        }
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => {
+            info!(udc_state = %state, open = link_up, "HID files follow the USB link");
+            link_up
+        }
+        Ok(Err(e)) => {
+            warn!(udc_state = %state, "failed to reopen HID files, retrying: {e:#}");
+            false
+        }
+        Err(e) => {
+            warn!("HID I/O task failed: {e}");
+            !link_up
+        }
+    }
 }
 
 async fn read_trimmed(path: &str) -> anyhow::Result<String> {

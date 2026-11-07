@@ -251,6 +251,9 @@ pub struct Hid {
     keyboard_reader: Mutex<Option<(Arc<AtomicBool>, JoinHandle<()>)>>,
     /// Set while the UDC is unbound or being rebound: no gadget fd may be open then.
     io_suspended: AtomicBool,
+    /// Serialises `suspend_io`/`resume_io`: the USB state poller and the USB
+    /// emulation toggle both drive them.
+    io_transition: Mutex<()>,
 
     keyboard_state: Arc<RwLock<KeyboardState>>,
     on_keyboard_state_change: RwLock<Option<Arc<KeyboardStateCallback>>>,
@@ -286,6 +289,7 @@ impl Hid {
             last_full_warn: Mutex::new(None),
             keyboard_reader: Mutex::new(None),
             io_suspended: AtomicBool::new(false),
+            io_transition: Mutex::new(()),
             keyboard_state: Arc::new(RwLock::new(KeyboardState::default())),
             on_keyboard_state_change: RwLock::new(None),
             keys_down: Mutex::new(KeysDownState::default()),
@@ -404,8 +408,13 @@ impl Hid {
     /// Stops the LED reader and closes every gadget fd, and drops input reports until
     /// `resume_io`. Must run before the UDC is unbound or rebound: the 6.1 f_hid
     /// re-initialises its wait queues on bind, and a task still waiting on the old
-    /// queue corrupts the list when it wakes (kernel BUG in `f_hidg_read`).
+    /// queue corrupts the list when it wakes (kernel BUG in `f_hidg_read`, or in
+    /// `remove_wait_queue`/`cd_forget` once the fd is polled or closed). The kernel
+    /// rebinds the gadget by itself when the Type-C port switches roles on a host
+    /// detach, so the USB state poller calls this whenever the link goes down.
+    /// Idempotent.
     pub fn suspend_io(&self) {
+        let _transition = self.io_transition.lock();
         self.io_suspended.store(true, Ordering::Release);
         if let Some((stop, handle)) = self.keyboard_reader.lock().take() {
             stop.store(true, Ordering::Release);
@@ -423,15 +432,20 @@ impl Hid {
     }
 
     /// Reopens the LED reader and lets input reports through again after `suspend_io`.
+    /// Idempotent.
     pub fn resume_io(&self) -> anyhow::Result<()> {
+        let _transition = self.io_transition.lock();
         self.io_suspended.store(false, Ordering::Release);
         // After a UDC bind the /dev/hidgN nodes are recreated by mdev a moment later.
         let deadline = Instant::now() + HIDG_NODE_WAIT;
         while !Path::new(&self.keyboard_path).exists() && Instant::now() < deadline {
             std::thread::sleep(READER_POLL_INTERVAL);
         }
+        let was_running = self.keyboard_reader.lock().is_some();
         self.open_keyboard_hid_file()?;
-        info!("HID I/O resumed");
+        if !was_running {
+            info!("HID I/O resumed");
+        }
         Ok(())
     }
 

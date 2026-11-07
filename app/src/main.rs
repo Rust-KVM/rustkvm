@@ -139,6 +139,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     }
     webrtc::init_webrtc_api().await?;
 
+    hw::log_previous_kernel_crashes();
     let _usb = usb::init_usb();
 
     display::init_display().await?;
