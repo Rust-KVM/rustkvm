@@ -88,3 +88,57 @@ pub fn disarm_watchdog() -> Result<()> {
 
     Ok(())
 }
+
+const PSTORE_DIR: &str = "/sys/fs/pstore";
+
+/// Lines of a pstore kernel log that identify a crash: what failed, in which task,
+/// and where. Capped so one record stays a few log lines.
+pub fn summarize_kernel_crash(log: &str) -> Vec<&str> {
+    const MARKERS: [&str; 8] = [
+        "Internal error",
+        "Kernel panic",
+        "BUG:",
+        "corruption",
+        "Unable to handle",
+        "Comm:",
+        "pc :",
+        "lr :",
+    ];
+    log.lines()
+        .map(str::trim_end)
+        .filter(|line| MARKERS.iter().any(|m| line.contains(m)))
+        .take(8)
+        .collect()
+}
+
+/// Logs the kernel crash records kept in pstore (ramoops) from earlier boots, so a
+/// crash that took HID or the whole device down is visible in the app log.
+pub fn log_previous_kernel_crashes() {
+    let Ok(entries) = std::fs::read_dir(PSTORE_DIR) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("dmesg-") {
+            continue;
+        }
+        let recorded = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
+            .unwrap_or_else(|_| "unknown".to_string());
+        let Ok(log) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let summary = summarize_kernel_crash(&log);
+        if summary.is_empty() {
+            continue;
+        }
+        warn!(
+            record = %name,
+            recorded = %recorded,
+            "kernel crash from an earlier boot (full log in {PSTORE_DIR}): {}",
+            summary.join(" | ")
+        );
+    }
+}
