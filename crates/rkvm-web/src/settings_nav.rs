@@ -41,6 +41,7 @@ const SECTIONS: &[(&str, Page, &str, &str)] = &[
     ("layout", Page::Input, "键盘布局", "Keyboard layout"),
     ("usb", Page::Input, "USB 设备", "USB devices"),
     ("macros", Page::Input, "键盘宏", "Keyboard macros"),
+    ("jiggler", Page::Input, "鼠标防休眠", "Mouse jiggler"),
     ("media", Page::Media, "虚拟媒体", "Virtual media"),
     ("network", Page::Network, "网络", "Network"),
     ("ip", Page::Network, "IP 地址", "IP address"),
@@ -52,17 +53,14 @@ const SECTIONS: &[(&str, Page, &str, &str)] = &[
     ("ssh", Page::Security, "SSH 访问", "SSH access"),
     ("https", Page::Security, "HTTPS 证书", "HTTPS certificate"),
     ("brightness", Page::Hardware, "设备屏幕亮度", "Device screen brightness"),
-    ("features", Page::Hardware, "功能", "Features"),
     ("power", Page::Hardware, "电源", "Power"),
     ("extension", Page::Hardware, "扩展", "Extension"),
-    ("serial", Page::Hardware, "串口控制台", "Serial console"),
     ("reboot", Page::System, "重启设备", "Reboot device"),
     ("firmware", Page::System, "固件更新", "Firmware update"),
-    ("timezone", Page::System, "时区", "Time zone"),
     ("log", Page::System, "日志级别", "Log level"),
     ("developer", Page::System, "开发者", "Developer"),
     ("about", Page::System, "关于", "About"),
-    ("danger", Page::System, "危险操作", "Danger zone"),
+    ("danger", Page::System, "恢复默认 / 出厂设置", "Reset / factory reset"),
 ];
 
 fn page_info(page: Page) -> (&'static str, &'static str, IconName) {
@@ -82,6 +80,13 @@ pub struct SettingsNav {
 impl SettingsNav {
     pub fn new() -> Self {
         Self { page: RwSignal::new(Page::General), query: RwSignal::new(String::new()) }
+    }
+
+    /// Selects `page` and clears the search, e.g. before opening the dialog
+    /// from a link elsewhere in the app.
+    pub fn show(self, page: Page) {
+        self.query.set(String::new());
+        self.page.set(page);
     }
 
     fn searching(self) -> Option<String> {
@@ -127,7 +132,6 @@ pub fn SettingsSidebar(nav: SettingsNav, i: I18n) -> impl IntoView {
                     on:input=move |ev| nav.query.set(event_target_value(&ev))
                 />
             </label>
-            <div class="set-group">{move || i.t("设置", "Settings")}</div>
             {PAGES
                 .iter()
                 .map(|&(page, zh, en, icon)| {
@@ -165,6 +169,13 @@ pub fn SettingsHeading(nav: SettingsNav, i: I18n) -> impl IntoView {
                 }
             }}
         </h2>
+    }
+}
+
+/// Shown under the heading when a search matches nothing.
+#[component]
+pub fn SettingsEmpty(nav: SettingsNav, i: I18n) -> impl IntoView {
+    view! {
         <Show when=move || nav.no_results()>
             <p class="set-empty">{move || i.t("没有匹配的设置。", "No settings match.")}</p>
         </Show>

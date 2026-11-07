@@ -77,6 +77,7 @@ pub fn Sidebar(
                     <button
                         type="button"
                         class="sb-logo"
+                        tabindex="-1"
                         title=move || {
                             if open.get() {
                                 i.t("收起侧边栏", "Collapse sidebar")
@@ -131,12 +132,11 @@ pub fn Sidebar(
                         class="sb-item"
                         class:on=move || show_terminal.get()
                         disabled=disabled
-                        title=move || i.t("设备终端", "Device terminal")
+                        title=move || i.t("设备终端（以 root 登录 KVM 设备）", "Device terminal (root shell on the KVM device)")
                         on:click=move |_| show_terminal.update(|s| *s = !*s)
                     >
                         <Icon name=IconName::Terminal/>
                         <span class="sb-label">{move || i.t("设备终端", "Device terminal")}</span>
-                        <span class="sb-meta sb-label">"root"</span>
                     </button>
                     <button
                         type="button"
