@@ -13,7 +13,8 @@ use crate::hardware::usb::storage as storage_mod;
 static STREAM_QUALITY_FACTOR: AtomicI32 = AtomicI32::new(100);
 static VIDEO_CODEC_PREFERENCE: OnceLock<Mutex<String>> = OnceLock::new();
 static VIDEO_SLEEP_ENABLED: AtomicBool = AtomicBool::new(false);
-static VIDEO_SLEEP_DURATION: AtomicI32 = AtomicI32::new(60);
+// -1 = disabled, matching `set_video_sleep_mode` (enabled iff duration >= 0).
+static VIDEO_SLEEP_DURATION: AtomicI32 = AtomicI32::new(-1);
 static DISPLAY_ROTATION: OnceLock<Mutex<String>> = OnceLock::new();
 
 #[derive(Deserialize)]

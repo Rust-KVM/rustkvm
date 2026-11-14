@@ -30,8 +30,7 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc, nav: SettingsNav) -> imp
     let cloud_api = RwSignal::new(String::new());
     let cloud_app = RwSignal::new(String::new());
     let cloud_msg = RwSignal::new(String::new());
-    let ts_url = RwSignal::new(String::new());
-    let ts_msg = RwSignal::new(String::new());
+    let ts = RwSignal::new(TailscaleView::default());
     let active_ext = RwSignal::new(String::new());
     let ext_msg = RwSignal::new(String::new());
     let dev_mode = RwSignal::new(false);
@@ -98,8 +97,8 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc, nav: SettingsNav) -> imp
                 cloud_app.set(state.app_url.clone());
                 cloud.set(state);
             }
-            if let Ok(v) = c.call("getTailscaleControlURL", Value::Null).await {
-                ts_url.set(as_string(&v));
+            if let Ok(v) = c.call("getTailscaleStatus", Value::Null).await {
+                ts.set(TailscaleView::from_value(&v));
             }
             if let Ok(v) = c.call("getDevModeState", Value::Null).await {
                 dev_mode.set(v.get("enabled").and_then(Value::as_bool).unwrap_or(false));
@@ -170,16 +169,6 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc, nav: SettingsNav) -> imp
             }
         });
     };
-    let save_ts = move |_| {
-        fire_status(
-            rpc,
-            "setTailscaleControlURL",
-            json!({ "controlURL": ts_url.get().trim() }),
-            ts_msg,
-            tr("控制服务器已保存", "Control server saved"),
-        )
-    };
-
     let save_ext = move |_| {
         let Some(c) = rpc.get_value() else { return };
         let ext = active_ext.get();
@@ -376,20 +365,24 @@ pub fn AdvancedSettings(open: RwSignal<bool>, rpc: Rpc, nav: SettingsNav) -> imp
 
         <section class:off=nav.off("tailscale")>
             <h3>"Tailscale"</h3>
-            <div class="hint">{move || i.t("只有自建控制服务器（如 Headscale）时才需要填写，留空使用官方服务器。", "Only for a self-hosted control server such as Headscale; leave empty for the official one.")}</div>
-            <label class="field">
-                <span>{move || i.t("控制服务器", "Control server")}</span>
-                <input
-                    type="url"
-                    placeholder="https://controlplane.tailscale.com"
-                    prop:value=move || ts_url.get()
-                    on:input=move |ev| ts_url.set(event_target_value(&ev))
-                />
-            </label>
-            <div class="actions">
-                <button class="primary" on:click=save_ts>{move || i.t("保存", "Save")}</button>
-                <span class="status">{move || ts_msg.get()}</span>
-            </div>
+            <dl class="kv">
+                <dt>{move || i.t("状态", "Status")}</dt>
+                <dd>
+                    <span class="dot" class:on=move || ts.get().online></span>
+                    {move || {
+                        if ts.get().online {
+                            i.t("在线", "Online")
+                        } else {
+                            i.t("未运行或未安装", "Not running or not installed")
+                        }
+                    }}
+                </dd>
+                <dt>{move || i.t("主机名", "Hostname")}</dt>
+                <dd>{move || ts.get().hostname}</dd>
+                <dt>{move || i.t("地址", "Addresses")}</dt>
+                <dd>{move || ts.get().addresses}</dd>
+            </dl>
+            <div class="hint">{move || i.t("默认镜像不带 Tailscale。要用自建控制服务器（如 Headscale），请在设备上运行 tailscale up --login-server <地址>。", "Tailscale is not in the default image. To use your own control server, such as Headscale, run tailscale up --login-server <URL> on the device.")}</div>
         </section>
 
         <section class:off=nav.off("extension")>
@@ -594,6 +587,33 @@ impl CloudState {
             app_url: json_str(v, "appUrl"),
         }
     }
+}
+
+/// `getTailscaleStatus` reduced to what the settings page shows.
+#[derive(Clone, Default)]
+struct TailscaleView {
+    online: bool,
+    hostname: String,
+    addresses: String,
+}
+
+impl TailscaleView {
+    fn from_value(v: &Value) -> Self {
+        let addresses = v
+            .get("ip_addresses")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "))
+            .unwrap_or_default();
+        Self {
+            online: v.get("online").and_then(Value::as_bool).unwrap_or(false),
+            hostname: or_dash(json_str(v, "hostname")),
+            addresses: or_dash(addresses),
+        }
+    }
+}
+
+fn or_dash(s: String) -> String {
+    if s.is_empty() { "—".to_string() } else { s }
 }
 
 #[derive(Clone, PartialEq)]

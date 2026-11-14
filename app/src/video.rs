@@ -266,9 +266,20 @@ async fn stop_pipeline() {
     }
 }
 
+/// Held for a whole stop + start. Without it a restartVideoPipeline call and the
+/// supervisor (which sees the pipeline down mid-restart) rebuilt concurrently: two
+/// encoders, the capture queue busy, and no frames until the stall check rebuilt
+/// it again about 10 s later.
+static RESTART_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Tears down and rebuilds the capture/encode pipeline with the boot-time configuration,
 /// keeping any attached WebRTC sink so connected viewers resume on the next keyframe.
 pub async fn restart_video_pipeline() -> anyhow::Result<()> {
+    let _restart = RESTART_LOCK.lock().await;
+    restart_pipeline_locked().await
+}
+
+async fn restart_pipeline_locked() -> anyhow::Result<()> {
     let (video_config, audio_config) = PIPELINE_CONFIG
         .get()
         .cloned()
@@ -462,15 +473,20 @@ pub fn spawn_video_supervisor() {
                 return;
             }
             let Some((video_config, _)) = PIPELINE_CONFIG.get() else { continue };
-            if is_video_pipeline_running().await {
-                failures = 0;
-                let Some(reason) = live.check(&video_config.device).await else { continue };
-                warn!(%reason, "video capture stalled, rebuilding the pipeline");
-            } else {
-                warn!(failures, "video pipeline is down, restarting");
-            }
-            live.pipeline_replaced();
-            match restart_video_pipeline().await {
+            let restarted = {
+                // Someone else is rebuilding right now; look again next tick.
+                let Ok(_restart) = RESTART_LOCK.try_lock() else { continue };
+                if is_video_pipeline_running().await {
+                    failures = 0;
+                    let Some(reason) = live.check(&video_config.device).await else { continue };
+                    warn!(%reason, "video capture stalled, rebuilding the pipeline");
+                } else {
+                    warn!(failures, "video pipeline is down, restarting");
+                }
+                live.pipeline_replaced();
+                restart_pipeline_locked().await
+            };
+            match restarted {
                 Ok(()) => failures = 0,
                 Err(e) => {
                     let delay = restart_backoff(failures);
@@ -497,17 +513,29 @@ pub async fn shutdown_video_pipeline() {
 /// The next raw (NV12) frame from the capture pipeline, taken before the
 /// encoder valve so it works while no viewer is connected.
 pub async fn capture_raw_frame() -> anyhow::Result<gstreamer::Sample> {
-    let rx = PIPELINE_MANAGER
-        .lock()
-        .await
-        .as_ref()
-        .map(PipelineManager::request_raw_frame)
-        .ok_or_else(|| anyhow::anyhow!("Pipeline not initialized"))?;
-    tokio::time::timeout(Duration::from_secs(2), rx)
-        .await
-        .map_err(|_| anyhow::anyhow!("No video frame within 2s"))?
-        .map_err(|_| anyhow::anyhow!("Video pipeline stopped before a frame arrived"))
+    // A pipeline rebuild (restartVideoPipeline, signal change, self-heal) briefly
+    // leaves no pipeline or drops pending requests; wait it out instead of failing
+    // screenshots and OCR that land in that window.
+    let deadline = tokio::time::Instant::now() + RAW_FRAME_RESTART_GRACE;
+    loop {
+        let rx = PIPELINE_MANAGER.lock().await.as_ref().map(PipelineManager::request_raw_frame);
+        let err = match rx {
+            None => anyhow::anyhow!("Pipeline not initialized"),
+            Some(rx) => match tokio::time::timeout(Duration::from_secs(2), rx).await {
+                Ok(Ok(sample)) => return Ok(sample),
+                Ok(Err(_)) => anyhow::anyhow!("Video pipeline stopped before a frame arrived"),
+                Err(_) => anyhow::bail!("No video frame within 2s"),
+            },
+        };
+        if tokio::time::Instant::now() >= deadline {
+            return Err(err);
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }
+
+/// How long `capture_raw_frame` waits for a pipeline that is being rebuilt.
+const RAW_FRAME_RESTART_GRACE: Duration = Duration::from_secs(5);
 
 pub async fn capture_screenshot_jpeg() -> anyhow::Result<bytes::Bytes> {
     let sample = capture_raw_frame().await?;

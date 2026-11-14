@@ -69,7 +69,9 @@ pub(super) async fn init_developer_routes() -> Result<Router> {
 }
 
 pub(super) async fn init_static_routes() -> Result<Router> {
-    let compression = Compression::new().enable_gzip(CompressionLevel::Fastest);
+    // gzip only: `Compression::new()` also enables zstd, which salvo 0.93 links
+    // through a zstd crate with open advisories (see deny.toml).
+    let compression = Compression::new().disable_all().enable_gzip(CompressionLevel::Fastest);
 
     let router = if let Some(serve_dir) = option_env!("RUSTKVM_SERVE_DIR") {
         Router::new()

@@ -35,8 +35,20 @@ impl AppState {
         }
     }
 
+    /// Removes a session and closes its peer connection. Every removal path goes
+    /// through here: a session dropped without `close()` keeps its ICE agent, UDP
+    /// sockets and interceptor tasks alive for the life of the process.
     pub async fn remove_session(&self, session_id: &str) -> Option<Session> {
         let removed = self.sessions.write().await.remove(session_id);
+        if let Some(pc) = removed.as_ref().and_then(|s| s.peer_connection.clone()) {
+            // Spawned: callers include the connection's own ICE state handler, and
+            // closing from inside it would wait on itself. Closing twice is a no-op.
+            tokio::spawn(async move {
+                if let Err(e) = pc.close().await {
+                    warn!("failed to close peer connection: {e}");
+                }
+            });
+        }
 
         let mut current = self.current_session.write().await;
         if let Some(ref current_id) = *current

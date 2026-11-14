@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::hardware::usb as usb_mod;
 
@@ -78,24 +78,41 @@ pub struct UsbEmulationParams {
 }
 
 pub async fn set_usb_emulation_state(params: UsbEmulationParams) -> Result<Value> {
-    let udc = {
+    if get_usb_emulation_state()? == params.enabled {
+        return Ok(Value::Null);
+    }
+    let (udc, hid) = {
         let mgr =
             usb_mod::get_usb_manager().ok_or_else(|| anyhow!("USB manager not initialized"))?;
         let mgr_guard = mgr.read();
-        mgr_guard.get_udc_name().to_string()
+        (mgr_guard.get_udc_name().to_string(), mgr_guard.hid())
     };
-    let path = if params.enabled {
-        "/sys/bus/platform/drivers/dwc3/bind"
-    } else {
-        "/sys/bus/platform/drivers/dwc3/unbind"
-    };
-    tokio::fs::write(path, &udc).await.map_err(|e| {
-        if params.enabled {
-            anyhow!("error binding UDC: {}", e)
+    let enabled = params.enabled;
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        // No gadget fd may be open across an unbind/bind (see `Hid::suspend_io`).
+        hid.suspend_io();
+        let path = if enabled {
+            "/sys/bus/platform/drivers/dwc3/bind"
         } else {
-            anyhow!("error unbinding UDC: {}", e)
+            "/sys/bus/platform/drivers/dwc3/unbind"
+        };
+        let written = std::fs::write(path, &udc);
+        // HID stays suspended while the UDC is unbound; resume once bound again, or
+        // when the unbind failed and the old binding is still in place.
+        if (enabled || written.is_err())
+            && let Err(e) = hid.resume_io()
+        {
+            warn!("failed to resume HID I/O: {e:#}");
         }
-    })?;
+        written.map_err(|e| {
+            if enabled {
+                anyhow!("error binding UDC: {}", e)
+            } else {
+                anyhow!("error unbinding UDC: {}", e)
+            }
+        })
+    })
+    .await??;
     info!("USB emulation state set to: {}", params.enabled);
     Ok(Value::Null)
 }

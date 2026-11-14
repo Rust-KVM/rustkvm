@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use tracing::{info, warn};
 
 use super::MQTT_MANAGER;
@@ -62,17 +62,12 @@ pub async fn start_mqtt() {
 }
 
 pub async fn restart_mqtt(settings: &MqttConfig) -> Result<()> {
-    {
-        let guard =
-            MQTT_MANAGER.get().ok_or_else(|| anyhow!("MQTT manager not initialized"))?.lock().await;
-        if let Some(mgr) = guard.as_ref() {
-            mgr.close().await;
-        }
-    }
-
-    if let Some(cell) = MQTT_MANAGER.get() {
-        let mut guard = cell.lock().await;
-        *guard = None;
+    // The cell is only created when MQTT was enabled at boot; create it here so that
+    // enabling MQTT from the settings page works without a restart.
+    let cell = MQTT_MANAGER.get_or_init(|| async { tokio::sync::Mutex::new(None) }).await;
+    stop_periodic_status_updates();
+    if let Some(mgr) = cell.lock().await.take() {
+        mgr.close().await;
     }
 
     if !settings.enabled {
@@ -83,10 +78,7 @@ pub async fn restart_mqtt(settings: &MqttConfig) -> Result<()> {
     let device_id = get_device_id();
     let manager = MqttManager::new(settings, &device_id).await?;
 
-    let cell = MQTT_MANAGER.get_or_init(|| async { tokio::sync::Mutex::new(None) }).await;
-    let mut guard = cell.lock().await;
-    *guard = Some(manager);
-    drop(guard);
+    *cell.lock().await = Some(manager);
 
     start_periodic_status_updates(Duration::from_secs(15)).await;
 
@@ -94,8 +86,19 @@ pub async fn restart_mqtt(settings: &MqttConfig) -> Result<()> {
     Ok(())
 }
 
+/// The status publisher task; replaced on every (re)start so only one runs.
+static STATUS_TASK: parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>> =
+    parking_lot::Mutex::new(None);
+
+fn stop_periodic_status_updates() {
+    if let Some(task) = STATUS_TASK.lock().take() {
+        task.abort();
+    }
+}
+
 async fn start_periodic_status_updates(interval: Duration) {
-    tokio::spawn(async move {
+    stop_periodic_status_updates();
+    let task = tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -137,4 +140,5 @@ async fn start_periodic_status_updates(interval: Duration) {
             drop(guard);
         }
     });
+    *STATUS_TASK.lock() = Some(task);
 }

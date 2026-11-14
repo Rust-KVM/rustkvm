@@ -100,7 +100,7 @@ are both Rust and share one protocol crate.
   `rcgen`), or a custom certificate.
 - **Local auth**: password (bcrypt) or no-password mode, a first-run setup wizard, and
   rate-limited login with exponential backoff.
-- **mDNS** (`rustkvm.local`), static IP or DHCP, Tailscale status and control URL, and
+- **mDNS** (`rustkvm.local`), static IP or DHCP, Tailscale status, and
   optional cloud relay with OIDC.
 - **Failsafe mode**, entered after a video-pipeline crash or on demand, so the device
   stays reachable for recovery.
@@ -115,7 +115,7 @@ The web UI is a single-page app served by the device itself.
 | **Toolbar** | Fullscreen, Ctrl+Alt+Del, stream quality up and down, device audio, OCR copy of on-screen text (on the device NPU, Chinese and English; see docs/vision.md), serial terminal, reboot, settings. |
 | **Status indicators** | Caps / Num / Scroll Lock LEDs reported by the target. |
 | **Settings drawer** | Features (USB emulation, mass storage, jiggler), virtual media, USB devices, video codec and sleep, EDID, keyboard layout, network (DHCP / static), Wake-on-LAN, MQTT, display rotation and backlight, SSH key, password, log level, About. |
-| **Advanced settings** | ATX and DC power with restore policy, extension selection, keyboard macros, serial console, TLS (self-signed or custom), Tailscale control URL, cloud, developer mode, factory reset. |
+| **Advanced settings** | ATX and DC power with restore policy, extension selection, keyboard macros, serial console, TLS (self-signed or custom), Tailscale status, cloud, developer mode, factory reset. |
 
 First launch opens a **setup wizard** where you choose password or no-password mode.
 

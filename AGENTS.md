@@ -179,7 +179,7 @@ lib.rs                   # exposes `error` (Error/Result), `local_ip`, `mdns`, `
 ├── error.rs             # crate Error/Result types
 ├── local_ip.rs          # first non-loopback IPv4 via `if-addrs`
 ├── mdns/                # mDNS-SD service registration wrapper (config.rs, server.rs, mod.rs)
-├── tailscale.rs         # `tailscale` CLI shell-out (status, control URL)
+├── tailscale.rs         # `tailscale` CLI shell-out (status)
 └── wol.rs               # Wake-on-LAN magic-packet sender
 ```
 
@@ -340,3 +340,4 @@ nohup setsid /userdata/rustkvm/bin/rustkvm_app </dev/null >>/userdata/rustkvm/lo
 15. **Reboot semantics** — `reboot` RPC emits `willReboot` event, sleeps 250ms, then calls `/sbin/reboot`. Network ipv4-mode changes also emit `willReboot`.
 16. **Setup wizard** — `Config::default().local_auth_mode = ""`. `/device/status` returns `is_setup: false` → frontend triggers setup.
 17. **librknnrt is loaded at run time** — `rkvm_vision::rknn` `dlopen`s it and looks up every symbol up front, returning an error (never panicking) when one is missing; linking `rknnrt` would make the app fail to start on devices or hosts without it. `rknpu2-sys` is used for its C types only. Two librknnrt 2.5.0 traps: `rknn_dup_context` duplicates running at the same time overwrite each other's outputs (each worker loads its own contexts instead), and the GStreamer capture buffer is uncached, so OCR copies it once into a reused buffer before sampling (the video path itself stays zero-copy).
+18. **No /dev/hidgN fd may stay open across a gadget rebind** — the 6.1 `f_hid` re-runs `init_waitqueue_head`/`cdev_init` on the same `struct f_hidg` at every bind, so a reader still in `poll()` or a later `close()` corrupts kernel lists (`list_del corruption` oops in `hid-kbd-reader`/`hid-writer`, HID dead until reboot, can end in a soft lockup and watchdog reboot). The kernel rebinds by itself when the target detaches: tcpm switches dwc3 to host role (UDC disappears) and back on reattach. `usb::UsbManager::start_polling` therefore calls `Hid::suspend_io` whenever the UDC is `not attached` or gone and `resume_io` when a link is back; the USB emulation toggle does the same around its own unbind/bind. At startup `hw::log_previous_kernel_crashes` logs any pstore crash record.
