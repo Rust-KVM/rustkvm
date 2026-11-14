@@ -13,6 +13,10 @@
   --bg-tertiary: #faf9f5;
   --bg-inverse: #141413;
   --bg-sidebar: #f9f9f7;
+  --bg-raised: #ffffff;
+  --bg-input: #ffffff;
+  /* Chevron drawn on selects, in --text-tertiary. */
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M6 8l4 4 4-4' fill='none' stroke='%2373726c' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --bg-selected: #f0efec;
   --bg-hover: rgba(31, 30, 29, 0.05);
   --bg-press: rgba(31, 30, 29, 0.08);
@@ -118,6 +122,9 @@
   --bg-tertiary: #141413;
   --bg-inverse: #faf9f5;
   --bg-sidebar: #1f1e1d;
+  --bg-raised: #4a4945;
+  --bg-input: #262624;
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M6 8l4 4 4-4' fill='none' stroke='%239c9a92' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --bg-selected: #30302e;
   --bg-hover: rgba(222, 220, 209, 0.06);
   --bg-press: rgba(222, 220, 209, 0.1);
