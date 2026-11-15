@@ -10,7 +10,12 @@ use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSampl
 
 use crate::api::{JsonRpcProcessor, default_registry};
 use crate::hardware::v4l2::{CaptureProbe, RelockVerdict, RelockWatch, pulse_hotplug};
-use crate::pipeline::{AudioConfig, H264Profile, PipelineManager, VideoConfig};
+use crate::observability::metrics::{
+    VIDEO_FRAME_INTERVAL_SECONDS, VIDEO_FRAMES_DROPPED_TOTAL, VIDEO_WRITE_SECONDS,
+};
+use crate::pipeline::{
+    AudioConfig, FrameGate, H264Profile, PipelineManager, VideoConfig, contains_h264_idr,
+};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VideoInputState {
@@ -72,6 +77,19 @@ const RESTART_BACKOFF_MAX: Duration = Duration::from_secs(300);
 static VIDEO_STATE_TX: OnceLock<mpsc::UnboundedSender<VideoInputState>> = OnceLock::new();
 
 type VideoFrame = (bytes::Bytes, u64);
+
+/// Encoded frames that may wait for the WebRTC writer. Sending a 4K IDR takes
+/// about 25 ms, during which one or two 60 fps frames arrive; the queue absorbs
+/// that without growing into visible latency (at most 4 frames, 67 ms).
+const VIDEO_QUEUE_FRAMES: usize = 4;
+
+/// Shortest time between two keyframes requested to recover from dropped
+/// frames.
+const KEYFRAME_RECOVERY_INTERVAL: Duration = Duration::from_secs(1);
+
+/// A gap between encoded frames at least this long means the encoder was
+/// paused, not that it stalled.
+const ENCODER_PAUSE: Duration = Duration::from_secs(5);
 type AudioFrame = bytes::Bytes;
 
 static VIDEO_FRAME_TX: tokio::sync::OnceCell<mpsc::Sender<VideoFrame>> =
@@ -92,9 +110,11 @@ fn video_writer_loop(mut rx: mpsc::Receiver<VideoFrame>) {
 
             let Some(track) = VIDEO_SINK.read().await.clone() else { continue };
             let sample = Sample { data, duration: dur, ..Default::default() };
+            let started = Instant::now();
             if let Err(e) = track.write_sample(&sample).await {
                 warn!("Failed to write video sample: {}", e);
             }
+            VIDEO_WRITE_SECONDS.observe(started.elapsed().as_secs_f64());
         }
     });
 }
@@ -120,7 +140,7 @@ pub async fn init_video_state_updater() -> anyhow::Result<()> {
 pub async fn ensure_video_pipeline_started() -> anyhow::Result<()> {
     VIDEO_PIPELINE_STARTED
         .get_or_try_init(|| async {
-            let (video_tx, video_rx) = mpsc::channel::<VideoFrame>(2);
+            let (video_tx, video_rx) = mpsc::channel::<VideoFrame>(VIDEO_QUEUE_FRAMES);
             VIDEO_FRAME_TX
                 .set(video_tx)
                 .map_err(|_| anyhow::anyhow!("video frame tx already set"))?;
@@ -219,11 +239,44 @@ async fn start_pipeline(
     {
         video_config.profile = Some(profile.as_gst_str().to_owned());
     }
+    let is_h264 = matches!(video_config.encoder, crate::cli::VideoEncoder::H264);
     let manager = PipelineManager::new(video_config, audio_config)?;
-
+    let runtime = tokio::runtime::Handle::current();
+    let mut gate = FrameGate::default();
+    let mut next_recovery: Option<Instant> = None;
+    let mut last_frame: Option<Instant> = None;
     manager.set_video_callback(move |data, pts_us| {
-        if let Some(tx) = VIDEO_FRAME_TX.get() {
-            let _ = tx.try_send((data, pts_us));
+        let Some(tx) = VIDEO_FRAME_TX.get() else { return };
+        // The encoder is paused while nobody watches; that is not a stall.
+        let now = Instant::now();
+        if let Some(gap) = last_frame.replace(now).map(|last| now - last)
+            && gap < ENCODER_PAUSE
+        {
+            VIDEO_FRAME_INTERVAL_SECONDS.observe(gap.as_secs_f64());
+        }
+        // Only H.264 keyframes are recognised; other codecs are never held back.
+        if !gate.admit(|| !is_h264 || contains_h264_idr(&data)) {
+            VIDEO_FRAMES_DROPPED_TOTAL.inc();
+            return;
+        }
+        if tx.try_send((data, pts_us)).is_err() {
+            VIDEO_FRAMES_DROPPED_TOTAL.inc();
+            if gate.frame_dropped() && is_h264 {
+                // A keyframe is the largest frame there is: asking for one on
+                // every drop would keep a slow link overloaded for good.
+                let wait = next_recovery
+                    .map(|at| at.saturating_duration_since(Instant::now()))
+                    .unwrap_or_default();
+                next_recovery = Some(Instant::now() + wait + KEYFRAME_RECOVERY_INTERVAL);
+                warn!(
+                    wait_ms = wait.as_millis() as u64,
+                    "WebRTC writer is behind, dropped an encoded frame; requesting a keyframe"
+                );
+                runtime.spawn(async move {
+                    tokio::time::sleep(wait).await;
+                    force_new_viewer_keyframe().await;
+                });
+            }
         }
     });
 

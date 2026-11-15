@@ -985,9 +985,39 @@ impl PipelineManager {
     }
 }
 
+/// Keeps a viewer's decoder consistent when an encoded frame has to be dropped.
+///
+/// Every H.264 P frame references the one before it, and a frame dropped before
+/// packetisation leaves no gap in the RTP sequence numbers, so the browser
+/// neither notices nor asks for a keyframe: it shows a broken or frozen picture
+/// until the next periodic IDR, up to a whole GOP later. After a drop the gate
+/// therefore holds back every frame until the next keyframe, and tells the
+/// caller to request one.
+#[derive(Debug, Default)]
+pub struct FrameGate {
+    awaiting_keyframe: bool,
+}
+
+impl FrameGate {
+    /// Whether the next frame may be sent. `is_keyframe` is only evaluated
+    /// while the gate is waiting for one.
+    pub fn admit(&mut self, is_keyframe: impl FnOnce() -> bool) -> bool {
+        if self.awaiting_keyframe && is_keyframe() {
+            self.awaiting_keyframe = false;
+        }
+        !self.awaiting_keyframe
+    }
+
+    /// Records that an admitted frame could not be sent. Returns whether a
+    /// keyframe must be requested now (once per gap).
+    pub fn frame_dropped(&mut self) -> bool {
+        !std::mem::replace(&mut self.awaiting_keyframe, true)
+    }
+}
+
 /// Whether an Annex B H.264 access unit is an IDR: the first slice NAL found
 /// is type 5. Stops at the first slice, so a P frame costs only its headers.
-fn contains_h264_idr(data: &[u8]) -> bool {
+pub fn contains_h264_idr(data: &[u8]) -> bool {
     for w in data.windows(4) {
         if w[0] == 0 && w[1] == 0 && w[2] == 1 {
             match w[3] & 0x1f {

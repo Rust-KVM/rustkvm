@@ -16,6 +16,43 @@ pub static VIDEO_FRAMES_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
     c
 });
 
+pub static VIDEO_FRAMES_DROPPED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    let c = IntCounter::with_opts(Opts::new(
+        "rustkvm_video_frames_dropped_total",
+        "Encoded video frames not sent: the WebRTC writer was behind, or they followed such a gap and preceded the next keyframe",
+    ))
+    .expect("rustkvm_video_frames_dropped_total: invalid metric definition");
+    if let Err(e) = prometheus::default_registry().register(Box::new(c.clone())) {
+        warn!("failed to register rustkvm_video_frames_dropped_total: {e}");
+    }
+    c
+});
+
+fn video_histogram(name: &str, help: &str) -> Histogram {
+    // One 60 fps frame is 16.7 ms; anything from 100 ms up is a visible stall.
+    let buckets = vec![0.005, 0.01, 0.02, 0.035, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5];
+    let h = Histogram::with_opts(HistogramOpts::new(name, help).buckets(buckets))
+        .expect("video histogram: invalid metric definition");
+    if let Err(e) = prometheus::default_registry().register(Box::new(h.clone())) {
+        warn!("failed to register {name}: {e}");
+    }
+    h
+}
+
+pub static VIDEO_FRAME_INTERVAL_SECONDS: Lazy<Histogram> = Lazy::new(|| {
+    video_histogram(
+        "rustkvm_video_frame_interval_seconds",
+        "Time between two encoded video frames leaving the encoder while a viewer is connected",
+    )
+});
+
+pub static VIDEO_WRITE_SECONDS: Lazy<Histogram> = Lazy::new(|| {
+    video_histogram(
+        "rustkvm_video_write_seconds",
+        "Time to packetise and send one encoded video frame to the viewer",
+    )
+});
+
 pub static AUDIO_FRAMES_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
     let c = IntCounter::with_opts(Opts::new(
         "rustkvm_audio_frames_total",
