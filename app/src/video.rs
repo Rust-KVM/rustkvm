@@ -10,6 +10,9 @@ use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSampl
 
 use crate::api::{JsonRpcProcessor, default_registry};
 use crate::hardware::v4l2::{CaptureProbe, RelockVerdict, RelockWatch, pulse_hotplug};
+use crate::observability::metrics::{
+    VIDEO_FRAME_INTERVAL_SECONDS, VIDEO_FRAMES_DROPPED_TOTAL, VIDEO_WRITE_SECONDS,
+};
 use crate::pipeline::{
     AudioConfig, FrameGate, H264Profile, PipelineManager, VideoConfig, contains_h264_idr,
 };
@@ -83,6 +86,10 @@ const VIDEO_QUEUE_FRAMES: usize = 4;
 /// Shortest time between two keyframes requested to recover from dropped
 /// frames.
 const KEYFRAME_RECOVERY_INTERVAL: Duration = Duration::from_secs(1);
+
+/// A gap between encoded frames at least this long means the encoder was
+/// paused, not that it stalled.
+const ENCODER_PAUSE: Duration = Duration::from_secs(5);
 type AudioFrame = bytes::Bytes;
 
 static VIDEO_FRAME_TX: tokio::sync::OnceCell<mpsc::Sender<VideoFrame>> =
@@ -103,9 +110,11 @@ fn video_writer_loop(mut rx: mpsc::Receiver<VideoFrame>) {
 
             let Some(track) = VIDEO_SINK.read().await.clone() else { continue };
             let sample = Sample { data, duration: dur, ..Default::default() };
+            let started = Instant::now();
             if let Err(e) = track.write_sample(&sample).await {
                 warn!("Failed to write video sample: {}", e);
             }
+            VIDEO_WRITE_SECONDS.observe(started.elapsed().as_secs_f64());
         }
     });
 }
@@ -235,9 +244,16 @@ async fn start_pipeline(
     let runtime = tokio::runtime::Handle::current();
     let mut gate = FrameGate::default();
     let mut next_recovery: Option<Instant> = None;
+    let mut last_frame: Option<Instant> = None;
     manager.set_video_callback(move |data, pts_us| {
-        use crate::observability::metrics::VIDEO_FRAMES_DROPPED_TOTAL;
         let Some(tx) = VIDEO_FRAME_TX.get() else { return };
+        // The encoder is paused while nobody watches; that is not a stall.
+        let now = Instant::now();
+        if let Some(gap) = last_frame.replace(now).map(|last| now - last)
+            && gap < ENCODER_PAUSE
+        {
+            VIDEO_FRAME_INTERVAL_SECONDS.observe(gap.as_secs_f64());
+        }
         // Only H.264 keyframes are recognised; other codecs are never held back.
         if !gate.admit(|| !is_h264 || contains_h264_idr(&data)) {
             VIDEO_FRAMES_DROPPED_TOTAL.inc();
