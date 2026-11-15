@@ -572,10 +572,19 @@ impl Drop for VideoPipeline {
     }
 }
 
+/// Captures and encodes HDMI audio. Built once and kept stopped: it only
+/// plays while [`AudioPipeline::set_active`] says somebody is listening, so an
+/// idle device does not capture, encode Opus and chase capture overruns for
+/// nobody.
 pub struct AudioPipeline {
     pipeline: gst::Pipeline,
     appsink: gst_app::AppSink,
+    /// The bus watcher lives while this is set (from `start` to `stop`).
     running: Arc<AtomicBool>,
+    /// Whether the pipeline should be playing. The lock is held across every
+    /// state change, so a recovery in flight cannot restart a pipeline that
+    /// was deactivated meanwhile.
+    active: Arc<parking_lot::Mutex<bool>>,
 }
 
 impl AudioPipeline {
@@ -655,24 +664,17 @@ impl AudioPipeline {
 
         let running = Arc::new(AtomicBool::new(false));
 
-        Ok(Self { pipeline, appsink, running })
+        Ok(Self { pipeline, appsink, running, active: Arc::default() })
     }
 
+    /// Starts watching the pipeline's bus. Capture itself starts with
+    /// [`Self::set_active`].
     pub fn start(&self) -> Result<()> {
-        self.pipeline
-            .set_state(gst::State::Playing)
-            .context("Failed to set audio pipeline to PLAYING state")?;
-
-        self.running.store(true, Ordering::SeqCst);
-        info!("Audio pipeline started");
-
+        if self.running.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
         let bus = self.pipeline.bus().context("Audio pipeline has no bus")?;
-        let recovery = AudioRecovery {
-            pipeline: self.pipeline.clone(),
-            running: self.running.clone(),
-            recovering: Arc::new(AtomicBool::new(false)),
-            runtime: tokio::runtime::Handle::current(),
-        };
+        let recovery = self.recovery();
         let running = self.running.clone();
 
         tokio::task::spawn_blocking(move || {
@@ -717,8 +719,43 @@ impl AudioPipeline {
         Ok(())
     }
 
+    fn recovery(&self) -> AudioRecovery {
+        AudioRecovery {
+            pipeline: self.pipeline.clone(),
+            running: self.running.clone(),
+            active: self.active.clone(),
+            recovering: Arc::new(AtomicBool::new(false)),
+            runtime: tokio::runtime::Handle::current(),
+        }
+    }
+
+    /// Starts or stops capture and encoding. A pipeline that cannot start now
+    /// (no audio on the HDMI input, device busy) is retried in the background
+    /// for as long as it stays active.
+    pub fn set_active(&self, active: bool) {
+        let mut current = self.active.lock();
+        if *current == active {
+            return;
+        }
+        *current = active;
+        if active {
+            match self.pipeline.set_state(gst::State::Playing) {
+                Ok(_) => info!("audio capture started"),
+                Err(e) => {
+                    warn!("audio capture failed to start: {e}");
+                    drop(current);
+                    self.recovery().restart("start failed");
+                }
+            }
+        } else {
+            let _ = self.pipeline.set_state(gst::State::Null);
+            info!("audio capture stopped");
+        }
+    }
+
     pub fn stop(&self) -> Result<()> {
         self.running.store(false, Ordering::SeqCst);
+        *self.active.lock() = false;
 
         self.pipeline
             .set_state(gst::State::Null)
@@ -768,31 +805,49 @@ impl Drop for AudioPipeline {
 struct AudioRecovery {
     pipeline: gst::Pipeline,
     running: Arc<AtomicBool>,
+    active: Arc<parking_lot::Mutex<bool>>,
     recovering: Arc<AtomicBool>,
     runtime: tokio::runtime::Handle,
 }
 
 impl AudioRecovery {
-    /// Takes the pipeline to NULL and back to PLAYING, retrying every second.
-    /// A restart already under way absorbs further requests.
+    /// Takes the pipeline to NULL and back to PLAYING, retrying every second
+    /// while it is meant to be active. A restart already under way absorbs
+    /// further requests; messages from a deactivated pipeline are ignored.
     fn restart(&self, reason: &'static str) {
-        if self.recovering.swap(true, Ordering::SeqCst) {
-            return;
+        {
+            let active = self.active.lock();
+            if !*active || self.recovering.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            warn!(reason, "restarting the audio pipeline");
+            let _ = self.pipeline.set_state(gst::State::Null);
         }
-        warn!(reason, "restarting the audio pipeline");
-        let _ = self.pipeline.set_state(gst::State::Null);
         let pipeline = self.pipeline.clone();
         let running = self.running.clone();
+        let active = self.active.clone();
         let recovering = self.recovering.clone();
         self.runtime.spawn(async move {
+            let mut failures = 0u32;
             while running.load(Ordering::SeqCst) {
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                let active = active.lock();
+                if !*active {
+                    break;
+                }
                 match pipeline.set_state(gst::State::Playing) {
                     Ok(_) => {
                         info!(reason, "audio pipeline is playing again");
                         break;
                     }
-                    Err(e) => warn!("audio restart failed, will retry: {e:?}"),
+                    Err(e) => {
+                        // Once, then every minute: a source without audio
+                        // fails like this for as long as it is watched.
+                        if failures.is_multiple_of(60) {
+                            warn!(failures, "audio restart failed, will keep retrying: {e}");
+                        }
+                        failures += 1;
+                    }
                 }
             }
             recovering.store(false, Ordering::SeqCst);
@@ -848,6 +903,13 @@ impl PipelineManager {
             }
         }
         Ok(())
+    }
+
+    /// Audio is captured and encoded only while this is set.
+    pub fn set_audio_active(&self, active: bool) {
+        if let Some(audio) = &self.audio {
+            audio.set_active(active);
+        }
     }
 
     pub fn stop(&self) -> Result<()> {

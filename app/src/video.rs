@@ -44,8 +44,18 @@ static AUDIO_FRAME_TX: tokio::sync::OnceCell<mpsc::Sender<bytes::Bytes>> =
 
 static AUDIO_ENABLED: AtomicBool = AtomicBool::new(true);
 
-pub fn set_audio_enabled(enabled: bool) {
+pub async fn set_audio_enabled(enabled: bool) {
     AUDIO_ENABLED.store(enabled, Ordering::Relaxed);
+    sync_audio_active().await;
+}
+
+/// Runs audio capture exactly while it is enabled and a viewer has an audio
+/// track attached.
+async fn sync_audio_active() {
+    let wanted = is_audio_enabled() && AUDIO_SINK.read().await.is_some();
+    if let Some(manager) = PIPELINE_MANAGER.lock().await.as_ref() {
+        manager.set_audio_active(wanted);
+    }
 }
 
 pub fn is_audio_enabled() -> bool {
@@ -76,10 +86,12 @@ static VIDEO_STATE_TX: OnceLock<mpsc::UnboundedSender<VideoInputState>> = OnceLo
 
 type VideoFrame = (bytes::Bytes, u64);
 
-/// Encoded frames that may wait for the WebRTC writer. Sending a 4K IDR takes
-/// about 25 ms, during which one or two 60 fps frames arrive; the queue absorbs
-/// that without growing into visible latency (at most 4 frames, 67 ms).
-const VIDEO_QUEUE_FRAMES: usize = 4;
+/// Encoded frames that may wait for the WebRTC writer. Sending a 4K IDR
+/// (about 1100 RTP packets) was measured at 25 to 100 ms on the RK3588, during
+/// which up to six 60 fps frames arrive. The queue has to absorb that: a drop
+/// costs another IDR, which is exactly the frame that is slow to send. Beyond
+/// 8 frames (133 ms) the writer is really behind and frames are dropped.
+const VIDEO_QUEUE_FRAMES: usize = 8;
 
 /// Shortest time between two keyframes requested to recover from dropped
 /// frames.
@@ -175,12 +187,14 @@ pub async fn attach_webrtc_sink(track: Arc<TrackLocalStaticSample>) {
 
 pub async fn attach_audio_sink(track: Arc<TrackLocalStaticSample>) {
     *AUDIO_SINK.write().await = Some(track);
+    sync_audio_active().await;
 }
 
 pub async fn detach_webrtc_sink() {
     *VIDEO_SINK.write().await = None;
     *AUDIO_SINK.write().await = None;
     set_encoding_active(false).await;
+    sync_audio_active().await;
 }
 
 /// Encoding only runs while a session has a video track attached.
@@ -213,7 +227,7 @@ pub async fn start_native_video_with_cli(cli: &crate::cli::Cli) -> anyhow::Resul
     let video_config = VideoConfig::from_cli(&cli.video, cli.quality);
 
     let audio_enabled = crate::config::get_config_manager().get().await.audio_enabled;
-    set_audio_enabled(audio_enabled);
+    AUDIO_ENABLED.store(audio_enabled, Ordering::Relaxed);
 
     let audio_config = Some(AudioConfig::from_cli(&cli.audio));
     let _ = PIPELINE_CONFIG.set((video_config.clone(), audio_config.clone()));
@@ -295,6 +309,7 @@ async fn start_pipeline(
     manager.start()?;
     // A restarted pipeline comes up paused; resume it if a viewer is attached.
     manager.set_encoding_active(VIDEO_SINK.read().await.is_some());
+    manager.set_audio_active(is_audio_enabled() && AUDIO_SINK.read().await.is_some());
 
     *PIPELINE_MANAGER.lock().await = Some(manager);
     Ok(())
