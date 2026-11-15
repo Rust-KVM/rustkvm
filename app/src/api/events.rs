@@ -19,7 +19,7 @@ pub async fn notify(channel: &RTCDataChannel, method: &str, params: Value) -> an
 /// channel's open handler pushes the full state again.
 pub async fn emit(method: &str, params: impl Serialize) {
     let Some(session_id) = get_current_session().await else { return };
-    let Some(channel) = get_rpc_channel(&session_id).await else { return };
+    let Some(channel) = get_rpc_channel(&session_id) else { return };
     if channel.ready_state() != RTCDataChannelState::Open {
         debug!(method, "event dropped: RPC channel not open");
         return;

@@ -115,8 +115,8 @@ pub(super) async fn is_jiggler_enabled() -> bool {
     crate::hardware::jiggler::get_jiggler_state().await
 }
 
-pub(super) async fn get_active_sessions() -> i32 {
-    crate::webrtc::get_active_session_count().await
+pub(super) async fn get_active_sessions() -> u32 {
+    crate::webrtc::get_active_session_count()
 }
 
 pub(super) async fn get_network_state() -> (String, String) {

@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, LazyLock};
 
 use anyhow::Context;
 use tokio::sync::RwLock;
@@ -284,8 +286,7 @@ pub async fn new_session(config: SessionConfig, session_id: String) -> anyhow::R
     // and buffers alive after pc.close().
     let video_track_clone = session.video_track.as_ref().map(Arc::downgrade);
     let audio_track_clone = session.audio_track.as_ref().map(Arc::downgrade);
-    let is_connected = Arc::new(RwLock::new(false));
-    let is_connected_clone = is_connected;
+    let is_connected = Arc::new(AtomicBool::new(false));
 
     peer_connection.on_ice_connection_state_change(Box::new(
         move |connection_state: RTCIceConnectionState| {
@@ -293,7 +294,7 @@ pub async fn new_session(config: SessionConfig, session_id: String) -> anyhow::R
             let video_track = video_track_clone.as_ref().and_then(std::sync::Weak::upgrade);
             let audio_track = audio_track_clone.as_ref().and_then(std::sync::Weak::upgrade);
             let video_sender = video_sender_for_profile.upgrade();
-            let is_connected = is_connected_clone.clone();
+            let is_connected = is_connected.clone();
             let app_state = app_state_for_close.clone();
             Box::pin(async move {
                 info!(
@@ -303,10 +304,7 @@ pub async fn new_session(config: SessionConfig, session_id: String) -> anyhow::R
 
                 match connection_state {
                     RTCIceConnectionState::Connected => {
-                        let mut connected = is_connected.write().await;
-                        if !*connected {
-                            *connected = true;
-                            drop(connected);
+                        if !is_connected.swap(true, Ordering::AcqRel) {
                             info!("WebRTC session {} connected", session_id);
                             increment_session_counter().await;
                             if let Some(sender) = &video_sender {
@@ -341,12 +339,9 @@ pub async fn new_session(config: SessionConfig, session_id: String) -> anyhow::R
                             set_current_session(None).await;
                         }
 
-                        remove_rpc_channel(&session_id).await;
+                        remove_rpc_channel(&session_id);
 
-                        let mut connected = is_connected.write().await;
-                        if *connected {
-                            *connected = false;
-                            drop(connected);
+                        if is_connected.swap(false, Ordering::AcqRel) {
                             decrement_session_counter().await;
                             if get_current_session().await.is_none() {
                                 video::detach_webrtc_sink().await;
@@ -431,14 +426,12 @@ pub async fn new_session(config: SessionConfig, session_id: String) -> anyhow::R
     Ok(session)
 }
 
-static SESSION_COUNTER: RwLock<i32> = RwLock::const_new(0);
+static SESSION_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 static CURRENT_SESSION: RwLock<Option<Arc<str>>> = RwLock::const_new(None);
 
-use std::collections::HashMap;
-static RPC_CHANNELS: tokio::sync::OnceCell<
-    RwLock<HashMap<Arc<str>, Arc<webrtc::data_channel::RTCDataChannel>>>,
-> = tokio::sync::OnceCell::const_new();
+static RPC_CHANNELS: LazyLock<parking_lot::RwLock<HashMap<Arc<str>, Arc<RTCDataChannel>>>> =
+    LazyLock::new(Default::default);
 
 pub async fn trigger_ota_state_update() {
     let params = serde_json::json!({
@@ -487,7 +480,7 @@ pub async fn on_last_session_disconnected() {
 }
 
 pub async fn on_active_sessions_changed() {
-    let count = *SESSION_COUNTER.read().await;
+    let count = get_active_session_count();
     info!("Active sessions count changed to: {}", count);
     let params = serde_json::json!({
         "activeSessionCount": count,
@@ -496,29 +489,32 @@ pub async fn on_active_sessions_changed() {
     crate::api::events::emit("sessionCountChanged", params).await;
 }
 
-pub async fn get_active_session_count() -> i32 {
-    *SESSION_COUNTER.read().await
+pub fn get_active_session_count() -> u32 {
+    SESSION_COUNTER.load(Ordering::Acquire)
 }
 
 pub async fn increment_session_counter() {
-    let mut counter = SESSION_COUNTER.write().await;
-    *counter += 1;
-    let count = *counter;
-    drop(counter);
-
-    if count == 1 {
+    if SESSION_COUNTER.fetch_add(1, Ordering::AcqRel) == 0 {
         on_first_session_connected().await;
     }
     on_active_sessions_changed().await;
 }
 
 pub async fn decrement_session_counter() {
-    let mut counter = SESSION_COUNTER.write().await;
-    *counter = (*counter - 1).max(0);
-    let count = *counter;
-    drop(counter);
-
-    if count == 0 {
+    // Never below zero, whatever order the ICE callbacks arrive in.
+    let mut previous = SESSION_COUNTER.load(Ordering::Acquire);
+    while previous > 0 {
+        match SESSION_COUNTER.compare_exchange_weak(
+            previous,
+            previous - 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => break,
+            Err(current) => previous = current,
+        }
+    }
+    if previous <= 1 {
         on_last_session_disconnected().await;
     }
     on_active_sessions_changed().await;
@@ -532,26 +528,16 @@ pub async fn set_current_session(session_id: Option<Arc<str>>) {
     *CURRENT_SESSION.write().await = session_id;
 }
 
-pub async fn store_rpc_channel(
-    session_id: Arc<str>,
-    channel: Arc<webrtc::data_channel::RTCDataChannel>,
-) {
-    let channels = RPC_CHANNELS.get_or_init(|| async { RwLock::new(HashMap::new()) }).await;
-    channels.write().await.insert(session_id, channel);
+pub fn store_rpc_channel(session_id: Arc<str>, channel: Arc<RTCDataChannel>) {
+    RPC_CHANNELS.write().insert(session_id, channel);
 }
 
-pub async fn get_rpc_channel(
-    session_id: &str,
-) -> Option<Arc<webrtc::data_channel::RTCDataChannel>> {
-    let channels = RPC_CHANNELS.get_or_init(|| async { RwLock::new(HashMap::new()) }).await;
-    channels.read().await.get(session_id).cloned()
+pub fn get_rpc_channel(session_id: &str) -> Option<Arc<RTCDataChannel>> {
+    RPC_CHANNELS.read().get(session_id).cloned()
 }
 
-pub async fn remove_rpc_channel(
-    session_id: &str,
-) -> Option<Arc<webrtc::data_channel::RTCDataChannel>> {
-    let channels = RPC_CHANNELS.get_or_init(|| async { RwLock::new(HashMap::new()) }).await;
-    channels.write().await.remove(session_id)
+pub fn remove_rpc_channel(session_id: &str) -> Option<Arc<RTCDataChannel>> {
+    RPC_CHANNELS.write().remove(session_id)
 }
 
 async fn send_ice_candidate(
@@ -597,7 +583,7 @@ pub async fn handle_session_takeover(
     if let Some(ref old_id) = maybe_old
         && &**old_id != new_session_id
     {
-        match get_rpc_channel(old_id).await {
+        match get_rpc_channel(old_id) {
             Some(channel) => {
                 match crate::api::events::notify(
                     &channel,

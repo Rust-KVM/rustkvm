@@ -251,11 +251,10 @@ async fn setup_rpc_channel(channel: Arc<RTCDataChannel>, session: &Session) {
     let session_id = session.id.clone();
     let rpc_channel = channel.clone();
 
-    crate::webrtc::store_rpc_channel(session_id.clone(), rpc_channel.clone()).await;
+    crate::webrtc::store_rpc_channel(session_id.clone(), rpc_channel.clone());
 
-    let session_id_for_msg = session_id.clone();
     channel.on_message(Box::new(move |msg: DataChannelMessage| {
-        let session_id = session_id_for_msg.clone();
+        let session_id = session_id.clone();
         let rpc_channel = rpc_channel.clone();
         Box::pin(async move {
             let mut session_with_rpc = Session::new(session_id);
