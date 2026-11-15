@@ -276,7 +276,7 @@ scripts/gpl-source-bundle.sh # release source tarball (+ Buildroot legal-info wi
 scripts/release-firmware.sh  # sign out/firmware checksums and attach them to the draft release
 os/rk3588/manifest.xml       # FriendlyElec SDK projects pinned to exact commits
 os/rk3588/patches/<project>/ # every local SDK change, applied with git apply after a reset
-os/rk3588/rootfs-overlay/    # S99rustkvm, dhcpcd/network config, dropbear devmode wrapper
+os/rk3588/rootfs-overlay/    # S99rustkvm (app supervisor), sysctl.d (panic on oops), dhcpcd/network config, dropbear devmode wrapper
 ```
 
 Toolchain pins live in `ci/devkit/Dockerfile` (and the nightly in `release.yml`); SDK changes go into `os/rk3588/patches`, never only into a local SDK checkout.
@@ -297,9 +297,10 @@ Build happens in WSL2 behind a Windows jump host and the app is deployed to the 
 ### Start on device
 ```bash
 ssh root@<device_ip>
-killall rustkvm_app 2>/dev/null
-nohup setsid /userdata/rustkvm/bin/rustkvm_app </dev/null >>/userdata/rustkvm/log/rustkvm_app.log 2>&1 &
+/etc/init.d/S99rustkvm restart      # SIGTERM, wait for the clean exit, start again
 ```
+`S99rustkvm` runs the app under a small supervisor loop: a crash (release builds abort on panic) is restarted within a second, so the armed watchdog does not reboot the device; a clean exit (SIGTERM) ends the loop. The app logs to `/userdata/rustkvm/log/rustkvm_app.log` (`--log-file`, rotated to `.1` at 8 MB); its stdout/stderr (panic messages, C library output, supervisor notes) go to `rustkvm_app.out`.
+
 **DO NOT use `fuser -k` or `killall -9`** — watchdog may reboot the device. The only exception is recovering from `Text file busy` on redeploy: `killall -9 rustkvm_app; sleep 2` before scp.
 
 ## Conventions

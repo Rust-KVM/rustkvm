@@ -6,8 +6,66 @@
 APP=/userdata/rustkvm/bin/rustkvm_app
 FACTORY_APP=/usr/lib/rustkvm/rustkvm_app
 LOG_DIR=/userdata/rustkvm/log
+LOG=$LOG_DIR/rustkvm_app.log
+# stdout/stderr of the app: panic messages and output of the C libraries.
+OUT=$LOG_DIR/rustkvm_app.out
+OUT_MAX_BYTES=1048576
+SUPERVISOR_PIDFILE=/run/rustkvm-supervisor.pid
+# Crashes within this many seconds of the start count towards giving up.
+FAST_EXIT_SECS=20
+MAX_FAST_EXITS=5
+
+note() {
+	echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) S99rustkvm: $*" >>$OUT
+}
+
+trim_out() {
+	[ -f $OUT ] || return 0
+	[ "$(wc -c <$OUT)" -gt $OUT_MAX_BYTES ] || return 0
+	tail -c $((OUT_MAX_BYTES / 4)) $OUT >$OUT.tmp && mv $OUT.tmp $OUT
+}
+
+# Restarts the app when it dies. Release builds abort on panic, and a dead
+# app leaves the armed watchdog unfed: without this the whole device reboots.
+# A restart within the watchdog timeout turns a crash into a short reconnect.
+# A clean exit (SIGTERM: deploy, `stop`) ends the loop.
+supervise() {
+	fast_exits=0
+	while :; do
+		trim_out
+		started=$(date +%s)
+		$APP --log-file $LOG </dev/null >>$OUT 2>&1
+		status=$?
+		case $status in
+		0 | 130 | 143)
+			note "rustkvm_app stopped (status $status)"
+			break
+			;;
+		esac
+		if [ $(($(date +%s) - started)) -lt $FAST_EXIT_SECS ]; then
+			fast_exits=$((fast_exits + 1))
+		else
+			fast_exits=0
+		fi
+		if [ $fast_exits -ge $MAX_FAST_EXITS ]; then
+			note "rustkvm_app died $fast_exits times right after starting (last status $status), giving up"
+			break
+		fi
+		note "rustkvm_app died (status $status), restarting"
+		sleep 1
+	done
+	rm -f $SUPERVISOR_PIDFILE
+}
+
+stop_supervisor() {
+	[ -f $SUPERVISOR_PIDFILE ] || return 0
+	kill "$(cat $SUPERVISOR_PIDFILE)" 2>/dev/null || true
+	rm -f $SUPERVISOR_PIDFILE
+}
 
 stop_app() {
+	# First, so that the app is not restarted behind our back.
+	stop_supervisor
 	pid=$(pidof rustkvm_app) || return 0
 	kill -TERM $pid 2>/dev/null || true
 	cnt=0
@@ -16,7 +74,7 @@ stop_app() {
 		pidof rustkvm_app >/dev/null 2>&1 || return 0
 		sleep 0.1
 	done
-	echo "rustkvm_app still running after 10s" >>$LOG_DIR/rustkvm_app.log
+	note "rustkvm_app still running after 10s"
 	return 1
 }
 
@@ -51,7 +109,7 @@ start)
 	fi
 
 	if [ ! -f "$APP" ]; then
-		echo "rustkvm_app not found!" >>$LOG_DIR/rustkvm_app.log
+		note "rustkvm_app not found!"
 		exit 1
 	fi
 
@@ -60,7 +118,12 @@ start)
 	/usr/bin/dropbear.sh &
 	chmod +x $APP
 
-	nohup setsid $APP </dev/null >>$LOG_DIR/rustkvm_app.log 2>&1 &
+	setsid "$0" supervise </dev/null >/dev/null 2>&1 &
+	;;
+
+supervise)
+	echo $$ >$SUPERVISOR_PIDFILE
+	supervise
 	;;
 
 stop)
