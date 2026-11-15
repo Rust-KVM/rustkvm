@@ -86,10 +86,12 @@ static VIDEO_STATE_TX: OnceLock<mpsc::UnboundedSender<VideoInputState>> = OnceLo
 
 type VideoFrame = (bytes::Bytes, u64);
 
-/// Encoded frames that may wait for the WebRTC writer. Sending a 4K IDR takes
-/// about 25 ms, during which one or two 60 fps frames arrive; the queue absorbs
-/// that without growing into visible latency (at most 4 frames, 67 ms).
-const VIDEO_QUEUE_FRAMES: usize = 4;
+/// Encoded frames that may wait for the WebRTC writer. Sending a 4K IDR
+/// (about 1100 RTP packets) was measured at 25 to 100 ms on the RK3588, during
+/// which up to six 60 fps frames arrive. The queue has to absorb that: a drop
+/// costs another IDR, which is exactly the frame that is slow to send. Beyond
+/// 8 frames (133 ms) the writer is really behind and frames are dropped.
+const VIDEO_QUEUE_FRAMES: usize = 8;
 
 /// Shortest time between two keyframes requested to recover from dropped
 /// frames.
