@@ -35,7 +35,7 @@ fn init_tracing(cli: &Cli) {
 
     let log_level = cli.logging.log_level.parse::<Level>().unwrap_or(Level::INFO);
     let default_directive =
-        format!("rustkvm={lvl},rkvm_core={lvl},rkvm_net={lvl},info", lvl = log_level);
+        rustkvm::observability::default_filter_directive(&log_level.to_string().to_lowercase());
     let env_filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new(&default_directive))
         .unwrap_or_else(|_| EnvFilter::new("info"));
@@ -62,13 +62,14 @@ fn init_tracing(cli: &Cli) {
 
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(writer)
-        .with_ansi(interactive && !cli.logging.log_no_color)
-        .with_file(true)
-        .with_line_number(true);
+        .with_ansi(interactive && !cli.logging.log_no_color);
+    // Source locations only where they are readable: in a file they are the
+    // full registry path for every dependency, and the target already names
+    // the module.
     let fmt_layer = if cli.logging.log_json {
-        fmt_layer.json().boxed()
+        fmt_layer.json().with_file(true).with_line_number(true).boxed()
     } else if interactive {
-        fmt_layer.pretty().boxed()
+        fmt_layer.pretty().with_file(true).with_line_number(true).boxed()
     } else {
         fmt_layer.boxed()
     };
