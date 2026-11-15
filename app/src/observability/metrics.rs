@@ -16,6 +16,18 @@ pub static VIDEO_FRAMES_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
     c
 });
 
+pub static VIDEO_FRAMES_DROPPED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    let c = IntCounter::with_opts(Opts::new(
+        "rustkvm_video_frames_dropped_total",
+        "Encoded video frames not sent: the WebRTC writer was behind, or they followed such a gap and preceded the next keyframe",
+    ))
+    .expect("rustkvm_video_frames_dropped_total: invalid metric definition");
+    if let Err(e) = prometheus::default_registry().register(Box::new(c.clone())) {
+        warn!("failed to register rustkvm_video_frames_dropped_total: {e}");
+    }
+    c
+});
+
 pub static AUDIO_FRAMES_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
     let c = IntCounter::with_opts(Opts::new(
         "rustkvm_audio_frames_total",

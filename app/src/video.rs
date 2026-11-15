@@ -10,7 +10,9 @@ use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSampl
 
 use crate::api::{JsonRpcProcessor, default_registry};
 use crate::hardware::v4l2::{CaptureProbe, RelockVerdict, RelockWatch, pulse_hotplug};
-use crate::pipeline::{AudioConfig, H264Profile, PipelineManager, VideoConfig};
+use crate::pipeline::{
+    AudioConfig, FrameGate, H264Profile, PipelineManager, VideoConfig, contains_h264_idr,
+};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VideoInputState {
@@ -72,6 +74,11 @@ const RESTART_BACKOFF_MAX: Duration = Duration::from_secs(300);
 static VIDEO_STATE_TX: OnceLock<mpsc::UnboundedSender<VideoInputState>> = OnceLock::new();
 
 type VideoFrame = (bytes::Bytes, u64);
+
+/// Encoded frames that may wait for the WebRTC writer. Sending a 4K IDR takes
+/// about 25 ms, during which one or two 60 fps frames arrive; the queue absorbs
+/// that without growing into visible latency (at most 4 frames, 67 ms).
+const VIDEO_QUEUE_FRAMES: usize = 4;
 type AudioFrame = bytes::Bytes;
 
 static VIDEO_FRAME_TX: tokio::sync::OnceCell<mpsc::Sender<VideoFrame>> =
@@ -120,7 +127,7 @@ pub async fn init_video_state_updater() -> anyhow::Result<()> {
 pub async fn ensure_video_pipeline_started() -> anyhow::Result<()> {
     VIDEO_PIPELINE_STARTED
         .get_or_try_init(|| async {
-            let (video_tx, video_rx) = mpsc::channel::<VideoFrame>(2);
+            let (video_tx, video_rx) = mpsc::channel::<VideoFrame>(VIDEO_QUEUE_FRAMES);
             VIDEO_FRAME_TX
                 .set(video_tx)
                 .map_err(|_| anyhow::anyhow!("video frame tx already set"))?;
@@ -219,11 +226,24 @@ async fn start_pipeline(
     {
         video_config.profile = Some(profile.as_gst_str().to_owned());
     }
+    let is_h264 = matches!(video_config.encoder, crate::cli::VideoEncoder::H264);
     let manager = PipelineManager::new(video_config, audio_config)?;
-
+    let runtime = tokio::runtime::Handle::current();
+    let mut gate = FrameGate::default();
     manager.set_video_callback(move |data, pts_us| {
-        if let Some(tx) = VIDEO_FRAME_TX.get() {
-            let _ = tx.try_send((data, pts_us));
+        use crate::observability::metrics::VIDEO_FRAMES_DROPPED_TOTAL;
+        let Some(tx) = VIDEO_FRAME_TX.get() else { return };
+        // Only H.264 keyframes are recognised; other codecs are never held back.
+        if !gate.admit(|| !is_h264 || contains_h264_idr(&data)) {
+            VIDEO_FRAMES_DROPPED_TOTAL.inc();
+            return;
+        }
+        if tx.try_send((data, pts_us)).is_err() {
+            VIDEO_FRAMES_DROPPED_TOTAL.inc();
+            if gate.frame_dropped() && is_h264 {
+                warn!("WebRTC writer is behind, dropped an encoded frame; requesting a keyframe");
+                runtime.spawn(force_new_viewer_keyframe());
+            }
         }
     });
 
