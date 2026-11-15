@@ -1,6 +1,7 @@
 pub mod diagnostics;
 pub mod health;
 pub mod log_buffer;
+pub mod log_file;
 pub mod metrics;
 
 use anyhow::{Result, anyhow};

@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use prometheus::Encoder;
 use serde_json as serde_json_crate;
 use tokio::sync::{RwLock, mpsc};
 use tokio::time::{Duration, Instant, interval};
@@ -646,17 +645,6 @@ pub async fn trigger_video_state_update_rpc() {
             warn!("Failed to send videoInputState event: {}", e);
         }
     }
-}
-
-pub fn video_metrics_snapshot() -> String {
-    let metric_families = prometheus::gather();
-    let mut buf = Vec::new();
-    let encoder = prometheus::TextEncoder::new();
-    if let Err(e) = encoder.encode(&metric_families, &mut buf) {
-        tracing::warn!("Failed to encode metrics: {}", e);
-        return "# ERROR: Failed to encode metrics\n".to_string();
-    }
-    String::from_utf8_lossy(&buf).to_string()
 }
 
 pub async fn write_ctrl_action(action: &str) -> anyhow::Result<()> {
