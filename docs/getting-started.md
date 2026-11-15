@@ -100,7 +100,8 @@ from `/usr/lib/rustkvm/` again.
 | `/userdata/rustkvm/bin/rustkvm_app` | The binary |
 | `/userdata/rustkvm/config.toml` | Configuration (a legacy `config.json` is migrated automatically) |
 | `/usr/lib/rustkvm/rustkvm_app` | Factory copy in the image, installed when the one above is missing |
-| `/userdata/rustkvm/log/rustkvm_app.log` | Log |
+| `/userdata/rustkvm/log/rustkvm_app.log` | Log, rotated to `rustkvm_app.log.1` at 8 MB |
+| `/userdata/rustkvm/log/rustkvm_app.out` | The app's stdout/stderr: panic messages and restarts by the init script |
 | `/userdata/rustkvm/devmode.enable` | Present while developer mode (SSH) is on |
 | `/userdata/rustkvm/.enablefailsafe` | Create this file to force failsafe mode on the next start |
 | `/tmp/rustkvm/` | TLS certificate and key (not persisted) |
