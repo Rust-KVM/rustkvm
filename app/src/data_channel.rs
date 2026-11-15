@@ -205,132 +205,115 @@ pub async fn handle_upload_channel(channel: Arc<RTCDataChannel>) {
     }));
 }
 
-pub struct DataChannelManager {
-    upload_prefix: String,
-}
+pub async fn route_data_channel(channel: Arc<RTCDataChannel>, session: &Session) {
+    let label = channel.label().to_string();
 
-impl DataChannelManager {
-    pub fn new() -> Self {
-        Self { upload_prefix: "upload_".to_string() }
-    }
-
-    pub async fn route_data_channel(&self, channel: Arc<RTCDataChannel>, session: &Session) {
-        let label = channel.label().to_string();
-
-        match label.as_str() {
-            "rpc" => {
-                info!("Setting up RPC data channel for session: {}", session.id);
-                self.setup_rpc_channel(channel, session).await;
-            }
-            "disk" => {
-                info!("Setting up disk data channel for session: {}", session.id);
-                self.setup_disk_channel(channel, session).await;
-            }
-            "terminal" => {
-                info!("Setting up terminal data channel");
-                crate::terminal::attach(&channel);
-            }
-            "serial" => {
-                info!("Setting up serial data channel");
-                handle_serial_channel(channel).await;
-            }
-            "cdcacm" => {
-                info!("Setting up CDC-ACM data channel");
-                handle_cdcacm_channel(channel).await;
-            }
-            "hidrpc" => {
-                info!("Setting up hidrpc data channel (reliable)");
-                setup_hidrpc_channel(channel, true).await;
-            }
-            "hidrpc-unreliable-ordered" | "hidrpc-unreliable-nonordered" => {
-                info!("Setting up {} data channel", label);
-                setup_hidrpc_channel(channel, false).await;
-            }
-            _ if label.starts_with(&self.upload_prefix) => {
-                info!("Setting up upload data channel");
-                tokio::spawn(handle_upload_channel(channel));
-            }
-            _ => {
-                warn!("Unknown data channel type: {}", label);
-            }
+    match label.as_str() {
+        "rpc" => {
+            info!("Setting up RPC data channel for session: {}", session.id);
+            setup_rpc_channel(channel, session).await;
+        }
+        "disk" => {
+            info!("Setting up disk data channel for session: {}", session.id);
+            setup_disk_channel(channel, session).await;
+        }
+        "terminal" => {
+            info!("Setting up terminal data channel");
+            crate::terminal::attach(&channel);
+        }
+        "serial" => {
+            info!("Setting up serial data channel");
+            handle_serial_channel(channel).await;
+        }
+        "cdcacm" => {
+            info!("Setting up CDC-ACM data channel");
+            handle_cdcacm_channel(channel).await;
+        }
+        "hidrpc" => {
+            info!("Setting up hidrpc data channel (reliable)");
+            setup_hidrpc_channel(channel, true).await;
+        }
+        "hidrpc-unreliable-ordered" | "hidrpc-unreliable-nonordered" => {
+            info!("Setting up {} data channel", label);
+            setup_hidrpc_channel(channel, false).await;
+        }
+        _ if label.starts_with("upload_") => {
+            info!("Setting up upload data channel");
+            tokio::spawn(handle_upload_channel(channel));
+        }
+        _ => {
+            warn!("Unknown data channel type: {}", label);
         }
     }
-
-    async fn setup_rpc_channel(&self, channel: Arc<RTCDataChannel>, session: &Session) {
-        let session_id = session.id.clone();
-        let rpc_channel = channel.clone();
-
-        crate::webrtc::store_rpc_channel(session_id.clone(), rpc_channel.clone()).await;
-
-        let session_id_for_msg = session_id.clone();
-        channel.on_message(Box::new(move |msg: DataChannelMessage| {
-            let session_id = session_id_for_msg.clone();
-            let rpc_channel = rpc_channel.clone();
-            Box::pin(async move {
-                let mut session_with_rpc = Session::new(session_id);
-                session_with_rpc.rpc_channel = Some(rpc_channel);
-                handle_rpc_message(msg, &session_with_rpc).await;
-            })
-        }));
-
-        channel.on_open(Box::new(move || {
-            Box::pin(async move {
-                info!("RPC channel opened - triggering state updates");
-                crate::webrtc::trigger_ota_state_update().await;
-                crate::webrtc::trigger_video_state_update().await;
-                crate::webrtc::trigger_usb_state_update().await;
-                crate::api::broadcast_failsafe_mode().await;
-
-                let state = crate::hardware::usb::get_current_usb_state();
-                crate::api::broadcast_usb_state(state).await;
-
-                crate::webrtc::on_active_sessions_changed().await;
-            })
-        }));
-    }
-
-    async fn setup_disk_channel(&self, channel: Arc<RTCDataChannel>, session: &Session) {
-        let session_id = session.id.clone();
-
-        let ch_for_open = channel.clone();
-        channel.on_open(Box::new(move || {
-            let ch = ch_for_open;
-            Box::pin(async move {
-                let rt = tokio::runtime::Handle::current();
-                remote_mount::webrtc_disk_set_sender(Arc::new(move |text: &str| {
-                    let ch = ch.clone();
-                    rt.block_on(async move {
-                        ch.send_text(text.to_string()).await.map_err(|e| anyhow!(e.to_string()))
-                    })?;
-                    Ok(())
-                }));
-                remote_mount::install_webrtc_disk_bridge();
-                info!("Disk data channel opened and bridge installed");
-            })
-        }));
-
-        channel.on_message(Box::new(move |msg: DataChannelMessage| {
-            let session_id = session_id.clone();
-            Box::pin(async move {
-                debug!("disk msg {} bytes (session={})", msg.data.len(), session_id);
-                remote_mount::webrtc_disk_on_message(&msg.data);
-            })
-        }));
-
-        channel.on_close(Box::new(move || {
-            Box::pin(async move {
-                info!("Disk data channel closed");
-                remote_mount::webrtc_disk_clear_sender();
-                set_webrtc_read_handler(None);
-            })
-        }));
-    }
 }
 
-impl Default for DataChannelManager {
-    fn default() -> Self {
-        Self::new()
-    }
+async fn setup_rpc_channel(channel: Arc<RTCDataChannel>, session: &Session) {
+    let session_id = session.id.clone();
+    let rpc_channel = channel.clone();
+
+    crate::webrtc::store_rpc_channel(session_id.clone(), rpc_channel.clone());
+
+    channel.on_message(Box::new(move |msg: DataChannelMessage| {
+        let session_id = session_id.clone();
+        let rpc_channel = rpc_channel.clone();
+        Box::pin(async move {
+            let mut session_with_rpc = Session::new(session_id);
+            session_with_rpc.rpc_channel = Some(rpc_channel);
+            handle_rpc_message(msg, &session_with_rpc).await;
+        })
+    }));
+
+    channel.on_open(Box::new(move || {
+        Box::pin(async move {
+            info!("RPC channel opened - triggering state updates");
+            crate::webrtc::trigger_ota_state_update().await;
+            crate::webrtc::trigger_video_state_update().await;
+            crate::webrtc::trigger_usb_state_update().await;
+            crate::api::broadcast_failsafe_mode().await;
+
+            let state = crate::hardware::usb::get_current_usb_state();
+            crate::api::broadcast_usb_state(state).await;
+
+            crate::webrtc::on_active_sessions_changed().await;
+        })
+    }));
+}
+
+async fn setup_disk_channel(channel: Arc<RTCDataChannel>, session: &Session) {
+    let session_id = session.id.clone();
+
+    let ch_for_open = channel.clone();
+    channel.on_open(Box::new(move || {
+        let ch = ch_for_open;
+        Box::pin(async move {
+            let rt = tokio::runtime::Handle::current();
+            remote_mount::webrtc_disk_set_sender(Arc::new(move |text: &str| {
+                let ch = ch.clone();
+                rt.block_on(async move {
+                    ch.send_text(text.to_string()).await.map_err(|e| anyhow!(e.to_string()))
+                })?;
+                Ok(())
+            }));
+            remote_mount::install_webrtc_disk_bridge();
+            info!("Disk data channel opened and bridge installed");
+        })
+    }));
+
+    channel.on_message(Box::new(move |msg: DataChannelMessage| {
+        let session_id = session_id.clone();
+        Box::pin(async move {
+            debug!("disk msg {} bytes (session={})", msg.data.len(), session_id);
+            remote_mount::webrtc_disk_on_message(&msg.data);
+        })
+    }));
+
+    channel.on_close(Box::new(move || {
+        Box::pin(async move {
+            info!("Disk data channel closed");
+            remote_mount::webrtc_disk_clear_sender();
+            set_webrtc_read_handler(None);
+        })
+    }));
 }
 
 async fn setup_hidrpc_channel(channel: Arc<RTCDataChannel>, reliable: bool) {

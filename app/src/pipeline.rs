@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 use gstreamer as gst;
@@ -481,11 +481,11 @@ impl VideoPipeline {
         );
     }
 
-    pub fn set_state_callback<F>(&self, callback: F)
+    pub fn set_state_callback<F>(&self, callback: F) -> Result<()>
     where
         F: FnMut(VideoInputState) + Send + 'static,
     {
-        let bus = self.pipeline.bus().expect("Pipeline should have a bus");
+        let bus = self.pipeline.bus().context("Video pipeline has no bus")?;
         let running = self.running.clone();
         let encoder = self.encoder.clone();
         let callback = Arc::new(parking_lot::Mutex::new(callback));
@@ -562,6 +562,7 @@ impl VideoPipeline {
                 }
             }
         });
+        Ok(())
     }
 }
 
@@ -665,118 +666,51 @@ impl AudioPipeline {
         self.running.store(true, Ordering::SeqCst);
         info!("Audio pipeline started");
 
+        let bus = self.pipeline.bus().context("Audio pipeline has no bus")?;
+        let recovery = AudioRecovery {
+            pipeline: self.pipeline.clone(),
+            running: self.running.clone(),
+            recovering: Arc::new(AtomicBool::new(false)),
+            runtime: tokio::runtime::Handle::current(),
+        };
         let running = self.running.clone();
-        let bus = self.pipeline.bus().expect("Audio pipeline should have a bus");
-        let pipeline_for_bus = self.pipeline.clone();
-        let recovering = Arc::new(AtomicBool::new(false));
-        let warn_count = Arc::new(AtomicU32::new(0));
-        let last_warn_reset = Arc::new(AtomicU64::new(0));
-        let rt_handle = tokio::runtime::Handle::current();
 
         tokio::task::spawn_blocking(move || {
+            let mut overruns = OverrunWindow::default();
             while running.load(Ordering::SeqCst) {
-                if let Some(msg) = bus.timed_pop(gst::ClockTime::from_mseconds(100)) {
-                    match msg.view() {
-                        gst::MessageView::Error(err) => {
-                            error!(
-                                "GStreamer audio error from {:?}: {} ({:?})",
-                                err.src().map(|s| s.path_string()),
-                                err.error(),
-                                err.debug()
-                            );
-                            if !recovering.swap(true, Ordering::SeqCst) {
-                                let _ = pipeline_for_bus.set_state(gst::State::Null);
-                                let running_retry = running.clone();
-                                let pipeline_retry = pipeline_for_bus.clone();
-                                let recovering_flag = recovering.clone();
-                                rt_handle.spawn(async move {
-                                    while running_retry.load(Ordering::SeqCst) {
-                                        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-                                        match pipeline_retry.set_state(gst::State::Playing) {
-                                            Ok(_) => {
-                                                info!("Audio pipeline recovered to PLAYING after error");
-                                                recovering_flag.store(false, Ordering::SeqCst);
-                                                break;
-                                            }
-                                            Err(e) => warn!("Audio restart failed, will retry: {:?}", e),
-                                        }
-                                    }
-                                });
-                            }
-                        }
-                        gst::MessageView::Warning(w) => {
-                            debug!(
-                                "GStreamer audio warning from {:?}: {}",
-                                w.src().map(|s| s.path_string()),
-                                w.error()
-                            );
-                            if let Some(src) = w.src() {
-                                let src_path = src.path_string();
-                                if src_path.contains("GstAlsaSrc") {
-                                    let err_str = format!("{}", w.error());
-                                    if err_str.contains("Can't record audio fast enough") {
-                                        let now_ms = std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap_or_default()
-                                            .as_millis()
-                                            as u64;
-
-                                        let last_reset = last_warn_reset.load(Ordering::SeqCst);
-                                        if now_ms - last_reset > 2000 {
-                                            warn_count.store(0, Ordering::SeqCst);
-                                            last_warn_reset.store(now_ms, Ordering::SeqCst);
-                                        }
-
-                                        let count = warn_count.fetch_add(1, Ordering::SeqCst) + 1;
-                                        if count > 10 && !recovering.load(Ordering::SeqCst) {
-                                            warn!(
-                                                "Audio underrun detected ({} warnings), triggering recovery",
-                                                count
-                                            );
-                                            recovering.store(true, Ordering::SeqCst);
-                                            let _ = pipeline_for_bus.set_state(gst::State::Null);
-                                            let running_retry = running.clone();
-                                            let pipeline_retry = pipeline_for_bus.clone();
-                                            let recovering_flag = recovering.clone();
-                                            rt_handle.spawn(async move {
-                                                while running_retry.load(Ordering::SeqCst) {
-                                                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-                                                    if pipeline_retry.set_state(gst::State::Playing).is_ok() {
-                                                        info!("Audio pipeline recovered to PLAYING after underrun warnings");
-                                                        recovering_flag.store(false, Ordering::SeqCst);
-                                                        break;
-                                                    }
-                                                }
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        gst::MessageView::Eos(_) => {
-                            info!("GStreamer audio pipeline EOS");
-                            if !recovering.swap(true, Ordering::SeqCst) {
-                                let _ = pipeline_for_bus.set_state(gst::State::Null);
-                                let running_retry = running.clone();
-                                let pipeline_retry = pipeline_for_bus.clone();
-                                let recovering_flag = recovering.clone();
-                                rt_handle.spawn(async move {
-                                    while running_retry.load(Ordering::SeqCst) {
-                                        tokio::time::sleep(tokio::time::Duration::from_millis(
-                                            1000,
-                                        ))
-                                        .await;
-                                        if pipeline_retry.set_state(gst::State::Playing).is_ok() {
-                                            info!("Audio pipeline recovered to PLAYING after EOS");
-                                            recovering_flag.store(false, Ordering::SeqCst);
-                                            break;
-                                        }
-                                    }
-                                });
-                            }
-                        }
-                        _ => {}
+                let Some(msg) = bus.timed_pop(gst::ClockTime::from_mseconds(100)) else {
+                    continue;
+                };
+                match msg.view() {
+                    gst::MessageView::Error(err) => {
+                        error!(
+                            "GStreamer audio error from {:?}: {} ({:?})",
+                            err.src().map(|s| s.path_string()),
+                            err.error(),
+                            err.debug()
+                        );
+                        recovery.restart("error");
                     }
+                    gst::MessageView::Warning(w) => {
+                        debug!(
+                            "GStreamer audio warning from {:?}: {}",
+                            w.src().map(|s| s.path_string()),
+                            w.error()
+                        );
+                        let from_capture =
+                            w.src().is_some_and(|s| s.path_string().contains("GstAlsaSrc"));
+                        if from_capture
+                            && w.error().to_string().contains("Can't record audio fast enough")
+                            && overruns.record(std::time::Instant::now())
+                        {
+                            recovery.restart("capture overrun");
+                        }
+                    }
+                    gst::MessageView::Eos(_) => {
+                        info!("GStreamer audio pipeline EOS");
+                        recovery.restart("EOS");
+                    }
+                    _ => {}
                 }
             }
         });
@@ -830,6 +764,67 @@ impl Drop for AudioPipeline {
     }
 }
 
+/// Restarts the audio pipeline after an error, EOS or a capture overrun storm.
+struct AudioRecovery {
+    pipeline: gst::Pipeline,
+    running: Arc<AtomicBool>,
+    recovering: Arc<AtomicBool>,
+    runtime: tokio::runtime::Handle,
+}
+
+impl AudioRecovery {
+    /// Takes the pipeline to NULL and back to PLAYING, retrying every second.
+    /// A restart already under way absorbs further requests.
+    fn restart(&self, reason: &'static str) {
+        if self.recovering.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        warn!(reason, "restarting the audio pipeline");
+        let _ = self.pipeline.set_state(gst::State::Null);
+        let pipeline = self.pipeline.clone();
+        let running = self.running.clone();
+        let recovering = self.recovering.clone();
+        self.runtime.spawn(async move {
+            while running.load(Ordering::SeqCst) {
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                match pipeline.set_state(gst::State::Playing) {
+                    Ok(_) => {
+                        info!(reason, "audio pipeline is playing again");
+                        break;
+                    }
+                    Err(e) => warn!("audio restart failed, will retry: {e:?}"),
+                }
+            }
+            recovering.store(false, Ordering::SeqCst);
+        });
+    }
+}
+
+/// Counts alsasrc "can't record fast enough" warnings. More than
+/// [`Self::LIMIT`] of them within [`Self::WINDOW`] means capture is not
+/// keeping up (or the HDMI source stopped its audio clock) and only a restart
+/// resynchronises it.
+#[derive(Debug, Default)]
+pub struct OverrunWindow {
+    started: Option<std::time::Instant>,
+    count: u32,
+}
+
+impl OverrunWindow {
+    pub const WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+    pub const LIMIT: u32 = 10;
+
+    /// Records one warning. Returns whether the pipeline should be restarted.
+    pub fn record(&mut self, now: std::time::Instant) -> bool {
+        if self.started.is_none_or(|t| now.duration_since(t) > Self::WINDOW) {
+            self.started = Some(now);
+            self.count = 0;
+        }
+        self.count += 1;
+        self.count > Self::LIMIT
+    }
+}
+
 pub struct PipelineManager {
     video: VideoPipeline,
     audio: Option<AudioPipeline>,
@@ -874,11 +869,11 @@ impl PipelineManager {
         self.video.set_frame_callback(callback);
     }
 
-    pub fn set_state_callback<F>(&self, callback: F)
+    pub fn set_state_callback<F>(&self, callback: F) -> Result<()>
     where
         F: FnMut(VideoInputState) + Send + 'static,
     {
-        self.video.set_state_callback(callback);
+        self.video.set_state_callback(callback)
     }
 
     pub fn set_audio_callback<F>(&self, callback: F)

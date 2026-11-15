@@ -6,16 +6,13 @@ use webrtc::data_channel::RTCDataChannel;
 use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
+#[derive(Clone)]
 pub struct Session {
     pub id: Arc<str>,
     pub peer_connection: Option<Arc<RTCPeerConnection>>,
     pub video_track: Option<Arc<TrackLocalStaticSample>>,
     pub audio_track: Option<Arc<TrackLocalStaticSample>>,
-    pub control_channel: Option<Arc<RTCDataChannel>>,
     pub rpc_channel: Option<Arc<RTCDataChannel>>,
-    pub hid_channel: Option<Arc<RTCDataChannel>>,
-    pub disk_channel: Option<Arc<RTCDataChannel>>,
-    pub should_unmount_virtual_media: bool,
 }
 
 impl fmt::Debug for Session {
@@ -23,30 +20,8 @@ impl fmt::Debug for Session {
         f.debug_struct("Session")
             .field("id", &self.id)
             .field("has_peer_connection", &self.peer_connection.is_some())
-            .field("has_video_track", &self.video_track.is_some())
-            .field("has_audio_track", &self.audio_track.is_some())
-            .field("has_control_channel", &self.control_channel.is_some())
             .field("has_rpc_channel", &self.rpc_channel.is_some())
-            .field("has_hid_channel", &self.hid_channel.is_some())
-            .field("has_disk_channel", &self.disk_channel.is_some())
-            .field("should_unmount_virtual_media", &self.should_unmount_virtual_media)
-            .finish()
-    }
-}
-
-impl Clone for Session {
-    fn clone(&self) -> Self {
-        Self {
-            id: self.id.clone(),
-            peer_connection: self.peer_connection.clone(),
-            video_track: self.video_track.clone(),
-            audio_track: self.audio_track.clone(),
-            control_channel: self.control_channel.clone(),
-            rpc_channel: self.rpc_channel.clone(),
-            hid_channel: self.hid_channel.clone(),
-            disk_channel: self.disk_channel.clone(),
-            should_unmount_virtual_media: self.should_unmount_virtual_media,
-        }
+            .finish_non_exhaustive()
     }
 }
 
@@ -63,11 +38,7 @@ impl Session {
             peer_connection: None,
             video_track: None,
             audio_track: None,
-            control_channel: None,
             rpc_channel: None,
-            hid_channel: None,
-            disk_channel: None,
-            should_unmount_virtual_media: false,
         }
     }
 

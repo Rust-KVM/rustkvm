@@ -1,14 +1,12 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use serde_json as serde_json_crate;
 use tokio::sync::{RwLock, mpsc};
 use tokio::time::{Duration, Instant, interval};
 use tracing::{debug, info, warn};
 use webrtc::media::Sample;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
-use crate::api::{JsonRpcProcessor, default_registry};
 use crate::hardware::v4l2::{CaptureProbe, RelockVerdict, RelockWatch, pulse_hotplug};
 use crate::observability::metrics::{
     VIDEO_FRAME_INTERVAL_SECONDS, VIDEO_FRAMES_DROPPED_TOTAL, VIDEO_WRITE_SECONDS,
@@ -291,7 +289,7 @@ async fn start_pipeline(
         let state_tx_clone = state_tx.clone();
         manager.set_state_callback(move |state| {
             let _ = state_tx_clone.send(state);
-        });
+        })?;
     }
 
     manager.start()?;
@@ -672,32 +670,7 @@ pub async fn handle_video_state_message(video_state: VideoInputState) {
 pub async fn trigger_video_state_update_rpc() {
     let video_state = LAST_VIDEO_STATE.read().await.clone();
     debug!("Triggering video state update: {:?}", video_state);
-
-    if let Some(session_id) = crate::webrtc::get_current_session().await {
-        let mut session = crate::session::Session::new(session_id.clone());
-        if let Some(rpc_channel) = crate::webrtc::get_rpc_channel(&session_id).await {
-            if rpc_channel.ready_state()
-                != webrtc::data_channel::data_channel_state::RTCDataChannelState::Open
-            {
-                return;
-            }
-            session.rpc_channel = Some(rpc_channel);
-        } else {
-            return;
-        }
-
-        let processor = JsonRpcProcessor::new(default_registry());
-        let params = match serde_json_crate::to_value(&video_state) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                warn!("Failed to serialize video state: {}", e);
-                None
-            }
-        };
-        if let Err(e) = processor.send_event("videoInputState", params, &session).await {
-            warn!("Failed to send videoInputState event: {}", e);
-        }
-    }
+    crate::api::events::emit("videoInputState", video_state).await;
 }
 
 pub async fn write_ctrl_action(action: &str) -> anyhow::Result<()> {
