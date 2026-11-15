@@ -1,21 +1,27 @@
+use std::io;
 use std::os::fd::OwnedFd;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
-use parking_lot::{Mutex, RwLock};
-use rustix::fs::{Mode as FileMode, OFlags, fcntl_getfl, fcntl_setfl, open};
-use rustix::io::{Errno, dup, read, write};
+use anyhow::{Context, Result};
+use bytes::Bytes;
+use parking_lot::Mutex;
+use rustix::fs::{Mode, OFlags, fcntl_getfl, fcntl_setfl, open};
+use rustix::io::{read, write};
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 use rustix::termios::{Winsize, tcsetwinsize};
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::io::Interest;
+use tokio::io::unix::AsyncFd;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
+
+/// A shell that does not read its input for this long has the write dropped,
+/// so one stuck program cannot hold the data channel's message loop forever.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TerminalSize {
@@ -23,485 +29,153 @@ pub struct TerminalSize {
     pub cols: u16,
 }
 
-struct TerminalState {
-    ptmx: Option<OwnedFd>,
-    cmd: Option<Child>,
-    is_healthy: bool,
+/// A window-size message from the web terminal: a JSON object and nothing else.
+pub fn parse_resize(msg: &[u8]) -> Option<TerminalSize> {
+    let text = std::str::from_utf8(msg).ok()?.trim();
+    (text.starts_with('{') && text.ends_with('}')).then(|| serde_json::from_str(text).ok())?
 }
 
-impl TerminalState {
-    fn new() -> Self {
-        Self { ptmx: None, cmd: None, is_healthy: true }
-    }
-
-    fn is_ready(&self) -> bool {
-        self.ptmx.is_some() && self.cmd.is_some() && self.is_healthy
-    }
-
-    fn mark_unhealthy(&mut self) {
-        self.is_healthy = false;
-        warn!("Terminal state marked as unhealthy");
-    }
-
-    fn reset_health(&mut self) {
-        self.is_healthy = true;
-    }
+/// A shell on a pseudo-terminal, alive while its data channel is open.
+struct Shell {
+    master: Arc<AsyncFd<OwnedFd>>,
+    child: Child,
+    output: JoinHandle<()>,
 }
 
-pub struct PtyMaster {
-    fd: OwnedFd,
-    slave_path: String,
-}
+impl Shell {
+    fn spawn(channel: Arc<RTCDataChannel>) -> Result<Self> {
+        let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).context("open PTY master")?;
+        grantpt(&master).context("grant PTY access")?;
+        unlockpt(&master).context("unlock PTY")?;
+        let slave_name = ptsname(&master, Vec::new()).context("get PTY slave name")?;
+        let slave = std::fs::File::from(
+            open(slave_name.as_c_str(), OFlags::RDWR, Mode::empty()).context("open PTY slave")?,
+        );
 
-impl PtyMaster {
-    fn new() -> Result<Self> {
-        let master_fd =
-            openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).context("Failed to open PTY master")?;
-
-        grantpt(&master_fd).context("Failed to grant PTY access")?;
-
-        unlockpt(&master_fd).context("Failed to unlock PTY")?;
-
-        let slave_name = ptsname(&master_fd, Vec::new()).context("Failed to get PTY slave name")?;
-        let slave_path = slave_name.to_string_lossy().to_string();
-
-        Ok(Self { fd: master_fd, slave_path })
-    }
-
-    fn slave_path(&self) -> &str {
-        &self.slave_path
-    }
-}
-
-struct PtyChildProcess;
-
-impl PtyChildProcess {
-    fn spawn_with_pty(cmd: &mut Command, slave_path: &str) -> Result<Child> {
-        let slave_fd = open(slave_path, OFlags::RDWR, FileMode::empty())
-            .context("Failed to open PTY slave")?;
-
-        let slave_file = std::fs::File::from(slave_fd);
-
-        let stdin_file = slave_file.try_clone().context("Failed to clone slave fd for stdin")?;
-        let stdout_file = slave_file.try_clone().context("Failed to clone slave fd for stdout")?;
-        let stderr_file = slave_file;
-
-        let child = cmd
-            .stdin(Stdio::from(stdin_file))
-            .stdout(Stdio::from(stdout_file))
-            .stderr(Stdio::from(stderr_file))
+        let child = Command::new("/bin/sh")
+            .stdin(Stdio::from(slave.try_clone().context("clone PTY slave")?))
+            .stdout(Stdio::from(slave.try_clone().context("clone PTY slave")?))
+            .stderr(Stdio::from(slave))
             .spawn()
-            .context("Failed to start shell process")?;
+            .context("start shell")?;
 
-        Ok(child)
+        let flags = fcntl_getfl(&master).context("read PTY flags")?;
+        fcntl_setfl(&master, flags | OFlags::NONBLOCK).context("set PTY non-blocking")?;
+        // SAFETY: `master` is an `OwnedFd`, so it is a valid open descriptor that
+        // nothing else closes or replaces while the `AsyncFd` owns it.
+        let master = unsafe { AsyncFd::register(master) }
+            .map_err(io::Error::from)
+            .context("register PTY with the runtime")?;
+        let master = Arc::new(master);
+
+        let output = tokio::spawn(forward_output(master.clone(), channel));
+        Ok(Self { master, child, output })
+    }
+
+    /// Stops the shell and reaps it, so closed terminals leave no zombie.
+    fn stop(mut self) {
+        self.output.abort();
+        if let Err(e) = self.child.kill() {
+            debug!("shell already gone: {e}");
+        }
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = self.child.wait() {
+                warn!("failed to reap shell: {e}");
+            }
+        });
     }
 }
 
-struct OutputForwarder {
-    handle: Option<JoinHandle<Result<()>>>,
-    shutdown_tx: mpsc::UnboundedSender<()>,
-}
-
-impl OutputForwarder {
-    fn start(
-        state: Arc<RwLock<TerminalState>>,
-        data_channel: Arc<RTCDataChannel>,
-        shutdown_flag: Arc<AtomicBool>,
-        channel_id: u16,
-    ) -> Self {
-        let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel();
-
-        let ptmx_dup = {
-            let g = state.read();
-            g.ptmx.as_ref().map(dup).transpose()
-        };
-
-        let handle = tokio::task::spawn_blocking(move || -> Result<()> {
-            let ptmx = match ptmx_dup {
-                Ok(Some(fd)) => fd,
-                _ => {
-                    debug!(
-                        "PTY not available, stopping output reader for channel {:?}",
-                        channel_id
-                    );
-                    return Ok(());
-                }
-            };
-
-            let rt = tokio::runtime::Handle::current();
-            let mut buf = [0u8; 1024];
-            let mut error_count = 0u32;
-            const MAX_ERRORS: u32 = 5;
-
-            debug!("Output reader thread started for channel {:?}", channel_id);
-
-            loop {
-                if shutdown_flag.load(Ordering::Relaxed) {
+/// Sends shell output to the browser from one task, so chunks arrive in the
+/// order they were read.
+async fn forward_output(master: Arc<AsyncFd<OwnedFd>>, channel: Arc<RTCDataChannel>) {
+    let mut buf = [0u8; 4096];
+    loop {
+        let read = master
+            .async_io(Interest::READABLE, |fd| read(fd, &mut buf[..]).map_err(io::Error::from))
+            .await;
+        match read {
+            // The master reads EIO once the shell has exited.
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                if let Err(e) = channel.send(&Bytes::copy_from_slice(&buf[..n])).await {
+                    debug!("terminal channel gone: {e}");
                     break;
                 }
-                if shutdown_rx.try_recv().is_ok() {
-                    break;
-                }
+            }
+        }
+    }
+    debug!("terminal output ended");
+}
 
-                match read(&ptmx, &mut buf) {
-                    Ok(0) => {
-                        debug!("PTY EOF reached for channel {:?}", channel_id);
-                        break;
+async fn write_all(master: &AsyncFd<OwnedFd>, mut data: &[u8]) -> io::Result<()> {
+    while !data.is_empty() {
+        let n = master
+            .async_io(Interest::WRITABLE, |fd| write(fd, data).map_err(io::Error::from))
+            .await?;
+        data = &data[n..];
+    }
+    Ok(())
+}
+
+fn resize(master: &AsyncFd<OwnedFd>, size: &TerminalSize) -> Result<()> {
+    let winsize = Winsize { ws_row: size.rows, ws_col: size.cols, ws_xpixel: 0, ws_ypixel: 0 };
+    tcsetwinsize(master.get_ref(), winsize).context("set terminal window size")
+}
+
+/// Runs a shell for a `terminal` data channel: started when the channel opens,
+/// stopped when it closes.
+pub fn attach(channel: &Arc<RTCDataChannel>) {
+    let shell: Arc<Mutex<Option<Shell>>> = Arc::default();
+
+    let slot = shell.clone();
+    // Weak: the channel owns this handler, so a strong ref would keep it alive.
+    let weak = Arc::downgrade(channel);
+    channel.on_open(Box::new(move || {
+        Box::pin(async move {
+            let Some(channel) = weak.upgrade() else { return };
+            match Shell::spawn(channel.clone()) {
+                Ok(new) => {
+                    info!(pid = new.child.id(), "terminal shell started");
+                    if let Some(old) = slot.lock().replace(new) {
+                        old.stop();
                     }
-                    Ok(n) => {
-                        error_count = 0;
-                        let data = buf[..n].to_vec();
-                        let ch = data_channel.clone();
-                        rt.spawn(async move {
-                            if let Err(e) = ch.send(&data.into()).await {
-                                warn!(
-                                    "Failed to send pty output for channel {:?}: {}",
-                                    channel_id, e
-                                );
-                            }
-                        });
-                    }
-                    Err(err) => {
-                        if err == Errno::AGAIN {
-                            std::thread::sleep(Duration::from_millis(1));
-                            continue;
-                        }
-                        if err == Errno::INTR {
-                            continue;
-                        }
-                        error_count += 1;
-                        error!(
-                            "Failed to read from pty for channel {:?}: {} (error {}/{})",
-                            channel_id, err, error_count, MAX_ERRORS
-                        );
-                        if error_count >= MAX_ERRORS {
-                            bail!("Too many consecutive read errors");
-                        }
-                        break;
-                    }
+                }
+                Err(e) => {
+                    warn!(error = %format!("{e:#}"), "cannot start terminal shell");
+                    let _ = channel.close().await;
                 }
             }
+        })
+    }));
 
-            info!("Output reader thread exiting for channel {:?}", channel_id);
-            Ok(())
-        });
-
-        Self { handle: Some(handle), shutdown_tx }
-    }
-
-    fn shutdown(&mut self) -> Result<()> {
-        if self.shutdown_tx.send(()).is_err() {
-            warn!("Failed to send shutdown signal to output forwarder");
-        }
-
-        if let Some(handle) = self.handle.take() {
-            handle.abort();
-            debug!("Output forwarder task aborted");
-        }
-
-        Ok(())
-    }
-}
-
-impl Drop for OutputForwarder {
-    fn drop(&mut self) {
-        if let Err(e) = self.shutdown() {
-            error!("Error during output forwarder cleanup: {}", e);
-        }
-    }
-}
-
-pub struct TerminalHandler {
-    state: Arc<RwLock<TerminalState>>,
-    data_channel: Arc<RTCDataChannel>,
-    output_forwarder: Mutex<Option<OutputForwarder>>,
-    shutdown_flag: Arc<AtomicBool>,
-    channel_id: u16,
-}
-
-impl TerminalHandler {
-    pub fn new(data_channel: Arc<RTCDataChannel>) -> Arc<Self> {
-        let channel_id = data_channel.id();
-        let handler = Arc::new(Self {
-            state: Arc::new(RwLock::new(TerminalState::new())),
-            data_channel: data_channel.clone(),
-            output_forwarder: Mutex::new(None),
-            shutdown_flag: Arc::new(AtomicBool::new(false)),
-            channel_id,
-        });
-
-        Self::setup_event_handlers(Arc::clone(&handler), data_channel);
-        handler
-    }
-
-    fn setup_event_handlers(handler: Arc<Self>, data_channel: Arc<RTCDataChannel>) {
-        let handler_open = Arc::clone(&handler);
-        data_channel.on_open(Box::new(move || {
-            let handler = Arc::clone(&handler_open);
-            Box::pin(async move {
-                if let Err(e) = handler.on_open().await {
-                    error!("Failed to start PTY on channel {:?}: {}", handler.channel_id, e);
-                    if let Err(close_err) = handler.data_channel.close().await {
-                        error!("Failed to close data channel after PTY error: {}", close_err);
-                    }
-                }
-            })
-        }));
-
-        let handler_message = Arc::clone(&handler);
-        data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
-            let handler = Arc::clone(&handler_message);
-            Box::pin(async move {
-                if let Err(e) = handler.on_message(msg).await {
-                    warn!("Failed to handle message on channel {:?}: {}", handler.channel_id, e);
-                }
-            })
-        }));
-
-        let handler_close = Arc::clone(&handler);
-        data_channel.on_close(Box::new(move || {
-            let handler = Arc::clone(&handler_close);
-            Box::pin(async move {
-                if let Err(e) = handler.on_close().await {
-                    error!(
-                        "Error during close handler for channel {:?}: {}",
-                        handler.channel_id, e
-                    );
-                }
-            })
-        }));
-
-        let handler_error = Arc::clone(&handler);
-        data_channel.on_error(Box::new(move |err| {
-            let handler = Arc::clone(&handler_error);
-            Box::pin(async move {
-                handler.on_error(err).await;
-            })
-        }));
-    }
-
-    async fn on_open(&self) -> Result<()> {
-        self.shutdown_flag.store(false, Ordering::Relaxed);
-        let mut cmd = Command::new("/bin/sh");
-        let (ptmx, child) = self.start_pty_with_command(&mut cmd)?;
-
-        {
-            let mut state = self.state.write();
-            state.ptmx = Some(ptmx);
-            state.cmd = Some(child);
-            state.reset_health();
-        }
-
-        self.start_output_forwarder()?;
-
-        debug!("Terminal PTY started successfully on channel {:?}", self.channel_id);
-        Ok(())
-    }
-
-    fn start_pty_with_command(&self, cmd: &mut Command) -> Result<(OwnedFd, Child)> {
-        let pty_master = PtyMaster::new().context("Failed to create PTY master")?;
-
-        debug!(
-            "PTY slave created at: {} for channel {:?}",
-            pty_master.slave_path(),
-            self.channel_id
-        );
-
-        let flags = fcntl_getfl(&pty_master.fd).context("getfl failed")?;
-        fcntl_setfl(&pty_master.fd, flags | OFlags::NONBLOCK).context("set O_NONBLOCK failed")?;
-
-        let child = PtyChildProcess::spawn_with_pty(cmd, pty_master.slave_path())
-            .context("Failed to spawn child process with PTY")?;
-
-        debug!("Child process started with PID: {:?} on channel {:?}", child.id(), self.channel_id);
-
-        Ok((pty_master.fd, child))
-    }
-
-    fn start_output_forwarder(&self) -> Result<()> {
-        let forwarder = OutputForwarder::start(
-            Arc::clone(&self.state),
-            Arc::clone(&self.data_channel),
-            Arc::clone(&self.shutdown_flag),
-            self.channel_id,
-        );
-
-        let mut output_forwarder_guard = self.output_forwarder.lock();
-        *output_forwarder_guard = Some(forwarder);
-
-        Ok(())
-    }
-
-    async fn on_message(&self, msg: DataChannelMessage) -> Result<()> {
-        let is_ready = {
-            let state = self.state.read();
-            state.is_ready()
-        };
-
-        if !is_ready {
-            debug!("PTY not ready for message on channel {:?}", self.channel_id);
-            return Ok(());
-        }
-
-        if msg.is_string {
-            let text = String::from_utf8(msg.data.to_vec())
-                .context("Failed to decode message as UTF-8")?;
-
-            let maybe_json = text.trim();
-
-            if maybe_json.len() > 1
-                && maybe_json.starts_with('{')
-                && maybe_json.ends_with('}')
-                && let Ok(size) = serde_json::from_str::<TerminalSize>(maybe_json)
+    let slot = shell.clone();
+    channel.on_message(Box::new(move |msg: DataChannelMessage| {
+        let master = slot.lock().as_ref().map(|s| s.master.clone());
+        Box::pin(async move {
+            let Some(master) = master else { return };
+            if msg.is_string
+                && let Some(size) = parse_resize(&msg.data)
             {
-                if let Err(e) = self.set_terminal_size(&size) {
-                    warn!("Failed to set terminal size for channel {:?}: {}", self.channel_id, e);
-                } else {
-                    info!(
-                        "Set terminal size to {}x{} for channel {:?}",
-                        size.cols, size.rows, self.channel_id
-                    );
-                    return Ok(());
+                match resize(&master, &size) {
+                    Ok(()) => debug!(cols = size.cols, rows = size.rows, "terminal resized"),
+                    Err(e) => warn!(error = %format!("{e:#}"), "terminal resize failed"),
                 }
+                return;
             }
-        }
-
-        self.write_to_pty(&msg.data)?;
-        Ok(())
-    }
-
-    fn write_to_pty(&self, data: &[u8]) -> Result<()> {
-        let ptmx = {
-            let state = self.state.read();
-            if !state.is_healthy {
-                bail!("Terminal is in unhealthy state");
+            match tokio::time::timeout(WRITE_TIMEOUT, write_all(&master, &msg.data)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => debug!("terminal input dropped: {e}"),
+                Err(_) => warn!("terminal input dropped: shell is not reading"),
             }
-            match state.ptmx.as_ref() {
-                Some(fd) => dup(fd)?,
-                None => bail!("PTY not available"),
-            }
-        };
+        })
+    }));
 
-        let mut bytes_written = 0;
-        let mut retries = 0u32;
-        const MAX_RETRIES: u32 = 4;
-
-        while bytes_written < data.len() {
-            match write(&ptmx, &data[bytes_written..]) {
-                Ok(n) if n > 0 => {
-                    bytes_written += n;
-                    retries = 0;
-                }
-                Ok(_) => bail!("Write returned 0 bytes"),
-                Err(e) if e == Errno::AGAIN && retries < MAX_RETRIES => {
-                    std::hint::spin_loop();
-                    retries += 1;
-                    continue;
-                }
-                Err(e) if e == Errno::INTR => {
-                    continue;
-                }
-                Err(e) if e == Errno::AGAIN => bail!("Write would block after retries"),
-                Err(e) => bail!("Failed to write to PTY: {}", e),
-            }
+    channel.on_close(Box::new(move || {
+        if let Some(shell) = shell.lock().take() {
+            shell.stop();
+            info!("terminal shell stopped");
         }
-        debug!("Wrote {} bytes to PTY for channel {:?}", data.len(), self.channel_id);
-        Ok(())
-    }
-
-    fn set_terminal_size(&self, size: &TerminalSize) -> Result<()> {
-        let state = self.state.read();
-
-        if !state.is_healthy {
-            bail!("Terminal is in unhealthy state");
-        }
-
-        if let Some(ref ptmx) = state.ptmx {
-            let winsize =
-                Winsize { ws_row: size.rows, ws_col: size.cols, ws_xpixel: 0, ws_ypixel: 0 };
-
-            tcsetwinsize(ptmx, winsize).context("Failed to set terminal window size")?;
-        } else {
-            bail!("PTY not available");
-        }
-        Ok(())
-    }
-
-    async fn on_close(&self) -> Result<()> {
-        info!("Terminal channel {:?} closing, starting cleanup", self.channel_id);
-
-        self.shutdown_flag.store(true, Ordering::Relaxed);
-
-        {
-            let mut forwarder_guard = self.output_forwarder.lock();
-            if let Some(mut forwarder) = forwarder_guard.take()
-                && let Err(e) = forwarder.shutdown()
-            {
-                error!(
-                    "Failed to shutdown output forwarder for channel {:?}: {}",
-                    self.channel_id, e
-                );
-            }
-        }
-
-        let mut state = self.state.write();
-
-        if let Some(_ptmx) = state.ptmx.take() {
-            debug!("PTY closed for channel {:?}", self.channel_id);
-        }
-
-        if let Some(mut cmd) = state.cmd.take() {
-            if let Err(e) = cmd.kill() {
-                error!("Failed to kill child process for channel {:?}: {}", self.channel_id, e);
-            } else {
-                debug!("Child process killed for channel {:?}", self.channel_id);
-            }
-        }
-
-        state.mark_unhealthy();
-        info!("Terminal channel {:?} closed", self.channel_id);
-        Ok(())
-    }
-
-    async fn on_error(&self, err: webrtc::Error) {
-        error!("Terminal channel {:?} error: {}", self.channel_id, err);
-
-        let mut state = self.state.write();
-        state.mark_unhealthy();
-    }
-}
-
-impl Drop for TerminalHandler {
-    fn drop(&mut self) {
-        debug!("TerminalHandler dropping for channel {:?}", self.channel_id);
-
-        self.shutdown_flag.store(true, Ordering::Relaxed);
-
-        let mut forwarder_guard = self.output_forwarder.lock();
-        if let Some(mut forwarder) = forwarder_guard.take()
-            && let Err(e) = forwarder.shutdown()
-        {
-            error!("Error shutting down forwarder during drop: {}", e);
-        }
-
-        let mut state = self.state.write();
-        if let Some(mut cmd) = state.cmd.take()
-            && let Err(e) = cmd.kill()
-        {
-            error!("Error killing child process during drop: {}", e);
-        }
-        state.ptmx.take();
-
-        debug!("TerminalHandler dropped for channel {:?}", self.channel_id);
-    }
-}
-
-pub async fn setup_terminal_channel(channel: Arc<RTCDataChannel>) -> Result<Arc<TerminalHandler>> {
-    let channel_id = channel.id();
-    info!("Terminal data channel (ID: {:?}) established", channel_id);
-
-    let handler = TerminalHandler::new(channel);
-
-    info!("Terminal channel setup completed for ID: {:?}", channel_id);
-    Ok(handler)
+        Box::pin(async {})
+    }));
 }

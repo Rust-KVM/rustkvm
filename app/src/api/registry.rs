@@ -385,8 +385,6 @@ impl JsonRpcProcessor {
 
         debug!("Received RPC request: method={}, id={:?}", request.method, request.id);
 
-        crate::observability::metrics::RPC_CALLS_TOTAL.with_label_values(&[&request.method]).inc();
-
         let Some(handler) = self.registry.get_handler(&request.method) else {
             warn!("Method not found: {}", request.method);
             return JsonRpcResponse {
@@ -397,6 +395,9 @@ impl JsonRpcProcessor {
             };
         };
 
+        // Counted only for registered methods: the label comes from the client,
+        // and every distinct value is a metric series kept for the process's life.
+        crate::observability::metrics::RPC_CALLS_TOTAL.with_label_values(&[&request.method]).inc();
         let _rpc_timer = crate::observability::metrics::RPC_LATENCY_SECONDS.start_timer();
         let span = tracing::info_span!("rpc", method = %request.method, id = ?request.id);
         match handler.call_async(request.params).instrument(span).await {

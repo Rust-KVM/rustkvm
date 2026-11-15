@@ -12,7 +12,6 @@ use crate::hardware::usb::storage::{
 };
 use crate::remote_mount;
 use crate::session::Session;
-use crate::terminal::setup_terminal_channel;
 
 #[tracing::instrument(skip_all, fields(session = %session.id))]
 pub async fn handle_rpc_message(msg: DataChannelMessage, session: &Session) {
@@ -20,21 +19,6 @@ pub async fn handle_rpc_message(msg: DataChannelMessage, session: &Session) {
 
     let processor = JsonRpcProcessor::new(default_registry());
     processor.handle_message(msg, session).await;
-}
-
-pub async fn handle_terminal_channel(channel: Arc<RTCDataChannel>) {
-    let label = channel.label().to_string();
-    let channel_id = channel.id();
-    info!("Terminal data channel '{}' (ID: {:?}) established", label, channel_id);
-
-    match setup_terminal_channel(channel).await {
-        Ok(_handler) => {
-            info!("Terminal handler successfully initialized");
-        }
-        Err(e) => {
-            warn!("Failed to setup terminal channel: {}", e);
-        }
-    }
 }
 
 pub async fn handle_serial_channel(channel: Arc<RTCDataChannel>) {
@@ -244,7 +228,7 @@ impl DataChannelManager {
             }
             "terminal" => {
                 info!("Setting up terminal data channel");
-                handle_terminal_channel(channel).await;
+                crate::terminal::attach(&channel);
             }
             "serial" => {
                 info!("Setting up serial data channel");
