@@ -22,7 +22,6 @@ use webrtc::rtp_transceiver::{RTCPFeedback, RTCRtpTransceiverInit};
 use webrtc::track::track_local::TrackLocal;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
-use crate::api::{JsonRpcProcessor, default_registry};
 use crate::data_channel::DataChannelManager;
 use crate::hardware::usb::storage as storage_mod;
 use crate::pipeline::H264Profile;
@@ -467,36 +466,13 @@ static RPC_CHANNELS: tokio::sync::OnceCell<
     RwLock<HashMap<Arc<str>, Arc<webrtc::data_channel::RTCDataChannel>>>,
 > = tokio::sync::OnceCell::const_new();
 
-fn create_rpc_processor() -> JsonRpcProcessor {
-    JsonRpcProcessor::new(default_registry())
-}
-
 pub async fn trigger_ota_state_update() {
-    info!("Triggering OTA state update");
-
-    if let Some(session_id) = get_current_session().await {
-        let mut session = Session::new(session_id.clone());
-        if let Some(rpc_channel) = get_rpc_channel(&session_id).await {
-            if rpc_channel.ready_state()
-                != webrtc::data_channel::data_channel_state::RTCDataChannelState::Open
-            {
-                warn!("RPC channel not open yet for session: {}", session_id);
-                return;
-            }
-            session.rpc_channel = Some(rpc_channel);
-        }
-        let processor = create_rpc_processor();
-
-        let params = serde_json::json!({
-            "updateAvailable": false,
-            "currentVersion": crate::version::built_app_version(),
-            "error": null
-        });
-
-        if let Err(e) = processor.send_event("updateStatusChanged", Some(params), &session).await {
-            warn!("Failed to send OTA update status: {}", e);
-        }
-    }
+    let params = serde_json::json!({
+        "updateAvailable": false,
+        "currentVersion": crate::version::built_app_version(),
+        "error": null
+    });
+    crate::api::events::emit("updateStatusChanged", params).await;
 }
 
 pub async fn trigger_video_state_update() {
@@ -505,41 +481,21 @@ pub async fn trigger_video_state_update() {
 }
 
 pub async fn trigger_usb_state_update() {
-    info!("Triggering USB state update");
-
-    if let Some(session_id) = get_current_session().await {
-        let mut session = Session::new(session_id.clone());
-        if let Some(rpc_channel) = get_rpc_channel(&session_id).await {
-            if rpc_channel.ready_state()
-                != webrtc::data_channel::data_channel_state::RTCDataChannelState::Open
-            {
-                warn!("RPC channel not open yet for session: {}", session_id);
-                return;
-            }
-            session.rpc_channel = Some(rpc_channel);
-        }
-        let processor = create_rpc_processor();
-
-        let usb_devices = match crate::api::handlers::usb::get_usb_devices() {
-            Ok(devices) => devices,
-            Err(_) => crate::api::handlers::usb::UsbDevicesResponse {
-                absolute_mouse: true,
-                relative_mouse: false,
-                keyboard: true,
-                mass_storage: true,
-            },
-        };
-        let usb_emulation = crate::api::handlers::usb::get_usb_emulation_state().unwrap_or(false);
-
-        let params = serde_json::json!({
-            "devices": usb_devices,
-            "emulationEnabled": usb_emulation
-        });
-
-        if let Err(e) = processor.send_event("usbStateChanged", Some(params), &session).await {
-            warn!("Failed to send USB state update: {}", e);
-        }
-    }
+    let usb_devices = match crate::api::handlers::usb::get_usb_devices() {
+        Ok(devices) => devices,
+        Err(_) => crate::api::handlers::usb::UsbDevicesResponse {
+            absolute_mouse: true,
+            relative_mouse: false,
+            keyboard: true,
+            mass_storage: true,
+        },
+    };
+    let usb_emulation = crate::api::handlers::usb::get_usb_emulation_state().unwrap_or(false);
+    let params = serde_json::json!({
+        "devices": usb_devices,
+        "emulationEnabled": usb_emulation
+    });
+    crate::api::events::emit("usbStateChanged", params).await;
 }
 
 pub async fn on_first_session_connected() {
@@ -559,29 +515,11 @@ pub async fn on_last_session_disconnected() {
 pub async fn on_active_sessions_changed() {
     let count = *SESSION_COUNTER.read().await;
     info!("Active sessions count changed to: {}", count);
-
-    if let Some(session_id) = get_current_session().await {
-        let mut session = Session::new(session_id.clone());
-        if let Some(rpc_channel) = get_rpc_channel(&session_id).await {
-            if rpc_channel.ready_state()
-                != webrtc::data_channel::data_channel_state::RTCDataChannelState::Open
-            {
-                debug!("RPC channel not open yet for session: {}", session_id);
-                return;
-            }
-            session.rpc_channel = Some(rpc_channel);
-        }
-        let processor = create_rpc_processor();
-
-        let params = serde_json::json!({
-            "activeSessionCount": count,
-            "hasActiveSessions": count > 0
-        });
-
-        if let Err(e) = processor.send_event("sessionCountChanged", Some(params), &session).await {
-            warn!("Failed to send session count update: {}", e);
-        }
-    }
+    let params = serde_json::json!({
+        "activeSessionCount": count,
+        "hasActiveSessions": count > 0
+    });
+    crate::api::events::emit("sessionCountChanged", params).await;
 }
 
 pub async fn get_active_session_count() -> i32 {
@@ -685,27 +623,22 @@ pub async fn handle_session_takeover(
     if let Some(ref old_id) = maybe_old
         && &**old_id != new_session_id
     {
-        if let Some(old_session) = app_state.get_session(old_id).await {
-            if let Some(rpc_channel) = get_rpc_channel(old_id).await {
-                let mut session_with_rpc = old_session.clone();
-                session_with_rpc.rpc_channel = Some(rpc_channel);
-
-                let processor = crate::api::JsonRpcProcessor::new(crate::api::default_registry());
-
-                if let Err(e) =
-                    processor.send_event("otherSessionConnected", None, &session_with_rpc).await
+        match get_rpc_channel(old_id).await {
+            Some(channel) => {
+                match crate::api::events::notify(
+                    &channel,
+                    "otherSessionConnected",
+                    serde_json::Value::Null,
+                )
+                .await
                 {
-                    tracing::warn!(
-                        "Failed to send otherSessionConnected to session {}: {}",
-                        old_id,
-                        e
-                    );
-                } else {
-                    tracing::info!("Sent otherSessionConnected to old session {}", old_id);
+                    Ok(()) => tracing::info!("Sent otherSessionConnected to old session {old_id}"),
+                    Err(e) => tracing::warn!(
+                        "Failed to send otherSessionConnected to session {old_id}: {e}"
+                    ),
                 }
-            } else {
-                tracing::warn!("No RPC channel available for old session {}", old_id);
             }
+            None => tracing::warn!("No RPC channel available for old session {old_id}"),
         }
 
         let app_state_cl = app_state.clone();
