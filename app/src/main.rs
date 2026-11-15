@@ -3,7 +3,7 @@ use rustkvm::cli::Cli;
 use rustkvm::hardware::native::socket as native_ctrl;
 use rustkvm::hardware::usb::storage as virtual_media;
 use rustkvm::hardware::{display, hw, jiggler, tuning, usb};
-use rustkvm::{cloud, config, failsafe, mqtt, network, observability, tls, video, web, webrtc};
+use rustkvm::{cloud, config, failsafe, mqtt, network, observability, tls, video, web};
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, error, info, warn};
@@ -153,7 +153,6 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     if let Err(e) = native_ctrl::init_ctrl_socket() {
         warn!("Failed to initialize ctrl socket: {}", e);
     }
-    webrtc::init_webrtc_api().await?;
 
     hw::log_previous_kernel_crashes();
     let _usb = usb::init_usb();

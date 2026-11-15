@@ -22,7 +22,7 @@ use webrtc::rtp_transceiver::{RTCPFeedback, RTCRtpTransceiverInit};
 use webrtc::track::track_local::TrackLocal;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
-use crate::data_channel::DataChannelManager;
+use crate::data_channel::route_data_channel;
 use crate::hardware::usb::storage as storage_mod;
 use crate::pipeline::H264Profile;
 use crate::session::Session;
@@ -77,384 +77,358 @@ pub fn negotiated_h264_profile(codecs: &[RTCRtpCodecParameters]) -> Option<H264P
     H264Profile::from_profile_level_id(&fmtp(bound, "profile-level-id")?)
 }
 
-pub struct WebRTCApi;
+pub async fn new_session(config: SessionConfig, session_id: String) -> anyhow::Result<Session> {
+    let mut setting_engine = SettingEngine::default();
+    let mut ice_servers = vec![];
 
-impl WebRTCApi {
-    pub fn new() -> anyhow::Result<Self> {
-        Ok(Self)
+    info!("Creating new WebRTC session with id: {}", session_id);
+
+    if config.is_cloud {
+        if let Some(servers) = &config.ice_servers {
+            ice_servers = servers
+                .iter()
+                .map(|url| webrtc::ice_transport::ice_server::RTCIceServer {
+                    urls: vec![url.clone()],
+                    ..Default::default()
+                })
+                .collect();
+            info!("Using ICE servers provided by cloud: {:?}", servers);
+        } else {
+            info!("ICE servers not provided by cloud");
+        }
+
+        if let Some(local_ip) = config.local_ip {
+            setting_engine.set_nat_1to1_ips(
+                vec![local_ip.to_string()],
+                webrtc::ice_transport::ice_candidate_type::RTCIceCandidateType::Srflx,
+            );
+            info!("Setting NAT 1-to-1 IPs with local IP: {}", local_ip);
+        } else {
+            info!("Local IP address not provided, won't set NAT 1-to-1 IPs");
+        }
     }
 
-    pub async fn new_session(
-        &self,
-        config: SessionConfig,
-        session_id: String,
-    ) -> anyhow::Result<Session> {
-        let mut setting_engine = SettingEngine::default();
-        let mut ice_servers = vec![];
-
-        info!("Creating new WebRTC session with id: {}", session_id);
-
-        if config.is_cloud {
-            if let Some(servers) = &config.ice_servers {
-                ice_servers = servers
-                    .iter()
-                    .map(|url| webrtc::ice_transport::ice_server::RTCIceServer {
-                        urls: vec![url.clone()],
-                        ..Default::default()
-                    })
-                    .collect();
-                info!("Using ICE servers provided by cloud: {:?}", servers);
-            } else {
-                info!("ICE servers not provided by cloud");
-            }
-
-            if let Some(local_ip) = config.local_ip {
-                setting_engine.set_nat_1to1_ips(
-                    vec![local_ip.to_string()],
-                    webrtc::ice_transport::ice_candidate_type::RTCIceCandidateType::Srflx,
-                );
-                info!("Setting NAT 1-to-1 IPs with local IP: {}", local_ip);
-            } else {
-                info!("Local IP address not provided, won't set NAT 1-to-1 IPs");
-            }
-        }
-
-        let mut media_engine = MediaEngine::default();
-        let video_rtcp_feedback = vec![
-            RTCPFeedback { typ: "nack".into(), parameter: "".into() },
-            RTCPFeedback { typ: "nack".into(), parameter: "pli".into() },
-            RTCPFeedback { typ: "ccm".into(), parameter: "fir".into() },
-            RTCPFeedback { typ: "goog-remb".into(), parameter: "".into() },
-            RTCPFeedback { typ: "transport-cc".into(), parameter: "".into() },
-        ];
-        media_engine
-            .register_codec(
-                RTCRtpCodecParameters {
-                    capability: RTCRtpCodecCapability {
-                        mime_type: MIME_TYPE_H264.to_owned(),
-                        clock_rate: 90_000,
-                        channels: 0,
-                        sdp_fmtp_line:
-                            "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e034"
-                                .to_owned(),
-                        rtcp_feedback: video_rtcp_feedback.clone(),
-                    },
-                    payload_type: 102,
-                    ..Default::default()
+    let mut media_engine = MediaEngine::default();
+    let video_rtcp_feedback = vec![
+        RTCPFeedback { typ: "nack".into(), parameter: "".into() },
+        RTCPFeedback { typ: "nack".into(), parameter: "pli".into() },
+        RTCPFeedback { typ: "ccm".into(), parameter: "fir".into() },
+        RTCPFeedback { typ: "goog-remb".into(), parameter: "".into() },
+        RTCPFeedback { typ: "transport-cc".into(), parameter: "".into() },
+    ];
+    media_engine
+        .register_codec(
+            RTCRtpCodecParameters {
+                capability: RTCRtpCodecCapability {
+                    mime_type: MIME_TYPE_H264.to_owned(),
+                    clock_rate: 90_000,
+                    channels: 0,
+                    sdp_fmtp_line:
+                        "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e034"
+                            .to_owned(),
+                    rtcp_feedback: video_rtcp_feedback.clone(),
                 },
-                RTPCodecType::Video,
-            )
-            .context("register H264 codec failed")?;
-        // The encoder emits High profile; registering it lets a browser that
-        // offers High (Chrome, Safari, Edge) negotiate the profile actually
-        // sent. The Constrained Baseline entry above stays as the fallback for
-        // offers without High, which keeps today's behaviour for them.
-        media_engine
-            .register_codec(
-                RTCRtpCodecParameters {
-                    capability: RTCRtpCodecCapability {
-                        mime_type: MIME_TYPE_H264.to_owned(),
-                        clock_rate: 90_000,
-                        channels: 0,
-                        sdp_fmtp_line: H264_HIGH_FMTP.to_owned(),
-                        rtcp_feedback: video_rtcp_feedback,
-                    },
-                    payload_type: 106,
-                    ..Default::default()
-                },
-                RTPCodecType::Video,
-            )
-            .context("register H264 High codec failed")?;
-        media_engine
-            .register_codec(
-                RTCRtpCodecParameters {
-                    capability: RTCRtpCodecCapability {
-                        mime_type: MIME_TYPE_OPUS.to_owned(),
-                        clock_rate: 48_000,
-                        channels: 2,
-                        sdp_fmtp_line: "minptime=10;useinbandfec=1".to_owned(),
-                        rtcp_feedback: vec![],
-                    },
-                    payload_type: 111,
-                    ..Default::default()
-                },
-                RTPCodecType::Audio,
-            )
-            .context("register Opus codec failed")?;
-
-        let mut registry = Registry::new();
-        registry = register_default_interceptors(registry, &mut media_engine)
-            .context("register_default_interceptors failed")?;
-
-        let api = APIBuilder::new()
-            .with_setting_engine(setting_engine)
-            .with_media_engine(media_engine)
-            .with_interceptor_registry(registry)
-            .build();
-
-        let configuration = RTCConfiguration { ice_servers, ..Default::default() };
-
-        let peer_connection = Arc::new(api.new_peer_connection(configuration).await?);
-
-        // The fmtp makes binding prefer a negotiated High profile payload; with
-        // none it falls back to the first negotiated H264 payload, as before.
-        let video_track = Arc::new(TrackLocalStaticSample::new(
-            RTCRtpCodecCapability {
-                mime_type: MIME_TYPE_H264.to_owned(),
-                clock_rate: 90_000,
-                sdp_fmtp_line: H264_HIGH_FMTP.to_owned(),
+                payload_type: 102,
                 ..Default::default()
             },
-            "video".to_owned(),
-            "rustkvm".to_owned(),
-        ));
-
-        let audio_track = Arc::new(TrackLocalStaticSample::new(
-            RTCRtpCodecCapability {
-                mime_type: MIME_TYPE_OPUS.to_owned(),
-                clock_rate: 48000,
-                channels: 2,
-                sdp_fmtp_line: "minptime=10;useinbandfec=1".to_string(),
+            RTPCodecType::Video,
+        )
+        .context("register H264 codec failed")?;
+    // The encoder emits High profile; registering it lets a browser that
+    // offers High (Chrome, Safari, Edge) negotiate the profile actually
+    // sent. The Constrained Baseline entry above stays as the fallback for
+    // offers without High, which keeps today's behaviour for them.
+    media_engine
+        .register_codec(
+            RTCRtpCodecParameters {
+                capability: RTCRtpCodecCapability {
+                    mime_type: MIME_TYPE_H264.to_owned(),
+                    clock_rate: 90_000,
+                    channels: 0,
+                    sdp_fmtp_line: H264_HIGH_FMTP.to_owned(),
+                    rtcp_feedback: video_rtcp_feedback,
+                },
+                payload_type: 106,
                 ..Default::default()
             },
-            "audio".to_owned(),
-            "rustkvm".to_owned(),
-        ));
+            RTPCodecType::Video,
+        )
+        .context("register H264 High codec failed")?;
+    media_engine
+        .register_codec(
+            RTCRtpCodecParameters {
+                capability: RTCRtpCodecCapability {
+                    mime_type: MIME_TYPE_OPUS.to_owned(),
+                    clock_rate: 48_000,
+                    channels: 2,
+                    sdp_fmtp_line: "minptime=10;useinbandfec=1".to_owned(),
+                    rtcp_feedback: vec![],
+                },
+                payload_type: 111,
+                ..Default::default()
+            },
+            RTPCodecType::Audio,
+        )
+        .context("register Opus codec failed")?;
 
-        info!("Created video and audio tracks");
+    let mut registry = Registry::new();
+    registry = register_default_interceptors(registry, &mut media_engine)
+        .context("register_default_interceptors failed")?;
 
-        let send_only = || RTCRtpTransceiverInit {
-            direction: RTCRtpTransceiverDirection::Sendonly,
-            send_encodings: vec![],
-        };
-        let video_transceiver = peer_connection
-            .add_transceiver_from_track(
-                Arc::clone(&video_track) as Arc<dyn TrackLocal + Send + Sync>,
-                Some(send_only()),
-            )
-            .await?;
-        let video_sender = video_transceiver.sender().await;
-        // Weak: the ICE state handler below is reachable from the ICE agent, and the
-        // sender (like the tracks bound to it) holds the transports that own the agent.
-        let video_sender_for_profile = Arc::downgrade(&video_sender);
+    let api = APIBuilder::new()
+        .with_setting_engine(setting_engine)
+        .with_media_engine(media_engine)
+        .with_interceptor_registry(registry)
+        .build();
 
-        let audio_transceiver = peer_connection
-            .add_transceiver_from_track(
-                Arc::clone(&audio_track) as Arc<dyn TrackLocal + Send + Sync>,
-                Some(send_only()),
-            )
-            .await?;
-        let audio_sender = audio_transceiver.sender().await;
+    let configuration = RTCConfiguration { ice_servers, ..Default::default() };
 
-        info!("Added video and audio tracks to peer connection");
+    let peer_connection = Arc::new(api.new_peer_connection(configuration).await?);
 
-        let senders = peer_connection.get_senders().await;
-        info!("Peer connection senders after adding video track: {}", senders.len());
-        for (i, sender) in senders.iter().enumerate() {
-            if let Some(track) = sender.track().await {
-                info!("Sender {}: track_id={}, kind={}", i, track.id(), track.kind());
-            } else {
-                info!("Sender {}: no track", i);
-            }
+    // The fmtp makes binding prefer a negotiated High profile payload; with
+    // none it falls back to the first negotiated H264 payload, as before.
+    let video_track = Arc::new(TrackLocalStaticSample::new(
+        RTCRtpCodecCapability {
+            mime_type: MIME_TYPE_H264.to_owned(),
+            clock_rate: 90_000,
+            sdp_fmtp_line: H264_HIGH_FMTP.to_owned(),
+            ..Default::default()
+        },
+        "video".to_owned(),
+        "rustkvm".to_owned(),
+    ));
+
+    let audio_track = Arc::new(TrackLocalStaticSample::new(
+        RTCRtpCodecCapability {
+            mime_type: MIME_TYPE_OPUS.to_owned(),
+            clock_rate: 48000,
+            channels: 2,
+            sdp_fmtp_line: "minptime=10;useinbandfec=1".to_string(),
+            ..Default::default()
+        },
+        "audio".to_owned(),
+        "rustkvm".to_owned(),
+    ));
+
+    info!("Created video and audio tracks");
+
+    let send_only = || RTCRtpTransceiverInit {
+        direction: RTCRtpTransceiverDirection::Sendonly,
+        send_encodings: vec![],
+    };
+    let video_transceiver = peer_connection
+        .add_transceiver_from_track(
+            Arc::clone(&video_track) as Arc<dyn TrackLocal + Send + Sync>,
+            Some(send_only()),
+        )
+        .await?;
+    let video_sender = video_transceiver.sender().await;
+    // Weak: the ICE state handler below is reachable from the ICE agent, and the
+    // sender (like the tracks bound to it) holds the transports that own the agent.
+    let video_sender_for_profile = Arc::downgrade(&video_sender);
+
+    let audio_transceiver = peer_connection
+        .add_transceiver_from_track(
+            Arc::clone(&audio_track) as Arc<dyn TrackLocal + Send + Sync>,
+            Some(send_only()),
+        )
+        .await?;
+    let audio_sender = audio_transceiver.sender().await;
+
+    info!("Added video and audio tracks to peer connection");
+
+    let senders = peer_connection.get_senders().await;
+    info!("Peer connection senders after adding video track: {}", senders.len());
+    for (i, sender) in senders.iter().enumerate() {
+        if let Some(track) = sender.track().await {
+            info!("Sender {}: track_id={}, kind={}", i, track.id(), track.kind());
+        } else {
+            info!("Sender {}: no track", i);
         }
+    }
 
-        tokio::spawn(async move {
-            let mut rtcp_buf = vec![0u8; 1500];
-            while let Ok((packets, _attributes)) = video_sender.read(&mut rtcp_buf).await {
-                for pkt in packets {
-                    use webrtc::rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
-                    use webrtc::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
-                    let any = pkt.as_any();
-                    if any.downcast_ref::<PictureLossIndication>().is_some()
-                        || any.downcast_ref::<FullIntraRequest>().is_some()
-                    {
-                        debug!("Received PLI/FIR — forcing keyframe");
-                        video::force_video_keyframe().await;
-                    }
+    tokio::spawn(async move {
+        let mut rtcp_buf = vec![0u8; 1500];
+        while let Ok((packets, _attributes)) = video_sender.read(&mut rtcp_buf).await {
+            for pkt in packets {
+                use webrtc::rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
+                use webrtc::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
+                let any = pkt.as_any();
+                if any.downcast_ref::<PictureLossIndication>().is_some()
+                    || any.downcast_ref::<FullIntraRequest>().is_some()
+                {
+                    debug!("Received PLI/FIR — forcing keyframe");
+                    video::force_video_keyframe().await;
                 }
             }
-        });
+        }
+    });
 
-        tokio::spawn(async move {
-            let mut rtcp_buf = vec![0u8; 1500];
-            while let Ok((packet, attributes)) = audio_sender.read(&mut rtcp_buf).await {
-                debug!("Audio RTCP: {:?}, attributes: {:?}", packet, attributes);
-            }
-        });
+    tokio::spawn(async move {
+        let mut rtcp_buf = vec![0u8; 1500];
+        while let Ok((packet, attributes)) = audio_sender.read(&mut rtcp_buf).await {
+            debug!("Audio RTCP: {:?}, attributes: {:?}", packet, attributes);
+        }
+    });
 
-        let mut session = Session::new(session_id);
-        session.peer_connection = Some(Arc::clone(&peer_connection));
-        session.video_track = Some(video_track);
-        session.audio_track = Some(audio_track);
+    let mut session = Session::new(session_id);
+    session.peer_connection = Some(Arc::clone(&peer_connection));
+    session.video_track = Some(video_track);
+    session.audio_track = Some(audio_track);
 
-        let app_state_for_close = config.app_state.clone();
+    let app_state_for_close = config.app_state.clone();
 
-        let session_id_clone = session.id.clone();
-        // Weak for the same reason as the sender: a strong ref here closes a cycle
-        // through the agent that kept every ended session's ICE agent, UDP sockets
-        // and buffers alive after pc.close().
-        let video_track_clone = session.video_track.as_ref().map(Arc::downgrade);
-        let audio_track_clone = session.audio_track.as_ref().map(Arc::downgrade);
-        let is_connected = Arc::new(RwLock::new(false));
-        let is_connected_clone = is_connected;
+    let session_id_clone = session.id.clone();
+    // Weak for the same reason as the sender: a strong ref here closes a cycle
+    // through the agent that kept every ended session's ICE agent, UDP sockets
+    // and buffers alive after pc.close().
+    let video_track_clone = session.video_track.as_ref().map(Arc::downgrade);
+    let audio_track_clone = session.audio_track.as_ref().map(Arc::downgrade);
+    let is_connected = Arc::new(RwLock::new(false));
+    let is_connected_clone = is_connected;
 
-        peer_connection.on_ice_connection_state_change(Box::new(
-            move |connection_state: RTCIceConnectionState| {
-                let session_id = session_id_clone.clone();
-                let video_track = video_track_clone.as_ref().and_then(std::sync::Weak::upgrade);
-                let audio_track = audio_track_clone.as_ref().and_then(std::sync::Weak::upgrade);
-                let video_sender = video_sender_for_profile.upgrade();
-                let is_connected = is_connected_clone.clone();
-                let app_state = app_state_for_close.clone();
-                Box::pin(async move {
-                    info!(
-                        "ICE Connection State has changed: {} for session: {}",
-                        connection_state, session_id
-                    );
-
-                    match connection_state {
-                        RTCIceConnectionState::Connected => {
-                            let mut connected = is_connected.write().await;
-                            if !*connected {
-                                *connected = true;
-                                drop(connected);
-                                info!("WebRTC session {} connected", session_id);
-                                increment_session_counter().await;
-                                if let Some(sender) = &video_sender {
-                                    let codecs = sender.get_parameters().await.rtp_parameters.codecs;
-                                    match negotiated_h264_profile(&codecs) {
-                                        Some(profile) => video::set_h264_profile(profile).await,
-                                        None => warn!(
-                                            "session {} negotiated no H.264 profile the encoder can produce",
-                                            session_id
-                                        ),
-                                    }
-                                }
-                                if let Some(track) = video_track.clone() {
-                                    video::attach_webrtc_sink(track).await;
-                                    video::set_encoding_active(true).await;
-                                    info!("Video track attached to WebRTC session {}", session_id);
-                                }
-                                if let Some(track) = audio_track.clone() {
-                                    video::attach_audio_sink(track).await;
-                                    info!("Audio track attached to WebRTC session {}", session_id);
-                                }
-                                set_current_session(Some(session_id)).await;
-                            }
-                        }
-                        RTCIceConnectionState::Failed | RTCIceConnectionState::Closed => {
-                            info!(
-                                "ICE Connection State is {:?} for session {}, tearing down",
-                                connection_state, session_id
-                            );
-                            let current = get_current_session().await;
-                            if current == Some(session_id.clone()) {
-                                set_current_session(None).await;
-                            }
-
-                            remove_rpc_channel(&session_id).await;
-
-                            let mut connected = is_connected.write().await;
-                            if *connected {
-                                *connected = false;
-                                drop(connected);
-                                decrement_session_counter().await;
-                                if get_current_session().await.is_none() {
-                                    video::detach_webrtc_sink().await;
-                                }
-                                if get_current_session().await.is_none()
-                                    && let Some(st) = storage_mod::get_virtual_media_state()
-                                        && matches!(st.source, storage_mod::VirtualMediaSource::WebRTC) {
-                                            tokio::spawn(async move {
-                                                if let Err(e) = storage_mod::unmount_image().await {
-                                                    warn!("failed to auto unmount WebRTC media: {}", e);
-                                                } else {
-                                                    info!("auto unmounted WebRTC virtual media on last session close");
-                                                }
-                                            });
-                                        }
-                            }
-
-                            app_state.remove_session(&session_id).await;
-                            info!("Removed session {} on ICE {:?}", session_id, connection_state);
-                        }
-                        _ => {}
-                    }
-                })
-            },
-        ));
-
-        // A keyframe requested at ICE "connected" is encoded before DTLS has
-        // finished, so it never reaches the browser and the viewer waits for
-        // the next periodic IDR. Ask again once the whole connection is up.
-        let session_id_clone = session.id.clone();
-        peer_connection.on_peer_connection_state_change(Box::new(
-            move |state: RTCPeerConnectionState| {
-                let session_id = session_id_clone.clone();
-                Box::pin(async move {
-                    if state != RTCPeerConnectionState::Connected {
-                        return;
-                    }
-                    video::force_new_viewer_keyframe().await;
-                    info!("forced keyframe for new session {}", session_id);
-                })
-            },
-        ));
-
-        let session_id_clone = session.id.clone();
-        let app_state_clone = config.app_state.clone();
-        peer_connection.on_ice_candidate(Box::new(move |candidate: Option<RTCIceCandidate>| {
+    peer_connection.on_ice_connection_state_change(Box::new(
+        move |connection_state: RTCIceConnectionState| {
             let session_id = session_id_clone.clone();
-            let app_state = app_state_clone.clone();
-            Box::pin(async move {
-                if let Some(candidate) = candidate {
-                    info!("WebRTC peerConnection has a new ICE candidate: {:?}", candidate);
-
-                    if let Err(e) = send_ice_candidate(&session_id, &candidate, app_state).await {
-                        warn!("Failed to send ICE candidate: {}", e);
-                    }
-                } else {
-                    debug!("ICE gathering completed (candidate is None)");
-                }
-            })
-        }));
-
-        // This handler (and the data channel callbacks it installs) lives inside
-        // the peer connection, so it must not hold the connection itself: that
-        // cycle kept every closed session's ICE agent alive, and with it one
-        // UDP socket per local address, because UDP conns only close on drop.
-        let mut session_clone = session.clone();
-        session_clone.peer_connection = None;
-        peer_connection.on_data_channel(Box::new(move |data_channel: Arc<RTCDataChannel>| {
-            let session = session_clone.clone();
-            let label = data_channel.label().to_string();
-            let channel_id = data_channel.id();
+            let video_track = video_track_clone.as_ref().and_then(std::sync::Weak::upgrade);
+            let audio_track = audio_track_clone.as_ref().and_then(std::sync::Weak::upgrade);
+            let video_sender = video_sender_for_profile.upgrade();
+            let is_connected = is_connected_clone.clone();
+            let app_state = app_state_for_close.clone();
             Box::pin(async move {
                 info!(
-                    "New DataChannel label='{}' id={} for session: {}",
-                    label, channel_id, session.id
+                    "ICE Connection State has changed: {} for session: {}",
+                    connection_state, session_id
                 );
 
-                let manager = DataChannelManager::new();
-                manager.route_data_channel(data_channel, &session).await;
+                match connection_state {
+                    RTCIceConnectionState::Connected => {
+                        let mut connected = is_connected.write().await;
+                        if !*connected {
+                            *connected = true;
+                            drop(connected);
+                            info!("WebRTC session {} connected", session_id);
+                            increment_session_counter().await;
+                            if let Some(sender) = &video_sender {
+                                let codecs = sender.get_parameters().await.rtp_parameters.codecs;
+                                match negotiated_h264_profile(&codecs) {
+                                    Some(profile) => video::set_h264_profile(profile).await,
+                                    None => warn!(
+                                        "session {} negotiated no H.264 profile the encoder can produce",
+                                        session_id
+                                    ),
+                                }
+                            }
+                            if let Some(track) = video_track.clone() {
+                                video::attach_webrtc_sink(track).await;
+                                video::set_encoding_active(true).await;
+                                info!("Video track attached to WebRTC session {}", session_id);
+                            }
+                            if let Some(track) = audio_track.clone() {
+                                video::attach_audio_sink(track).await;
+                                info!("Audio track attached to WebRTC session {}", session_id);
+                            }
+                            set_current_session(Some(session_id)).await;
+                        }
+                    }
+                    RTCIceConnectionState::Failed | RTCIceConnectionState::Closed => {
+                        info!(
+                            "ICE Connection State is {:?} for session {}, tearing down",
+                            connection_state, session_id
+                        );
+                        let current = get_current_session().await;
+                        if current == Some(session_id.clone()) {
+                            set_current_session(None).await;
+                        }
+
+                        remove_rpc_channel(&session_id).await;
+
+                        let mut connected = is_connected.write().await;
+                        if *connected {
+                            *connected = false;
+                            drop(connected);
+                            decrement_session_counter().await;
+                            if get_current_session().await.is_none() {
+                                video::detach_webrtc_sink().await;
+                            }
+                            if get_current_session().await.is_none()
+                                && let Some(st) = storage_mod::get_virtual_media_state()
+                                    && matches!(st.source, storage_mod::VirtualMediaSource::WebRTC) {
+                                        tokio::spawn(async move {
+                                            if let Err(e) = storage_mod::unmount_image().await {
+                                                warn!("failed to auto unmount WebRTC media: {}", e);
+                                            } else {
+                                                info!("auto unmounted WebRTC virtual media on last session close");
+                                            }
+                                        });
+                                    }
+                        }
+
+                        app_state.remove_session(&session_id).await;
+                        info!("Removed session {} on ICE {:?}", session_id, connection_state);
+                    }
+                    _ => {}
+                }
             })
-        }));
+        },
+    ));
 
-        Ok(session)
-    }
-}
+    // A keyframe requested at ICE "connected" is encoded before DTLS has
+    // finished, so it never reaches the browser and the viewer waits for
+    // the next periodic IDR. Ask again once the whole connection is up.
+    let session_id_clone = session.id.clone();
+    peer_connection.on_peer_connection_state_change(Box::new(
+        move |state: RTCPeerConnectionState| {
+            let session_id = session_id_clone.clone();
+            Box::pin(async move {
+                if state != RTCPeerConnectionState::Connected {
+                    return;
+                }
+                video::force_new_viewer_keyframe().await;
+                info!("forced keyframe for new session {}", session_id);
+            })
+        },
+    ));
 
-static WEBRTC_API: tokio::sync::OnceCell<WebRTCApi> = tokio::sync::OnceCell::const_new();
+    let session_id_clone = session.id.clone();
+    let app_state_clone = config.app_state.clone();
+    peer_connection.on_ice_candidate(Box::new(move |candidate: Option<RTCIceCandidate>| {
+        let session_id = session_id_clone.clone();
+        let app_state = app_state_clone.clone();
+        Box::pin(async move {
+            if let Some(candidate) = candidate {
+                info!("WebRTC peerConnection has a new ICE candidate: {:?}", candidate);
 
-pub async fn init_webrtc_api() -> anyhow::Result<()> {
-    let api = WebRTCApi::new()?;
-    WEBRTC_API.set(api).map_err(|_| anyhow::anyhow!("WebRTC API already initialized"))?;
-    info!("WebRTC API initialized");
-    Ok(())
-}
+                if let Err(e) = send_ice_candidate(&session_id, &candidate, app_state).await {
+                    warn!("Failed to send ICE candidate: {}", e);
+                }
+            } else {
+                debug!("ICE gathering completed (candidate is None)");
+            }
+        })
+    }));
 
-pub async fn get_webrtc_api() -> &'static WebRTCApi {
-    WEBRTC_API.get().expect("WebRTC API not initialized")
+    // This handler (and the data channel callbacks it installs) lives inside
+    // the peer connection, so it must not hold the connection itself: that
+    // cycle kept every closed session's ICE agent alive, and with it one
+    // UDP socket per local address, because UDP conns only close on drop.
+    let mut session_clone = session.clone();
+    session_clone.peer_connection = None;
+    peer_connection.on_data_channel(Box::new(move |data_channel: Arc<RTCDataChannel>| {
+        let session = session_clone.clone();
+        let label = data_channel.label().to_string();
+        let channel_id = data_channel.id();
+        Box::pin(async move {
+            info!(
+                "New DataChannel label='{}' id={} for session: {}",
+                label, channel_id, session.id
+            );
+
+            route_data_channel(data_channel, &session).await;
+        })
+    }));
+
+    Ok(session)
 }
 
 static SESSION_COUNTER: RwLock<i32> = RwLock::const_new(0);
