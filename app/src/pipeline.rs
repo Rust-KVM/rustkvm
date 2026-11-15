@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
+use futures_util::StreamExt;
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
@@ -133,6 +134,8 @@ pub struct VideoPipeline {
     encoder: gst::Element,
     valve: gst::Element,
     running: Arc<AtomicBool>,
+    /// The task reading the pipeline's bus, ended by `stop`.
+    bus_watcher: parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>,
     raw_frame_waiters: Arc<RawFrameWaiters>,
     raw_frame_requested: Arc<AtomicBool>,
     /// When the oldest unanswered keyframe request was made; the encoder
@@ -383,6 +386,7 @@ impl VideoPipeline {
             encoder: encoder_for_state,
             valve,
             running,
+            bus_watcher: parking_lot::Mutex::new(None),
             raw_frame_waiters,
             raw_frame_requested,
             keyframe_requested_at,
@@ -433,6 +437,9 @@ impl VideoPipeline {
 
     pub fn stop(&self) -> Result<()> {
         self.running.store(false, Ordering::SeqCst);
+        if let Some(watcher) = self.bus_watcher.lock().take() {
+            watcher.abort();
+        }
 
         self.pipeline
             .set_state(gst::State::Null)
@@ -486,82 +493,71 @@ impl VideoPipeline {
         F: FnMut(VideoInputState) + Send + 'static,
     {
         let bus = self.pipeline.bus().context("Video pipeline has no bus")?;
-        let running = self.running.clone();
-        let encoder = self.encoder.clone();
         let callback = Arc::new(parking_lot::Mutex::new(callback));
 
-        let encoder_poll = encoder;
-        let callback_poll = callback.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-            tokio::task::spawn_blocking(move || {
-                if let Some(pad) = encoder_poll.static_pad("sink")
-                    && let Some(caps) = pad.current_caps()
-                    && let Ok(info) = gst_video::VideoInfo::from_caps(&caps)
-                {
-                    let state = VideoInputState {
-                        ready: true,
-                        error: None,
-                        width: info.width(),
-                        height: info.height(),
-                        frame_per_second: {
-                            let fps = info.fps();
-                            fps.numer() as f64 / fps.denom() as f64
-                        },
-                    };
-                    debug!(
-                        "Video state extracted (active poll): {}x{} @ {:.1}fps",
-                        state.width, state.height, state.frame_per_second
-                    );
-                    let mut cb = callback_poll.lock();
-                    cb(state);
-                }
-            })
-            .await
-            .ok();
+        // Report the format when the encoder input negotiates it, and again
+        // whenever the source changes it.
+        let sink = self.encoder.static_pad("sink").context("Video encoder has no sink pad")?;
+        let on_caps = callback.clone();
+        sink.connect_caps_notify(move |pad| {
+            let Some(caps) = pad.current_caps() else { return };
+            let Ok(info) = gst_video::VideoInfo::from_caps(&caps) else { return };
+            let fps = info.fps();
+            let state = VideoInputState {
+                ready: true,
+                error: None,
+                width: info.width(),
+                height: info.height(),
+                frame_per_second: fps.numer() as f64 / fps.denom().max(1) as f64,
+            };
+            debug!(
+                "Video format negotiated: {}x{} @ {:.1}fps",
+                state.width, state.height, state.frame_per_second
+            );
+            (on_caps.lock())(state);
         });
 
-        tokio::task::spawn_blocking(move || {
-            while running.load(Ordering::SeqCst) {
-                if let Some(msg) = bus.timed_pop(gst::ClockTime::from_mseconds(100)) {
-                    match msg.view() {
-                        gst::MessageView::Error(err) => {
-                            error!(
-                                "GStreamer error from {:?}: {} ({:?})",
-                                err.src().map(|s| s.path_string()),
-                                err.error(),
-                                err.debug()
-                            );
-                            let mut cb = callback.lock();
-                            cb(VideoInputState {
-                                ready: false,
-                                error: Some(format!("{}", err.error())),
-                                width: 0,
-                                height: 0,
-                                frame_per_second: 0.0,
-                            });
-                            drop(cb);
-                            running.store(false, Ordering::SeqCst);
-                            break;
-                        }
-                        gst::MessageView::Warning(w) => {
-                            warn!(
-                                "GStreamer warning from {:?}: {}",
-                                w.src().map(|s| s.path_string()),
-                                w.error()
-                            );
-                        }
-                        gst::MessageView::Eos(_) => {
-                            info!("GStreamer pipeline EOS");
-                            running.store(false, Ordering::SeqCst);
-                            break;
-                        }
-                        _ => {}
+        let running = self.running.clone();
+        let mut messages = bus.stream();
+        let watcher = tokio::spawn(async move {
+            while let Some(msg) = messages.next().await {
+                match msg.view() {
+                    gst::MessageView::Error(err) => {
+                        error!(
+                            "GStreamer error from {:?}: {} ({:?})",
+                            err.src().map(|s| s.path_string()),
+                            err.error(),
+                            err.debug()
+                        );
+                        (callback.lock())(VideoInputState {
+                            ready: false,
+                            error: Some(err.error().to_string()),
+                            width: 0,
+                            height: 0,
+                            frame_per_second: 0.0,
+                        });
+                        running.store(false, Ordering::SeqCst);
+                        break;
                     }
+                    gst::MessageView::Warning(w) => {
+                        warn!(
+                            "GStreamer warning from {:?}: {}",
+                            w.src().map(|s| s.path_string()),
+                            w.error()
+                        );
+                    }
+                    gst::MessageView::Eos(_) => {
+                        info!("GStreamer pipeline EOS");
+                        running.store(false, Ordering::SeqCst);
+                        break;
+                    }
+                    _ => {}
                 }
             }
         });
+        if let Some(previous) = self.bus_watcher.lock().replace(watcher) {
+            previous.abort();
+        }
         Ok(())
     }
 }
@@ -585,6 +581,8 @@ pub struct AudioPipeline {
     /// state change, so a recovery in flight cannot restart a pipeline that
     /// was deactivated meanwhile.
     active: Arc<parking_lot::Mutex<bool>>,
+    /// The task reading the pipeline's bus, ended by `stop`.
+    bus_watcher: parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl AudioPipeline {
@@ -664,7 +662,13 @@ impl AudioPipeline {
 
         let running = Arc::new(AtomicBool::new(false));
 
-        Ok(Self { pipeline, appsink, running, active: Arc::default() })
+        Ok(Self {
+            pipeline,
+            appsink,
+            running,
+            active: Arc::default(),
+            bus_watcher: parking_lot::Mutex::new(None),
+        })
     }
 
     /// Starts watching the pipeline's bus. Capture itself starts with
@@ -675,14 +679,11 @@ impl AudioPipeline {
         }
         let bus = self.pipeline.bus().context("Audio pipeline has no bus")?;
         let recovery = self.recovery();
-        let running = self.running.clone();
 
-        tokio::task::spawn_blocking(move || {
+        let mut messages = bus.stream();
+        let watcher = tokio::spawn(async move {
             let mut overruns = OverrunWindow::default();
-            while running.load(Ordering::SeqCst) {
-                let Some(msg) = bus.timed_pop(gst::ClockTime::from_mseconds(100)) else {
-                    continue;
-                };
+            while let Some(msg) = messages.next().await {
                 match msg.view() {
                     gst::MessageView::Error(err) => {
                         error!(
@@ -716,6 +717,7 @@ impl AudioPipeline {
                 }
             }
         });
+        *self.bus_watcher.lock() = Some(watcher);
         Ok(())
     }
 
@@ -756,6 +758,9 @@ impl AudioPipeline {
     pub fn stop(&self) -> Result<()> {
         self.running.store(false, Ordering::SeqCst);
         *self.active.lock() = false;
+        if let Some(watcher) = self.bus_watcher.lock().take() {
+            watcher.abort();
+        }
 
         self.pipeline
             .set_state(gst::State::Null)
