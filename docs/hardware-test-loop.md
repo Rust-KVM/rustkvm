@@ -24,12 +24,12 @@ Device: ssh root@192.168.1.6        RK3588, dropbear
    ssh foxx@192.168.1.173 'wsl.exe -e bash -lc "cd /home/foxx/obj/RK3588/jetkvm/rustkvm && git status -sb | head -1 && cargo +stage2 build -Z build-std=std,panic_abort --target aarch64-unknown-linux-gnu -p rustkvm --bin rustkvm_app --release"'
    ```
    A cold release build takes several minutes.
-2. **Stop the app with SIGTERM** (never `-9`, see below):
+2. **Stop the app** through the init script, which stops the supervisor, sends SIGTERM and waits for the clean exit (never `-9`, see below; the device's busybox has no `pkill`):
    ```bash
-   ssh root@192.168.1.6 'pkill -TERM -x rustkvm_app'
+   ssh root@192.168.1.6 '/etc/init.d/S99rustkvm stop'
    ```
 3. **Copy** `target/aarch64-unknown-linux-gnu/release/rustkvm_app` from WSL to `/userdata/rustkvm/bin/rustkvm_app` on the device (scp from WSL, or via the Mac).
-4. **Restart**: `ssh root@192.168.1.6 '/etc/init.d/S99rustkvm restart'`
+4. **Start**: `ssh root@192.168.1.6 '/etc/init.d/S99rustkvm start'`
 5. **Verify**: tail `/userdata/rustkvm/log/rustkvm_app.log`, and load the web UI at https://192.168.1.6/ (http also serves).
 
 `dev_deploy.sh` does steps 1 to 4 from a host that can build and reach the device directly; this loop spells them out because the build host sits behind the jump host.
