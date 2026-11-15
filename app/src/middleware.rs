@@ -31,20 +31,12 @@ pub async fn auth_middleware(
     ctrl: &mut FlowCtrl,
 ) {
     let config_manager = get_config_manager();
-    let config = config_manager.get().await;
 
-    if config.local_auth_mode == "noPassword" {
-        debug!("Authentication bypassed: noPassword mode");
+    // Also true in noPassword mode, whatever the cookie.
+    let cookie = req.cookie("authToken").map(|cookie| cookie.value()).unwrap_or_default();
+    if config_manager.validate_auth_token(cookie).await {
+        debug!("Authentication successful: valid auth token or noPassword mode");
         return;
-    }
-
-    if let Some(auth_cookie) = req.cookie("authToken") {
-        let auth_token = auth_cookie.value();
-
-        if config_manager.validate_auth_token(auth_token).await {
-            debug!("Authentication successful: valid auth token");
-            return;
-        }
     }
 
     if let Some(auth_header) = req.headers().get("Authorization")
