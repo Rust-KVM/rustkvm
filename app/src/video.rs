@@ -79,6 +79,10 @@ type VideoFrame = (bytes::Bytes, u64);
 /// about 25 ms, during which one or two 60 fps frames arrive; the queue absorbs
 /// that without growing into visible latency (at most 4 frames, 67 ms).
 const VIDEO_QUEUE_FRAMES: usize = 4;
+
+/// Shortest time between two keyframes requested to recover from dropped
+/// frames.
+const KEYFRAME_RECOVERY_INTERVAL: Duration = Duration::from_secs(1);
 type AudioFrame = bytes::Bytes;
 
 static VIDEO_FRAME_TX: tokio::sync::OnceCell<mpsc::Sender<VideoFrame>> =
@@ -230,6 +234,7 @@ async fn start_pipeline(
     let manager = PipelineManager::new(video_config, audio_config)?;
     let runtime = tokio::runtime::Handle::current();
     let mut gate = FrameGate::default();
+    let mut next_recovery: Option<Instant> = None;
     manager.set_video_callback(move |data, pts_us| {
         use crate::observability::metrics::VIDEO_FRAMES_DROPPED_TOTAL;
         let Some(tx) = VIDEO_FRAME_TX.get() else { return };
@@ -241,8 +246,20 @@ async fn start_pipeline(
         if tx.try_send((data, pts_us)).is_err() {
             VIDEO_FRAMES_DROPPED_TOTAL.inc();
             if gate.frame_dropped() && is_h264 {
-                warn!("WebRTC writer is behind, dropped an encoded frame; requesting a keyframe");
-                runtime.spawn(force_new_viewer_keyframe());
+                // A keyframe is the largest frame there is: asking for one on
+                // every drop would keep a slow link overloaded for good.
+                let wait = next_recovery
+                    .map(|at| at.saturating_duration_since(Instant::now()))
+                    .unwrap_or_default();
+                next_recovery = Some(Instant::now() + wait + KEYFRAME_RECOVERY_INTERVAL);
+                warn!(
+                    wait_ms = wait.as_millis() as u64,
+                    "WebRTC writer is behind, dropped an encoded frame; requesting a keyframe"
+                );
+                runtime.spawn(async move {
+                    tokio::time::sleep(wait).await;
+                    force_new_viewer_keyframe().await;
+                });
             }
         }
     });
