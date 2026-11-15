@@ -44,7 +44,7 @@ pub fn get_device_id() -> String {
                 serial
             }
             Err(e) => {
-                warn!("Unknown serial number, the program likely not running on RV1106: {}", e);
+                warn!("No CPU serial number, using a placeholder device id: {}", e);
                 "unknown_device_id".to_string()
             }
         })

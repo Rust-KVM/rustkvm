@@ -291,7 +291,7 @@ async fn start_pipeline(
         let state_tx_clone = state_tx.clone();
         manager.set_state_callback(move |state| {
             let _ = state_tx_clone.send(state);
-        });
+        })?;
     }
 
     manager.start()?;

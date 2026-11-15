@@ -19,7 +19,8 @@ async fn led_reader_runs_state_callback_inside_the_runtime() {
         fifo.to_string_lossy().into_owned(),
         dir.path().join("hidg1").to_string_lossy().into_owned(),
         dir.path().join("hidg2").to_string_lossy().into_owned(),
-    );
+    )
+    .unwrap();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     hid.set_on_keyboard_state_change(move |state| {
         let tx = tx.clone();

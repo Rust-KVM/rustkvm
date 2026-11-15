@@ -37,17 +37,19 @@ pub struct UsbManager {
 }
 
 impl UsbManager {
-    pub fn new(udc_name: String) -> Self {
+    pub fn new(udc_name: String) -> anyhow::Result<Self> {
         let udc_state_path = format!("/sys/class/udc/{}/state", udc_name);
-        Self {
+        let hid =
+            Hid::new("/dev/hidg0".to_string(), "/dev/hidg1".to_string(), "/dev/hidg2".to_string())?;
+        Ok(Self {
             udc_name,
             udc_state_path,
             state: Arc::new(RwLock::new(UsbState::default())),
             poll_cancel: CancellationToken::new(),
             poll_handle: RwLock::new(None),
-            hid: Arc::new(Hid::default()),
+            hid: Arc::new(hid),
             gadget: None,
-        }
+        })
     }
 
     pub fn init_gadget(
@@ -242,7 +244,7 @@ pub fn init_usb() -> Option<&'static Arc<RwLock<UsbManager>>> {
                     "unknown".to_string()
                 });
 
-            let mut mgr = UsbManager::new(udc_name);
+            let mut mgr = UsbManager::new(udc_name)?;
 
             let devices = DeviceConfig::default();
             let config = GadgetConfig { serial_number: usb_serial(), ..Default::default() };
