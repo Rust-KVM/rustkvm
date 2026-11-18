@@ -46,6 +46,10 @@ ignore = [
     # pin-utils unmaintained (repo archived 2026-10-01), not a vulnerability. Only
     # pulled in by nix 0.26 under webrtc-util 0.17.2 (latest); no safe upgrade.
     { id = "RUSTSEC-2026-0441", reason = "unmaintained only; via webrtc-util's nix 0.26, no upgrade" },
+    # chrono unmaintained (2026-11), not a vulnerability; no release is unaffected.
+    # salvo-oapi 1.0.1 and id_token_verifier (via duration-str) depend on it, so
+    # dropping it from our own crates would not remove it from the tree.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained only; also required by salvo-oapi and duration-str" },
 ]
 
 [licenses]
