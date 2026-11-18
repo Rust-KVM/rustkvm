@@ -99,18 +99,20 @@ impl ConfigManager {
         !config.is_setup_required()
     }
 
+    /// Reads the configuration in place. Prefer this to [`Self::get`] on
+    /// request paths: `get` clones every string in the configuration.
+    pub async fn read<R>(&self, f: impl FnOnce(&Config) -> R) -> R {
+        f(&*self.config.read().await)
+    }
+
     pub async fn validate_auth_token(&self, token: &str) -> bool {
-        let config = self.get().await;
-
-        if config.local_auth_mode == "noPassword" {
-            return true;
-        }
-
-        if let Some(ref local_token) = config.local_auth_token {
-            !token.is_empty() && token == local_token
-        } else {
-            false
-        }
+        self.read(|config| {
+            config.local_auth_mode == "noPassword"
+                || config.local_auth_token.as_deref().is_some_and(|stored| {
+                    !token.is_empty() && api_token::secrets_match(token, stored)
+                })
+        })
+        .await
     }
 
     pub async fn create_api_token(&self) -> Result<String> {

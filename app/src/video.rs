@@ -34,10 +34,10 @@ static LAST_VIDEO_STATE: RwLock<VideoInputState> = RwLock::const_new(VideoInputS
     frame_per_second: 0.0,
 });
 
-static VIDEO_SINK: tokio::sync::RwLock<Option<Arc<TrackLocalStaticSample>>> =
-    tokio::sync::RwLock::const_new(None);
-static AUDIO_SINK: tokio::sync::RwLock<Option<Arc<TrackLocalStaticSample>>> =
-    tokio::sync::RwLock::const_new(None);
+static VIDEO_SINK: parking_lot::RwLock<Option<Arc<TrackLocalStaticSample>>> =
+    parking_lot::RwLock::new(None);
+static AUDIO_SINK: parking_lot::RwLock<Option<Arc<TrackLocalStaticSample>>> =
+    parking_lot::RwLock::new(None);
 
 static AUDIO_FRAME_TX: tokio::sync::OnceCell<mpsc::Sender<bytes::Bytes>> =
     tokio::sync::OnceCell::const_new();
@@ -52,7 +52,7 @@ pub async fn set_audio_enabled(enabled: bool) {
 /// Runs audio capture exactly while it is enabled and a viewer has an audio
 /// track attached.
 async fn sync_audio_active() {
-    let wanted = is_audio_enabled() && AUDIO_SINK.read().await.is_some();
+    let wanted = is_audio_enabled() && AUDIO_SINK.read().is_some();
     if let Some(manager) = PIPELINE_MANAGER.lock().await.as_ref() {
         manager.set_audio_active(wanted);
     }
@@ -118,7 +118,7 @@ fn video_writer_loop(mut rx: mpsc::Receiver<VideoFrame>) {
             };
             last_pts = Some(pts);
 
-            let Some(track) = VIDEO_SINK.read().await.clone() else { continue };
+            let Some(track) = VIDEO_SINK.read().clone() else { continue };
             let sample = Sample { data, duration: dur, ..Default::default() };
             let started = Instant::now();
             if let Err(e) = track.write_sample(&sample).await {
@@ -182,17 +182,17 @@ pub async fn set_h264_profile(profile: H264Profile) {
 /// Switches video output to a new session's track. The keyframe for the new
 /// viewer is requested once its connection is fully up (see webrtc.rs).
 pub async fn attach_webrtc_sink(track: Arc<TrackLocalStaticSample>) {
-    *VIDEO_SINK.write().await = Some(track);
+    *VIDEO_SINK.write() = Some(track);
 }
 
 pub async fn attach_audio_sink(track: Arc<TrackLocalStaticSample>) {
-    *AUDIO_SINK.write().await = Some(track);
+    *AUDIO_SINK.write() = Some(track);
     sync_audio_active().await;
 }
 
 pub async fn detach_webrtc_sink() {
-    *VIDEO_SINK.write().await = None;
-    *AUDIO_SINK.write().await = None;
+    *VIDEO_SINK.write() = None;
+    *AUDIO_SINK.write() = None;
     set_encoding_active(false).await;
     sync_audio_active().await;
 }
@@ -212,7 +212,7 @@ async fn audio_frame_writer(mut rx: mpsc::Receiver<AudioFrame>) {
         if !is_audio_enabled() {
             continue;
         }
-        let Some(track) = AUDIO_SINK.read().await.clone() else { continue };
+        let Some(track) = AUDIO_SINK.read().clone() else { continue };
         let sample = Sample { data, duration: AUDIO_FRAME_DURATION, ..Default::default() };
         if let Err(e) = track.write_sample(&sample).await {
             warn!("error writing audio sample: {}", e);
@@ -308,8 +308,8 @@ async fn start_pipeline(
 
     manager.start()?;
     // A restarted pipeline comes up paused; resume it if a viewer is attached.
-    manager.set_encoding_active(VIDEO_SINK.read().await.is_some());
-    manager.set_audio_active(is_audio_enabled() && AUDIO_SINK.read().await.is_some());
+    manager.set_encoding_active(VIDEO_SINK.read().is_some());
+    manager.set_audio_active(is_audio_enabled() && AUDIO_SINK.read().is_some());
 
     *PIPELINE_MANAGER.lock().await = Some(manager);
     Ok(())
@@ -570,7 +570,7 @@ pub async fn shutdown_video_pipeline() {
     SUPERVISOR_STOPPED.store(true, Ordering::SeqCst);
     stop_pipeline().await;
 
-    *VIDEO_SINK.write().await = None;
+    *VIDEO_SINK.write() = None;
 
     info!("Video pipeline shutdown complete");
 }
@@ -655,7 +655,7 @@ pub async fn get_video_stats() -> anyhow::Result<VideoStats> {
         width: state.width,
         height: state.height,
         fps: state.frame_per_second,
-        has_sink: VIDEO_SINK.read().await.is_some(),
+        has_sink: VIDEO_SINK.read().is_some(),
         pipeline_started: VIDEO_PIPELINE_STARTED.get().is_some(),
     };
     Ok(stats)
