@@ -98,6 +98,12 @@
   background: var(--bg-secondary); animation: fade .2s var(--ease); overflow-y: auto; }
 .gate .card .btn.block { margin-top: var(--space-2); }
 
+/* No-signal notice: a card centered on the stage. Only the card takes the
+   pointer, so the video underneath keeps mouse input for waking the host. */
+.stage-notice { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center;
+  padding: var(--space-4); pointer-events: none; }
+.stage-notice .card { pointer-events: auto; }
+
 /* No-password warning over the stage. */
 .stage-callout { position: absolute; top: var(--space-3); left: var(--space-3); z-index: 15;
   max-width: min(480px, calc(100% - 24px)); background: var(--bg-primary); box-shadow: var(--shadow-popover); }

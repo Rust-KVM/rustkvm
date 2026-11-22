@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 
+use rkvm_proto::jsonrpc::{EVENT_VIDEO_INPUT_STATE, VIDEO_ERROR_NO_SIGNAL as NO_SIGNAL};
 use tokio::sync::{RwLock, mpsc};
 use tokio::time::{Duration, Instant, interval};
 use tracing::{debug, info, warn};
@@ -83,6 +84,12 @@ const RESTART_BACKOFF_BASE: Duration = Duration::from_secs(5);
 const RESTART_BACKOFF_MAX: Duration = Duration::from_secs(300);
 
 static VIDEO_STATE_TX: OnceLock<mpsc::UnboundedSender<VideoInputState>> = OnceLock::new();
+
+fn send_video_state(state: VideoInputState) {
+    if let Some(tx) = VIDEO_STATE_TX.get() {
+        let _ = tx.send(state);
+    }
+}
 
 type VideoFrame = (bytes::Bytes, u64);
 
@@ -454,6 +461,42 @@ impl LiveCheck {
         }
     }
 
+    /// Reports the lost signal. The pipeline's caps keep the last format, so
+    /// without this the state stays "ready" and viewers see a black picture
+    /// with no hint that the source stopped sending. Checked every tick, as a
+    /// pipeline rebuilt without a signal reports its stale caps as ready again.
+    async fn signal_lost(&self) {
+        let current = get_video_state().await;
+        if current.error.as_deref() == Some(NO_SIGNAL) {
+            return;
+        }
+        warn!(
+            width = current.width,
+            height = current.height,
+            "HDMI receiver has no signal; the source is off, asleep or sending elsewhere"
+        );
+        send_video_state(VideoInputState {
+            ready: false,
+            error: Some(NO_SIGNAL.to_owned()),
+            width: 0,
+            height: 0,
+            frame_per_second: 0.0,
+        });
+    }
+
+    /// Reports the capture format again once frames flow after a lost signal.
+    /// The encoder's caps only notify on a change, so a signal that returns
+    /// in the same mode would otherwise stay reported as lost.
+    async fn signal_back(&self) {
+        if get_video_state().await.error.as_deref() != Some(NO_SIGNAL) {
+            return;
+        }
+        let state = PIPELINE_MANAGER.lock().await.as_ref().and_then(PipelineManager::capture_state);
+        let Some(state) = state else { return };
+        info!(width = state.width, height = state.height, "HDMI signal is back");
+        send_video_state(state);
+    }
+
     /// Returns why the running pipeline must be rebuilt, if it must.
     async fn check(&mut self, device: &str) -> Option<String> {
         let (frames, caps) = {
@@ -478,6 +521,7 @@ impl LiveCheck {
             self.last_frames = frames;
             self.last_progress = Instant::now();
             self.stall_restarts = 0;
+            self.signal_back().await;
             return None;
         }
         let signal = match probe {
@@ -487,6 +531,7 @@ impl LiveCheck {
         // Without a signal there is nothing to capture; wait for it to return.
         if signal.is_some_and(|s| s.timings.is_none()) {
             self.last_progress = Instant::now();
+            self.signal_lost().await;
             return None;
         }
         let limit = STALL_LIMIT.max(restart_backoff(self.stall_restarts));
@@ -685,7 +730,7 @@ pub async fn handle_video_state_message(video_state: VideoInputState) {
 pub async fn trigger_video_state_update_rpc() {
     let video_state = LAST_VIDEO_STATE.read().await.clone();
     debug!("Triggering video state update: {:?}", video_state);
-    crate::api::events::emit("videoInputState", video_state).await;
+    crate::api::events::emit(EVENT_VIDEO_INPUT_STATE, video_state).await;
 }
 
 pub async fn write_ctrl_action(action: &str) -> anyhow::Result<()> {
