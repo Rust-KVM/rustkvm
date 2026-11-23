@@ -20,6 +20,14 @@ pub struct JsonRpcResponse {
     pub id: Option<Value>,
 }
 
+/// Event the device sends whenever the video input changes. Its params are
+/// `{ ready, error?, width, height, fps }`.
+pub const EVENT_VIDEO_INPUT_STATE: &str = "videoInputState";
+
+/// The `error` of a video input state while the HDMI receiver detects no
+/// signal: the host is off, asleep or sending its picture elsewhere.
+pub const VIDEO_ERROR_NO_SIGNAL: &str = "no signal";
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct JsonRpcEvent {
     pub jsonrpc: String,

@@ -989,6 +989,20 @@ impl PipelineManager {
         self.video.capture_src.static_pad("src")?.current_caps().map(|c| c.to_string())
     }
 
+    /// The format the capture source negotiated, as a ready video state.
+    pub fn capture_state(&self) -> Option<VideoInputState> {
+        let caps = self.video.capture_src.static_pad("src")?.current_caps()?;
+        let info = gst_video::VideoInfo::from_caps(&caps).ok()?;
+        let fps = info.fps();
+        Some(VideoInputState {
+            ready: true,
+            error: None,
+            width: info.width(),
+            height: info.height(),
+            frame_per_second: fps.numer() as f64 / fps.denom().max(1) as f64,
+        })
+    }
+
     /// Requests an IDR from the encoder.
     ///
     /// The request carries the current running time. An "as soon as possible"
