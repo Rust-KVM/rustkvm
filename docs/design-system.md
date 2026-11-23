@@ -139,6 +139,10 @@ until the user picks one. `src/theme.rs` flips it from the sidebar.
   content box (`hid::content_rect`).
 - **Gates** (setup, sign-in, connect) are a centered card on
   `--bg-secondary` over the stage, so the video element stays mounted.
+- **No-signal notice** (`.stage-notice`): while the device reports
+  `no signal`, a card centered on the near-black stage says the host sends no
+  picture and offers 唤醒电脑 (`wakeHost`). Only the card takes the pointer, so
+  mouse input over the rest of the stage still reaches the host.
 - **Focus mode** hides sidebar and titlebar. A small handle at the top center
   peeks the titlebar back in as a floating bar; it hides 600ms after the
   pointer leaves. When the sidebar is hidden, `.app.focus` switches the grid to

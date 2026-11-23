@@ -98,7 +98,7 @@ lib.rs                   # module roots (see below)
 │   ├── registry.rs      # RpcRegistry; transport-agnostic `JsonRpcProcessor::dispatch`; per-call counter + latency histogram
 │   ├── registry_builder.rs
 │   ├── handlers/{hid,media,network,system,usb}.rs
-│   ├── events.rs        # broadcast events: usbState, keyboardLedState, failsafeMode, willReboot, networkState
+│   ├── events.rs        # broadcast events: usbState, keyboardLedState, failsafeMode, willReboot, networkState (videoInputState comes from video.rs)
 │   └── types.rs
 ├── web/                 # Salvo router (split by concern)
 │   ├── routes.rs        # protected / public / developer / static

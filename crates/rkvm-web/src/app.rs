@@ -5,6 +5,7 @@ use gloo_timers::callback::Timeout;
 use leptos::html;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use rkvm_proto::jsonrpc::{EVENT_VIDEO_INPUT_STATE, VIDEO_ERROR_NO_SIGNAL};
 use serde_json::{Value, json};
 use web_sys::HtmlVideoElement;
 
@@ -16,6 +17,10 @@ use crate::ui::{Button, Callout, Field, Icon, IconButton, IconName, Variant};
 
 #[derive(Clone, Copy, Default, PartialEq)]
 struct VideoInfo {
+    /// The receiver has a signal and the capture format is known.
+    ready: bool,
+    /// The receiver detects no HDMI signal: the host sends no picture.
+    no_signal: bool,
     width: u32,
     height: u32,
     fps: f64,
@@ -133,7 +138,7 @@ pub fn App() -> impl IntoView {
                     client.on_event(move |method, params| {
                         let Some(params) = params else { return };
                         match method.as_str() {
-                            "videoState" => video_info.set(parse_video(&params)),
+                            EVENT_VIDEO_INPUT_STATE => video_info.set(parse_video(&params)),
                             "keyboardLedState" => leds.set(parse_leds(&params)),
                             _ => {}
                         }
@@ -233,6 +238,14 @@ pub fn App() -> impl IntoView {
             match client.call("setStreamQualityFactor", json!({ "factor": target })).await {
                 Ok(_) => quality.set(target),
                 Err(e) => error.set(Some(e.to_string())),
+            }
+        });
+    };
+    let wake_host = move |_| {
+        let Some(client) = rpc_store.get_value() else { return };
+        spawn_local(async move {
+            if let Err(e) = client.call("wakeHost", Value::Null).await {
+                error.set(Some(e.to_string()));
             }
         });
     };
@@ -358,7 +371,7 @@ pub fn App() -> impl IntoView {
     let chip = Signal::derive(move || {
         connected.get().then(|| {
             let v = video_info.get();
-            if v.width > 0 {
+            if v.ready && v.width > 0 {
                 format!("{}×{} · {:.0} fps", v.width, v.height, v.fps)
             } else {
                 i.t("无信号", "No signal").to_string()
@@ -516,6 +529,23 @@ pub fn App() -> impl IntoView {
                             }
                         }
                     ></video>
+
+                    <Show when=move || connected.get() && video_info.get().no_signal>
+                        <div class="stage-notice">
+                            <div class="card" role="status">
+                                <h1 class="card-title">{move || i.t("没有画面", "No picture")}</h1>
+                                <p class="card-sub">
+                                    {move || i.t(
+                                        "被控电脑没有通过 HDMI 输出画面：它可能已休眠、关机，或把画面输出到了别的显示器。键盘和鼠标仍然可用。",
+                                        "The controlled computer is not sending a picture over HDMI: it may be asleep, off, or showing its screen on another display. Keyboard and mouse still work.",
+                                    )}
+                                </p>
+                                <Button variant=Variant::Secondary block=true on:click=wake_host>
+                                    {move || i.t("唤醒电脑", "Wake computer")}
+                                </Button>
+                            </div>
+                        </div>
+                    </Show>
 
                     <Show when=move || connected.get() && no_password.get() && !nopw_dismissed.get()>
                         <Callout class="stage-callout">
@@ -741,6 +771,8 @@ pub fn App() -> impl IntoView {
 
 fn parse_video(p: &Value) -> VideoInfo {
     VideoInfo {
+        ready: p.get("ready").and_then(Value::as_bool).unwrap_or(false),
+        no_signal: p.get("error").and_then(Value::as_str) == Some(VIDEO_ERROR_NO_SIGNAL),
         width: p.get("width").and_then(Value::as_u64).unwrap_or(0) as u32,
         height: p.get("height").and_then(Value::as_u64).unwrap_or(0) as u32,
         fps: p.get("fps").and_then(Value::as_f64).unwrap_or(0.0),
