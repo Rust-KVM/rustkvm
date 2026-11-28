@@ -38,7 +38,7 @@ fn gpio_path(pin: u32, file: &str) -> String {
 }
 
 fn sysfs_write(path: &str, value: &str) -> Result<()> {
-    let fd = open(path, OFlags::WRONLY, Mode::empty())
+    let fd = open(path, OFlags::WRONLY | OFlags::CLOEXEC, Mode::empty())
         .with_context(|| format!("Failed to open {path} for writing"))?;
     write(&fd, value.as_bytes()).with_context(|| format!("Failed to write '{value}' to {path}"))?;
     debug!(target: "atx_power", %path, %value, "sysfs write");
@@ -46,7 +46,7 @@ fn sysfs_write(path: &str, value: &str) -> Result<()> {
 }
 
 fn sysfs_read_bool(path: &str) -> Result<bool> {
-    let fd = open(path, OFlags::RDONLY, Mode::empty())
+    let fd = open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty())
         .with_context(|| format!("Failed to open {path} for reading"))?;
     let mut buf = [0u8; 2];
     let n = read(&fd, &mut buf).with_context(|| format!("Failed to read {path}"))?;

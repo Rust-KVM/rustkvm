@@ -44,12 +44,14 @@ struct Shell {
 
 impl Shell {
     fn spawn(channel: Arc<RTCDataChannel>) -> Result<Self> {
-        let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).context("open PTY master")?;
+        let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC)
+            .context("open PTY master")?;
         grantpt(&master).context("grant PTY access")?;
         unlockpt(&master).context("unlock PTY")?;
         let slave_name = ptsname(&master, Vec::new()).context("get PTY slave name")?;
         let slave = std::fs::File::from(
-            open(slave_name.as_c_str(), OFlags::RDWR, Mode::empty()).context("open PTY slave")?,
+            open(slave_name.as_c_str(), OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())
+                .context("open PTY slave")?,
         );
 
         let child = Command::new("/bin/sh")

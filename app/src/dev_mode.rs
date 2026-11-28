@@ -47,7 +47,7 @@ pub fn set_dev_mode_state(enabled: bool) -> Result<()> {
                     .context("failed to create directory for devmode file")?;
                 let _fd = open(
                     DEV_MODE_FILE,
-                    OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC,
+                    OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::CLOEXEC,
                     Mode::from_bits(0o644).expect("invalid mode bits"),
                 )
                 .context("failed to create devmode file")?;
@@ -76,7 +76,7 @@ pub fn set_dev_mode_state(enabled: bool) -> Result<()> {
 pub fn get_ssh_key_state() -> Result<String> {
     match stat(SSH_KEY_FILE) {
         Ok(_) => {
-            let fd = open(SSH_KEY_FILE, OFlags::RDONLY, Mode::empty())
+            let fd = open(SSH_KEY_FILE, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty())
                 .context("error opening SSH key file")?;
             let mut content = Vec::new();
             let mut buffer = [0u8; 4096];
@@ -127,7 +127,7 @@ pub fn set_ssh_key_state(ssh_key: &str) -> Result<()> {
 
     let fd = open(
         SSH_KEY_FILE,
-        OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC,
+        OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::CLOEXEC,
         Mode::from_bits(0o600).expect("invalid mode bits"),
     )
     .context("failed to write SSH key")?;

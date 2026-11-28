@@ -9,7 +9,7 @@ use tracing::{debug, warn};
 static DEVICE_ID: OnceCell<String> = OnceCell::new();
 
 pub fn extract_serial_number() -> Result<String> {
-    let file = open("/proc/cpuinfo", OFlags::RDONLY, Mode::empty())
+    let file = open("/proc/cpuinfo", OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty())
         .context("Failed to open /proc/cpuinfo")?;
 
     let mut content = Vec::new();
@@ -52,7 +52,10 @@ pub fn get_device_id() -> String {
 }
 
 pub async fn run_watchdog(cancel_token: CancellationToken) -> Result<()> {
-    let file = match open("/dev/watchdog", OFlags::WRONLY, Mode::empty()) {
+    // CLOEXEC: /dev/watchdog opens only once. A child that inherited the
+    // descriptor (the web terminal shell) keeps it busy after the app exits,
+    // so the restarted app cannot feed it and the device reboots.
+    let file = match open("/dev/watchdog", OFlags::WRONLY | OFlags::CLOEXEC, Mode::empty()) {
         Ok(file) => file,
         Err(e) => {
             warn!("Unable to open /dev/watchdog, skipping watchdog reset: {}", e);
@@ -81,7 +84,7 @@ pub async fn run_watchdog(cancel_token: CancellationToken) -> Result<()> {
 }
 
 pub fn disarm_watchdog() -> Result<()> {
-    let file = open("/dev/watchdog", OFlags::WRONLY, Mode::empty())
+    let file = open("/dev/watchdog", OFlags::WRONLY | OFlags::CLOEXEC, Mode::empty())
         .context("Failed to open watchdog device")?;
 
     write(&file, b"V").context("Failed to disarm watchdog")?;
