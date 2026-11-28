@@ -18,7 +18,7 @@ const VIDIOC_G_EDID: Opcode = opcode::read_write::<V4l2Edid>(b'V', 40);
 const VIDIOC_S_EDID: Opcode = opcode::read_write::<V4l2Edid>(b'V', 41);
 
 pub fn read_edid() -> Result<Vec<u8>> {
-    let fd = open(V4L_NODE, OFlags::RDWR, Mode::empty())?;
+    let fd = open(V4L_NODE, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())?;
     let mut buf = vec![0u8; 256];
     let mut req =
         V4l2Edid { pad: 0, start_block: 0, blocks: 2, reserved: [0; 5], edid: buf.as_mut_ptr() };
@@ -42,7 +42,7 @@ pub fn write_edid(edid: &[u8]) -> Result<()> {
     let mut data = edid.to_vec();
     fix_edid_checksum(&mut data);
 
-    let fd = open(V4L_NODE, OFlags::RDWR, Mode::empty())?;
+    let fd = open(V4L_NODE, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())?;
     let mut req = V4l2Edid {
         pad: 0,
         start_block: 0,
