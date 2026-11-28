@@ -85,12 +85,6 @@ pub fn as_string(v: &Value) -> String {
     v.as_str().unwrap_or_default().to_string()
 }
 
-pub fn json_string_list(v: &Value) -> Vec<String> {
-    v.as_array()
-        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
-        .unwrap_or_default()
-}
-
 fn call_method(target: &JsValue, name: &str, args: &Array) -> Result<JsValue, JsValue> {
     let f = Reflect::get(target, &JsValue::from_str(name))?.dyn_into::<Function>()?;
     f.apply(target, args)
