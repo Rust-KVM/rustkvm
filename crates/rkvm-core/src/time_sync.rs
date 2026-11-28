@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use libc::{CLOCK_REALTIME, clock_settime, timespec};
 use reqwest::header;
 use tokio::time::{MissedTickBehavior, interval};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::error::{Error, Result};
 
@@ -17,6 +17,16 @@ pub fn is_time_synced() -> bool {
 
 pub fn last_sync_unix_secs() -> i64 {
     LAST_SYNC_UNIX_SECS.load(Ordering::Relaxed)
+}
+
+/// An HTTP `Date` header has one-second resolution, so it can only tell that
+/// the clock is badly wrong (no RTC battery, NTP blocked). Within this margin
+/// the clock is left to the NTP daemon: stepping it here would undo a
+/// sub-millisecond sync and make wall-clock time jump every resync.
+pub const STEP_THRESHOLD: chrono::TimeDelta = chrono::TimeDelta::seconds(3);
+
+pub fn needs_step(offset: chrono::TimeDelta) -> bool {
+    offset.abs() > STEP_THRESHOLD
 }
 
 fn system_time_to_timespec(st: SystemTime) -> Result<timespec> {
@@ -88,25 +98,28 @@ pub async fn sync_time_once() -> Result<()> {
         });
 
     for u in urls.iter() {
-        match http_date_with_rtt(u, &client, "HEAD").await {
-            Ok(dt) => {
-                set_system_time(dt)?;
-                LAST_SYNC_UNIX_SECS.store(dt.timestamp(), Ordering::Relaxed);
-                info!("Time synced via HTTP Date(+1/2RTT): {} (url: {})", dt, u);
-                return Ok(());
-            }
+        let dt = match http_date_with_rtt(u, &client, "HEAD").await {
+            Ok(dt) => dt,
             Err(e1) => match http_date_with_rtt(u, &client, "GET").await {
-                Ok(dt) => {
-                    set_system_time(dt)?;
-                    LAST_SYNC_UNIX_SECS.store(dt.timestamp(), Ordering::Relaxed);
-                    info!("Time synced via HTTP Date(+1/2RTT): {} (url: {})", dt, u);
-                    return Ok(());
-                }
+                Ok(dt) => dt,
                 Err(e2) => {
                     warn!("HTTP time source failed: {} (HEAD: {}; GET: {})", u, e1, e2);
+                    continue;
                 }
             },
+        };
+        let offset = dt.signed_duration_since(Utc::now());
+        if needs_step(offset) {
+            set_system_time(dt)?;
+            info!(
+                offset_ms = offset.num_milliseconds(),
+                "Clock stepped from HTTP Date(+1/2RTT): {} (url: {})", dt, u
+            );
+        } else {
+            debug!(offset_ms = offset.num_milliseconds(), url = %u, "clock agrees with HTTP Date");
         }
+        LAST_SYNC_UNIX_SECS.store(dt.timestamp(), Ordering::Relaxed);
+        return Ok(());
     }
 
     Err(Error::AllSourcesFailed)

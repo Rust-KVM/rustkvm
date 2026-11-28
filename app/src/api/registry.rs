@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::panic;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
@@ -41,30 +40,12 @@ where
 {
     fn call_async(&self, params: Option<Value>) -> BoxFuture<'_, Result<Value>> {
         Box::pin(async move {
-            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                let params_value = params.unwrap_or(Value::Object(serde_json::Map::new()));
-
-                let params = convert_parameters::<P>(params_value)
-                    .map_err(|e| anyhow!("Parameter conversion failed: {}", e))?;
-
-                let result = (self.func)(params)?;
-                serde_json::to_value(result).map_err(|e| anyhow!("Serialization failed: {}", e))
-            }));
-
-            match result {
-                Ok(value) => value,
-                Err(panic_payload) => {
-                    let error_msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
-                        format!("Handler panicked: {}", s)
-                    } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                        format!("Handler panicked: {}", s)
-                    } else {
-                        "Handler panicked with unknown payload".to_string()
-                    };
-                    error!("RPC handler panic recovered: {}", error_msg);
-                    Err(anyhow!("Internal error: {}", error_msg))
-                }
-            }
+            let params = convert_parameters::<P>(
+                params.unwrap_or_else(|| Value::Object(Default::default())),
+            )
+            .map_err(|e| anyhow!("Parameter conversion failed: {}", e))?;
+            let result = (self.func)(params)?;
+            serde_json::to_value(result).map_err(|e| anyhow!("Serialization failed: {}", e))
         })
     }
 }
@@ -91,25 +72,8 @@ where
 {
     fn call_async(&self, _params: Option<Value>) -> BoxFuture<'_, Result<Value>> {
         Box::pin(async move {
-            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                let result = (self.func)()?;
-                serde_json::to_value(result).map_err(|e| anyhow!("Serialization failed: {}", e))
-            }));
-
-            match result {
-                Ok(value) => value,
-                Err(panic_payload) => {
-                    let error_msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
-                        format!("Handler panicked: {}", s)
-                    } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                        format!("Handler panicked: {}", s)
-                    } else {
-                        "Handler panicked with unknown payload".to_string()
-                    };
-                    error!("RPC handler panic recovered: {}", error_msg);
-                    Err(anyhow!("Internal error: {}", error_msg))
-                }
-            }
+            let result = (self.func)()?;
+            serde_json::to_value(result).map_err(|e| anyhow!("Serialization failed: {}", e))
         })
     }
 }
@@ -385,8 +349,6 @@ impl JsonRpcProcessor {
 
         debug!("Received RPC request: method={}, id={:?}", request.method, request.id);
 
-        crate::observability::metrics::RPC_CALLS_TOTAL.with_label_values(&[&request.method]).inc();
-
         let Some(handler) = self.registry.get_handler(&request.method) else {
             warn!("Method not found: {}", request.method);
             return JsonRpcResponse {
@@ -397,6 +359,9 @@ impl JsonRpcProcessor {
             };
         };
 
+        // Counted only for registered methods: the label comes from the client,
+        // and every distinct value is a metric series kept for the process's life.
+        crate::observability::metrics::RPC_CALLS_TOTAL.with_label_values(&[&request.method]).inc();
         let _rpc_timer = crate::observability::metrics::RPC_LATENCY_SECONDS.start_timer();
         let span = tracing::info_span!("rpc", method = %request.method, id = ?request.id);
         match handler.call_async(request.params).instrument(span).await {
@@ -425,30 +390,6 @@ impl JsonRpcProcessor {
         if let Some(rpc_channel) = &session.rpc_channel {
             if let Err(e) = rpc_channel.send_text(response_json).await {
                 return Err(anyhow!("Failed to send RPC response: {}", e));
-            }
-        } else {
-            warn!("No RPC channel available for session: {}", session.id);
-        }
-
-        Ok(())
-    }
-
-    pub async fn send_event(
-        &self,
-        method: &str,
-        params: Option<Value>,
-        session: &Session,
-    ) -> Result<()> {
-        let event_json = serde_json::to_string(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params
-        }))?;
-        debug!("Sending JSON-RPC event: method={}, data={}", method, event_json);
-
-        if let Some(rpc_channel) = &session.rpc_channel {
-            if let Err(e) = rpc_channel.send_text(event_json).await {
-                return Err(anyhow!("Failed to send RPC event: {}", e));
             }
         } else {
             warn!("No RPC channel available for session: {}", session.id);

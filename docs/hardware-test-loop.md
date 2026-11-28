@@ -24,21 +24,20 @@ Device: ssh root@192.168.1.6        RK3588, dropbear
    ssh foxx@192.168.1.173 'wsl.exe -e bash -lc "cd /home/foxx/obj/RK3588/jetkvm/rustkvm && git status -sb | head -1 && cargo +stage2 build -Z build-std=std,panic_abort --target aarch64-unknown-linux-gnu -p rustkvm --bin rustkvm_app --release"'
    ```
    A cold release build takes several minutes.
-2. **Stop the app with SIGTERM** (never `-9`, see below):
+2. **Stop the app** through the init script, which stops the supervisor, sends SIGTERM and waits for the clean exit (never `-9`, see below; the device's busybox has no `pkill`):
    ```bash
-   ssh root@192.168.1.6 'pkill -TERM -x rustkvm_app'
+   ssh root@192.168.1.6 '/etc/init.d/S99rustkvm stop'
    ```
 3. **Copy** `target/aarch64-unknown-linux-gnu/release/rustkvm_app` from WSL to `/userdata/rustkvm/bin/rustkvm_app` on the device (scp from WSL, or via the Mac).
-4. **Restart**: `ssh root@192.168.1.6 '/etc/init.d/S99rustkvm restart'`
+4. **Start**: `ssh root@192.168.1.6 '/etc/init.d/S99rustkvm start'`
 5. **Verify**: tail `/userdata/rustkvm/log/rustkvm_app.log`, and load the web UI at https://192.168.1.6/ (http also serves).
 
-`dev_deploy.sh` is not used in this loop: it uses `fuser -k` (watchdog reboot risk) and ends in an interactive ssh.
+`dev_deploy.sh` does steps 1 to 4 from a host that can build and reach the device directly; this loop spells them out because the build host sits behind the jump host.
 
 ## Caveats
 
 - **Watchdog**: `killall -9` / `fuser -k` on a running `rustkvm_app` reboots the device. Only exception: `Text file busy` on redeploy.
 - **Strict config**: `/userdata/rustkvm/config.toml` is parsed with `deny_unknown_fields`. A key from a newer or older build crashes startup (deprecated `ai_*` keys are ignored with a warning; others are not). Back the file up (`cp config.toml config.toml.bak.<tag>`) before editing, and remove only the offending key.
-- **Harmless log line**: `Failed listening on '22'` comes from the init script's SSH daemon, not the app.
 - **Claude Code auto mode on the Mac**: plain `ssh foxx@192.168.1.173 '...'` and `ssh root@192.168.1.6 '...'` are allowed by rules in `~/.claude/settings.json` (rules load only in a new session; do not put options like `-o` before the host, it breaks the prefix match). These get blocked: piping a script into `wsl.exe`, chaining a local command after an ssh command, and running curl from the Mac against the device (curl from the device itself works). cmd.exe quoting is fragile, so a committed deploy script run through one of the allowed prefixes is the preferred next step.
 
 For multi-hour stability and leak runs on top of this loop, see [soak-testing.md](soak-testing.md).

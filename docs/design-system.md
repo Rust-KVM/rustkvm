@@ -158,6 +158,10 @@ until the user picks one. `src/theme.rs` flips it from the sidebar.
     stop the automatic reconnect; a click starts it again.
   - The titlebar shows no title before the connection; the card names the
     device.
+- **No-signal notice** (`.stage-notice`): while the device reports
+  `no signal`, a card centered on the near-black stage says the host sends no
+  picture and offers 唤醒电脑 (`wakeHost`). Only the card takes the pointer, so
+  mouse input over the rest of the stage still reaches the host.
 - **Focus mode** hides sidebar and titlebar. A small handle at the top center
   peeks the titlebar back in as a floating bar; it hides 600ms after the
   pointer leaves. When the sidebar is hidden, `.app.focus` switches the grid to

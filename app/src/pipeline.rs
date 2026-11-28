@@ -1,7 +1,8 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
+use futures_util::StreamExt;
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
@@ -133,6 +134,8 @@ pub struct VideoPipeline {
     encoder: gst::Element,
     valve: gst::Element,
     running: Arc<AtomicBool>,
+    /// The task reading the pipeline's bus, ended by `stop`.
+    bus_watcher: parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>,
     raw_frame_waiters: Arc<RawFrameWaiters>,
     raw_frame_requested: Arc<AtomicBool>,
     /// When the oldest unanswered keyframe request was made; the encoder
@@ -383,6 +386,7 @@ impl VideoPipeline {
             encoder: encoder_for_state,
             valve,
             running,
+            bus_watcher: parking_lot::Mutex::new(None),
             raw_frame_waiters,
             raw_frame_requested,
             keyframe_requested_at,
@@ -433,6 +437,9 @@ impl VideoPipeline {
 
     pub fn stop(&self) -> Result<()> {
         self.running.store(false, Ordering::SeqCst);
+        if let Some(watcher) = self.bus_watcher.lock().take() {
+            watcher.abort();
+        }
 
         self.pipeline
             .set_state(gst::State::Null)
@@ -481,87 +488,77 @@ impl VideoPipeline {
         );
     }
 
-    pub fn set_state_callback<F>(&self, callback: F)
+    pub fn set_state_callback<F>(&self, callback: F) -> Result<()>
     where
         F: FnMut(VideoInputState) + Send + 'static,
     {
-        let bus = self.pipeline.bus().expect("Pipeline should have a bus");
-        let running = self.running.clone();
-        let encoder = self.encoder.clone();
+        let bus = self.pipeline.bus().context("Video pipeline has no bus")?;
         let callback = Arc::new(parking_lot::Mutex::new(callback));
 
-        let encoder_poll = encoder;
-        let callback_poll = callback.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-            tokio::task::spawn_blocking(move || {
-                if let Some(pad) = encoder_poll.static_pad("sink")
-                    && let Some(caps) = pad.current_caps()
-                    && let Ok(info) = gst_video::VideoInfo::from_caps(&caps)
-                {
-                    let state = VideoInputState {
-                        ready: true,
-                        error: None,
-                        width: info.width(),
-                        height: info.height(),
-                        frame_per_second: {
-                            let fps = info.fps();
-                            fps.numer() as f64 / fps.denom() as f64
-                        },
-                    };
-                    debug!(
-                        "Video state extracted (active poll): {}x{} @ {:.1}fps",
-                        state.width, state.height, state.frame_per_second
-                    );
-                    let mut cb = callback_poll.lock();
-                    cb(state);
-                }
-            })
-            .await
-            .ok();
+        // Report the format when the encoder input negotiates it, and again
+        // whenever the source changes it.
+        let sink = self.encoder.static_pad("sink").context("Video encoder has no sink pad")?;
+        let on_caps = callback.clone();
+        sink.connect_caps_notify(move |pad| {
+            let Some(caps) = pad.current_caps() else { return };
+            let Ok(info) = gst_video::VideoInfo::from_caps(&caps) else { return };
+            let fps = info.fps();
+            let state = VideoInputState {
+                ready: true,
+                error: None,
+                width: info.width(),
+                height: info.height(),
+                frame_per_second: fps.numer() as f64 / fps.denom().max(1) as f64,
+            };
+            debug!(
+                "Video format negotiated: {}x{} @ {:.1}fps",
+                state.width, state.height, state.frame_per_second
+            );
+            (on_caps.lock())(state);
         });
 
-        tokio::task::spawn_blocking(move || {
-            while running.load(Ordering::SeqCst) {
-                if let Some(msg) = bus.timed_pop(gst::ClockTime::from_mseconds(100)) {
-                    match msg.view() {
-                        gst::MessageView::Error(err) => {
-                            error!(
-                                "GStreamer error from {:?}: {} ({:?})",
-                                err.src().map(|s| s.path_string()),
-                                err.error(),
-                                err.debug()
-                            );
-                            let mut cb = callback.lock();
-                            cb(VideoInputState {
-                                ready: false,
-                                error: Some(format!("{}", err.error())),
-                                width: 0,
-                                height: 0,
-                                frame_per_second: 0.0,
-                            });
-                            drop(cb);
-                            running.store(false, Ordering::SeqCst);
-                            break;
-                        }
-                        gst::MessageView::Warning(w) => {
-                            warn!(
-                                "GStreamer warning from {:?}: {}",
-                                w.src().map(|s| s.path_string()),
-                                w.error()
-                            );
-                        }
-                        gst::MessageView::Eos(_) => {
-                            info!("GStreamer pipeline EOS");
-                            running.store(false, Ordering::SeqCst);
-                            break;
-                        }
-                        _ => {}
+        let running = self.running.clone();
+        let mut messages = bus.stream();
+        let watcher = tokio::spawn(async move {
+            while let Some(msg) = messages.next().await {
+                match msg.view() {
+                    gst::MessageView::Error(err) => {
+                        error!(
+                            "GStreamer error from {:?}: {} ({:?})",
+                            err.src().map(|s| s.path_string()),
+                            err.error(),
+                            err.debug()
+                        );
+                        (callback.lock())(VideoInputState {
+                            ready: false,
+                            error: Some(err.error().to_string()),
+                            width: 0,
+                            height: 0,
+                            frame_per_second: 0.0,
+                        });
+                        running.store(false, Ordering::SeqCst);
+                        break;
                     }
+                    gst::MessageView::Warning(w) => {
+                        warn!(
+                            "GStreamer warning from {:?}: {}",
+                            w.src().map(|s| s.path_string()),
+                            w.error()
+                        );
+                    }
+                    gst::MessageView::Eos(_) => {
+                        info!("GStreamer pipeline EOS");
+                        running.store(false, Ordering::SeqCst);
+                        break;
+                    }
+                    _ => {}
                 }
             }
         });
+        if let Some(previous) = self.bus_watcher.lock().replace(watcher) {
+            previous.abort();
+        }
+        Ok(())
     }
 }
 
@@ -571,10 +568,21 @@ impl Drop for VideoPipeline {
     }
 }
 
+/// Captures and encodes HDMI audio. Built once and kept stopped: it only
+/// plays while [`AudioPipeline::set_active`] says somebody is listening, so an
+/// idle device does not capture, encode Opus and chase capture overruns for
+/// nobody.
 pub struct AudioPipeline {
     pipeline: gst::Pipeline,
     appsink: gst_app::AppSink,
+    /// The bus watcher lives while this is set (from `start` to `stop`).
     running: Arc<AtomicBool>,
+    /// Whether the pipeline should be playing. The lock is held across every
+    /// state change, so a recovery in flight cannot restart a pipeline that
+    /// was deactivated meanwhile.
+    active: Arc<parking_lot::Mutex<bool>>,
+    /// The task reading the pipeline's bus, ended by `stop`.
+    bus_watcher: parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl AudioPipeline {
@@ -654,137 +662,105 @@ impl AudioPipeline {
 
         let running = Arc::new(AtomicBool::new(false));
 
-        Ok(Self { pipeline, appsink, running })
+        Ok(Self {
+            pipeline,
+            appsink,
+            running,
+            active: Arc::default(),
+            bus_watcher: parking_lot::Mutex::new(None),
+        })
     }
 
+    /// Starts watching the pipeline's bus. Capture itself starts with
+    /// [`Self::set_active`].
     pub fn start(&self) -> Result<()> {
-        self.pipeline
-            .set_state(gst::State::Playing)
-            .context("Failed to set audio pipeline to PLAYING state")?;
+        if self.running.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        let bus = self.pipeline.bus().context("Audio pipeline has no bus")?;
+        let recovery = self.recovery();
 
-        self.running.store(true, Ordering::SeqCst);
-        info!("Audio pipeline started");
-
-        let running = self.running.clone();
-        let bus = self.pipeline.bus().expect("Audio pipeline should have a bus");
-        let pipeline_for_bus = self.pipeline.clone();
-        let recovering = Arc::new(AtomicBool::new(false));
-        let warn_count = Arc::new(AtomicU32::new(0));
-        let last_warn_reset = Arc::new(AtomicU64::new(0));
-        let rt_handle = tokio::runtime::Handle::current();
-
-        tokio::task::spawn_blocking(move || {
-            while running.load(Ordering::SeqCst) {
-                if let Some(msg) = bus.timed_pop(gst::ClockTime::from_mseconds(100)) {
-                    match msg.view() {
-                        gst::MessageView::Error(err) => {
-                            error!(
-                                "GStreamer audio error from {:?}: {} ({:?})",
-                                err.src().map(|s| s.path_string()),
-                                err.error(),
-                                err.debug()
-                            );
-                            if !recovering.swap(true, Ordering::SeqCst) {
-                                let _ = pipeline_for_bus.set_state(gst::State::Null);
-                                let running_retry = running.clone();
-                                let pipeline_retry = pipeline_for_bus.clone();
-                                let recovering_flag = recovering.clone();
-                                rt_handle.spawn(async move {
-                                    while running_retry.load(Ordering::SeqCst) {
-                                        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-                                        match pipeline_retry.set_state(gst::State::Playing) {
-                                            Ok(_) => {
-                                                info!("Audio pipeline recovered to PLAYING after error");
-                                                recovering_flag.store(false, Ordering::SeqCst);
-                                                break;
-                                            }
-                                            Err(e) => warn!("Audio restart failed, will retry: {:?}", e),
-                                        }
-                                    }
-                                });
-                            }
-                        }
-                        gst::MessageView::Warning(w) => {
-                            debug!(
-                                "GStreamer audio warning from {:?}: {}",
-                                w.src().map(|s| s.path_string()),
-                                w.error()
-                            );
-                            if let Some(src) = w.src() {
-                                let src_path = src.path_string();
-                                if src_path.contains("GstAlsaSrc") {
-                                    let err_str = format!("{}", w.error());
-                                    if err_str.contains("Can't record audio fast enough") {
-                                        let now_ms = std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap_or_default()
-                                            .as_millis()
-                                            as u64;
-
-                                        let last_reset = last_warn_reset.load(Ordering::SeqCst);
-                                        if now_ms - last_reset > 2000 {
-                                            warn_count.store(0, Ordering::SeqCst);
-                                            last_warn_reset.store(now_ms, Ordering::SeqCst);
-                                        }
-
-                                        let count = warn_count.fetch_add(1, Ordering::SeqCst) + 1;
-                                        if count > 10 && !recovering.load(Ordering::SeqCst) {
-                                            warn!(
-                                                "Audio underrun detected ({} warnings), triggering recovery",
-                                                count
-                                            );
-                                            recovering.store(true, Ordering::SeqCst);
-                                            let _ = pipeline_for_bus.set_state(gst::State::Null);
-                                            let running_retry = running.clone();
-                                            let pipeline_retry = pipeline_for_bus.clone();
-                                            let recovering_flag = recovering.clone();
-                                            rt_handle.spawn(async move {
-                                                while running_retry.load(Ordering::SeqCst) {
-                                                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-                                                    if pipeline_retry.set_state(gst::State::Playing).is_ok() {
-                                                        info!("Audio pipeline recovered to PLAYING after underrun warnings");
-                                                        recovering_flag.store(false, Ordering::SeqCst);
-                                                        break;
-                                                    }
-                                                }
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        gst::MessageView::Eos(_) => {
-                            info!("GStreamer audio pipeline EOS");
-                            if !recovering.swap(true, Ordering::SeqCst) {
-                                let _ = pipeline_for_bus.set_state(gst::State::Null);
-                                let running_retry = running.clone();
-                                let pipeline_retry = pipeline_for_bus.clone();
-                                let recovering_flag = recovering.clone();
-                                rt_handle.spawn(async move {
-                                    while running_retry.load(Ordering::SeqCst) {
-                                        tokio::time::sleep(tokio::time::Duration::from_millis(
-                                            1000,
-                                        ))
-                                        .await;
-                                        if pipeline_retry.set_state(gst::State::Playing).is_ok() {
-                                            info!("Audio pipeline recovered to PLAYING after EOS");
-                                            recovering_flag.store(false, Ordering::SeqCst);
-                                            break;
-                                        }
-                                    }
-                                });
-                            }
-                        }
-                        _ => {}
+        let mut messages = bus.stream();
+        let watcher = tokio::spawn(async move {
+            let mut overruns = OverrunWindow::default();
+            while let Some(msg) = messages.next().await {
+                match msg.view() {
+                    gst::MessageView::Error(err) => {
+                        error!(
+                            "GStreamer audio error from {:?}: {} ({:?})",
+                            err.src().map(|s| s.path_string()),
+                            err.error(),
+                            err.debug()
+                        );
+                        recovery.restart("error");
                     }
+                    gst::MessageView::Warning(w) => {
+                        debug!(
+                            "GStreamer audio warning from {:?}: {}",
+                            w.src().map(|s| s.path_string()),
+                            w.error()
+                        );
+                        let from_capture =
+                            w.src().is_some_and(|s| s.path_string().contains("GstAlsaSrc"));
+                        if from_capture
+                            && w.error().to_string().contains("Can't record audio fast enough")
+                            && overruns.record(std::time::Instant::now())
+                        {
+                            recovery.restart("capture overrun");
+                        }
+                    }
+                    gst::MessageView::Eos(_) => {
+                        info!("GStreamer audio pipeline EOS");
+                        recovery.restart("EOS");
+                    }
+                    _ => {}
                 }
             }
         });
+        *self.bus_watcher.lock() = Some(watcher);
         Ok(())
+    }
+
+    fn recovery(&self) -> AudioRecovery {
+        AudioRecovery {
+            pipeline: self.pipeline.clone(),
+            running: self.running.clone(),
+            active: self.active.clone(),
+            recovering: Arc::new(AtomicBool::new(false)),
+            runtime: tokio::runtime::Handle::current(),
+        }
+    }
+
+    /// Starts or stops capture and encoding. A pipeline that cannot start now
+    /// (no audio on the HDMI input, device busy) is retried in the background
+    /// for as long as it stays active.
+    pub fn set_active(&self, active: bool) {
+        let mut current = self.active.lock();
+        if *current == active {
+            return;
+        }
+        *current = active;
+        if active {
+            match self.pipeline.set_state(gst::State::Playing) {
+                Ok(_) => info!("audio capture started"),
+                Err(e) => {
+                    warn!("audio capture failed to start: {e}");
+                    drop(current);
+                    self.recovery().restart("start failed");
+                }
+            }
+        } else {
+            let _ = self.pipeline.set_state(gst::State::Null);
+            info!("audio capture stopped");
+        }
     }
 
     pub fn stop(&self) -> Result<()> {
         self.running.store(false, Ordering::SeqCst);
+        *self.active.lock() = false;
+        if let Some(watcher) = self.bus_watcher.lock().take() {
+            watcher.abort();
+        }
 
         self.pipeline
             .set_state(gst::State::Null)
@@ -830,6 +806,85 @@ impl Drop for AudioPipeline {
     }
 }
 
+/// Restarts the audio pipeline after an error, EOS or a capture overrun storm.
+struct AudioRecovery {
+    pipeline: gst::Pipeline,
+    running: Arc<AtomicBool>,
+    active: Arc<parking_lot::Mutex<bool>>,
+    recovering: Arc<AtomicBool>,
+    runtime: tokio::runtime::Handle,
+}
+
+impl AudioRecovery {
+    /// Takes the pipeline to NULL and back to PLAYING, retrying every second
+    /// while it is meant to be active. A restart already under way absorbs
+    /// further requests; messages from a deactivated pipeline are ignored.
+    fn restart(&self, reason: &'static str) {
+        {
+            let active = self.active.lock();
+            if !*active || self.recovering.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            warn!(reason, "restarting the audio pipeline");
+            let _ = self.pipeline.set_state(gst::State::Null);
+        }
+        let pipeline = self.pipeline.clone();
+        let running = self.running.clone();
+        let active = self.active.clone();
+        let recovering = self.recovering.clone();
+        self.runtime.spawn(async move {
+            let mut failures = 0u32;
+            while running.load(Ordering::SeqCst) {
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                let active = active.lock();
+                if !*active {
+                    break;
+                }
+                match pipeline.set_state(gst::State::Playing) {
+                    Ok(_) => {
+                        info!(reason, "audio pipeline is playing again");
+                        break;
+                    }
+                    Err(e) => {
+                        // Once, then every minute: a source without audio
+                        // fails like this for as long as it is watched.
+                        if failures.is_multiple_of(60) {
+                            warn!(failures, "audio restart failed, will keep retrying: {e}");
+                        }
+                        failures += 1;
+                    }
+                }
+            }
+            recovering.store(false, Ordering::SeqCst);
+        });
+    }
+}
+
+/// Counts alsasrc "can't record fast enough" warnings. More than
+/// [`Self::LIMIT`] of them within [`Self::WINDOW`] means capture is not
+/// keeping up (or the HDMI source stopped its audio clock) and only a restart
+/// resynchronises it.
+#[derive(Debug, Default)]
+pub struct OverrunWindow {
+    started: Option<std::time::Instant>,
+    count: u32,
+}
+
+impl OverrunWindow {
+    pub const WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+    pub const LIMIT: u32 = 10;
+
+    /// Records one warning. Returns whether the pipeline should be restarted.
+    pub fn record(&mut self, now: std::time::Instant) -> bool {
+        if self.started.is_none_or(|t| now.duration_since(t) > Self::WINDOW) {
+            self.started = Some(now);
+            self.count = 0;
+        }
+        self.count += 1;
+        self.count > Self::LIMIT
+    }
+}
+
 pub struct PipelineManager {
     video: VideoPipeline,
     audio: Option<AudioPipeline>,
@@ -855,6 +910,13 @@ impl PipelineManager {
         Ok(())
     }
 
+    /// Audio is captured and encoded only while this is set.
+    pub fn set_audio_active(&self, active: bool) {
+        if let Some(audio) = &self.audio {
+            audio.set_active(active);
+        }
+    }
+
     pub fn stop(&self) -> Result<()> {
         self.video.stop()?;
         if let Some(audio) = &self.audio {
@@ -874,11 +936,11 @@ impl PipelineManager {
         self.video.set_frame_callback(callback);
     }
 
-    pub fn set_state_callback<F>(&self, callback: F)
+    pub fn set_state_callback<F>(&self, callback: F) -> Result<()>
     where
         F: FnMut(VideoInputState) + Send + 'static,
     {
-        self.video.set_state_callback(callback);
+        self.video.set_state_callback(callback)
     }
 
     pub fn set_audio_callback<F>(&self, callback: F)
@@ -925,6 +987,20 @@ impl PipelineManager {
     /// The caps the capture source negotiated, once it has.
     pub fn capture_caps(&self) -> Option<String> {
         self.video.capture_src.static_pad("src")?.current_caps().map(|c| c.to_string())
+    }
+
+    /// The format the capture source negotiated, as a ready video state.
+    pub fn capture_state(&self) -> Option<VideoInputState> {
+        let caps = self.video.capture_src.static_pad("src")?.current_caps()?;
+        let info = gst_video::VideoInfo::from_caps(&caps).ok()?;
+        let fps = info.fps();
+        Some(VideoInputState {
+            ready: true,
+            error: None,
+            width: info.width(),
+            height: info.height(),
+            frame_per_second: fps.numer() as f64 / fps.denom().max(1) as f64,
+        })
     }
 
     /// Requests an IDR from the encoder.
@@ -985,9 +1061,39 @@ impl PipelineManager {
     }
 }
 
+/// Keeps a viewer's decoder consistent when an encoded frame has to be dropped.
+///
+/// Every H.264 P frame references the one before it, and a frame dropped before
+/// packetisation leaves no gap in the RTP sequence numbers, so the browser
+/// neither notices nor asks for a keyframe: it shows a broken or frozen picture
+/// until the next periodic IDR, up to a whole GOP later. After a drop the gate
+/// therefore holds back every frame until the next keyframe, and tells the
+/// caller to request one.
+#[derive(Debug, Default)]
+pub struct FrameGate {
+    awaiting_keyframe: bool,
+}
+
+impl FrameGate {
+    /// Whether the next frame may be sent. `is_keyframe` is only evaluated
+    /// while the gate is waiting for one.
+    pub fn admit(&mut self, is_keyframe: impl FnOnce() -> bool) -> bool {
+        if self.awaiting_keyframe && is_keyframe() {
+            self.awaiting_keyframe = false;
+        }
+        !self.awaiting_keyframe
+    }
+
+    /// Records that an admitted frame could not be sent. Returns whether a
+    /// keyframe must be requested now (once per gap).
+    pub fn frame_dropped(&mut self) -> bool {
+        !std::mem::replace(&mut self.awaiting_keyframe, true)
+    }
+}
+
 /// Whether an Annex B H.264 access unit is an IDR: the first slice NAL found
 /// is type 5. Stops at the first slice, so a P frame costs only its headers.
-fn contains_h264_idr(data: &[u8]) -> bool {
+pub fn contains_h264_idr(data: &[u8]) -> bool {
     for w in data.windows(4) {
         if w[0] == 0 && w[1] == 0 && w[2] == 1 {
             match w[3] & 0x1f {

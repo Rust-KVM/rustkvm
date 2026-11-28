@@ -1,17 +1,20 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use prometheus::Encoder;
-use serde_json as serde_json_crate;
+use rkvm_proto::jsonrpc::{EVENT_VIDEO_INPUT_STATE, VIDEO_ERROR_NO_SIGNAL as NO_SIGNAL};
 use tokio::sync::{RwLock, mpsc};
 use tokio::time::{Duration, Instant, interval};
 use tracing::{debug, info, warn};
 use webrtc::media::Sample;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
-use crate::api::{JsonRpcProcessor, default_registry};
 use crate::hardware::v4l2::{CaptureProbe, RelockVerdict, RelockWatch, pulse_hotplug};
-use crate::pipeline::{AudioConfig, H264Profile, PipelineManager, VideoConfig};
+use crate::observability::metrics::{
+    VIDEO_FRAME_INTERVAL_SECONDS, VIDEO_FRAMES_DROPPED_TOTAL, VIDEO_WRITE_SECONDS,
+};
+use crate::pipeline::{
+    AudioConfig, FrameGate, H264Profile, PipelineManager, VideoConfig, contains_h264_idr,
+};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VideoInputState {
@@ -32,18 +35,28 @@ static LAST_VIDEO_STATE: RwLock<VideoInputState> = RwLock::const_new(VideoInputS
     frame_per_second: 0.0,
 });
 
-static VIDEO_SINK: tokio::sync::RwLock<Option<Arc<TrackLocalStaticSample>>> =
-    tokio::sync::RwLock::const_new(None);
-static AUDIO_SINK: tokio::sync::RwLock<Option<Arc<TrackLocalStaticSample>>> =
-    tokio::sync::RwLock::const_new(None);
+static VIDEO_SINK: parking_lot::RwLock<Option<Arc<TrackLocalStaticSample>>> =
+    parking_lot::RwLock::new(None);
+static AUDIO_SINK: parking_lot::RwLock<Option<Arc<TrackLocalStaticSample>>> =
+    parking_lot::RwLock::new(None);
 
 static AUDIO_FRAME_TX: tokio::sync::OnceCell<mpsc::Sender<bytes::Bytes>> =
     tokio::sync::OnceCell::const_new();
 
 static AUDIO_ENABLED: AtomicBool = AtomicBool::new(true);
 
-pub fn set_audio_enabled(enabled: bool) {
+pub async fn set_audio_enabled(enabled: bool) {
     AUDIO_ENABLED.store(enabled, Ordering::Relaxed);
+    sync_audio_active().await;
+}
+
+/// Runs audio capture exactly while it is enabled and a viewer has an audio
+/// track attached.
+async fn sync_audio_active() {
+    let wanted = is_audio_enabled() && AUDIO_SINK.read().is_some();
+    if let Some(manager) = PIPELINE_MANAGER.lock().await.as_ref() {
+        manager.set_audio_active(wanted);
+    }
 }
 
 pub fn is_audio_enabled() -> bool {
@@ -72,7 +85,28 @@ const RESTART_BACKOFF_MAX: Duration = Duration::from_secs(300);
 
 static VIDEO_STATE_TX: OnceLock<mpsc::UnboundedSender<VideoInputState>> = OnceLock::new();
 
+fn send_video_state(state: VideoInputState) {
+    if let Some(tx) = VIDEO_STATE_TX.get() {
+        let _ = tx.send(state);
+    }
+}
+
 type VideoFrame = (bytes::Bytes, u64);
+
+/// Encoded frames that may wait for the WebRTC writer. Sending a 4K IDR
+/// (about 1100 RTP packets) was measured at 25 to 100 ms on the RK3588, during
+/// which up to six 60 fps frames arrive. The queue has to absorb that: a drop
+/// costs another IDR, which is exactly the frame that is slow to send. Beyond
+/// 8 frames (133 ms) the writer is really behind and frames are dropped.
+const VIDEO_QUEUE_FRAMES: usize = 8;
+
+/// Shortest time between two keyframes requested to recover from dropped
+/// frames.
+const KEYFRAME_RECOVERY_INTERVAL: Duration = Duration::from_secs(1);
+
+/// A gap between encoded frames at least this long means the encoder was
+/// paused, not that it stalled.
+const ENCODER_PAUSE: Duration = Duration::from_secs(5);
 type AudioFrame = bytes::Bytes;
 
 static VIDEO_FRAME_TX: tokio::sync::OnceCell<mpsc::Sender<VideoFrame>> =
@@ -91,11 +125,13 @@ fn video_writer_loop(mut rx: mpsc::Receiver<VideoFrame>) {
             };
             last_pts = Some(pts);
 
-            let Some(track) = VIDEO_SINK.read().await.clone() else { continue };
+            let Some(track) = VIDEO_SINK.read().clone() else { continue };
             let sample = Sample { data, duration: dur, ..Default::default() };
+            let started = Instant::now();
             if let Err(e) = track.write_sample(&sample).await {
                 warn!("Failed to write video sample: {}", e);
             }
+            VIDEO_WRITE_SECONDS.observe(started.elapsed().as_secs_f64());
         }
     });
 }
@@ -121,7 +157,7 @@ pub async fn init_video_state_updater() -> anyhow::Result<()> {
 pub async fn ensure_video_pipeline_started() -> anyhow::Result<()> {
     VIDEO_PIPELINE_STARTED
         .get_or_try_init(|| async {
-            let (video_tx, video_rx) = mpsc::channel::<VideoFrame>(2);
+            let (video_tx, video_rx) = mpsc::channel::<VideoFrame>(VIDEO_QUEUE_FRAMES);
             VIDEO_FRAME_TX
                 .set(video_tx)
                 .map_err(|_| anyhow::anyhow!("video frame tx already set"))?;
@@ -153,17 +189,19 @@ pub async fn set_h264_profile(profile: H264Profile) {
 /// Switches video output to a new session's track. The keyframe for the new
 /// viewer is requested once its connection is fully up (see webrtc.rs).
 pub async fn attach_webrtc_sink(track: Arc<TrackLocalStaticSample>) {
-    *VIDEO_SINK.write().await = Some(track);
+    *VIDEO_SINK.write() = Some(track);
 }
 
 pub async fn attach_audio_sink(track: Arc<TrackLocalStaticSample>) {
-    *AUDIO_SINK.write().await = Some(track);
+    *AUDIO_SINK.write() = Some(track);
+    sync_audio_active().await;
 }
 
 pub async fn detach_webrtc_sink() {
-    *VIDEO_SINK.write().await = None;
-    *AUDIO_SINK.write().await = None;
+    *VIDEO_SINK.write() = None;
+    *AUDIO_SINK.write() = None;
     set_encoding_active(false).await;
+    sync_audio_active().await;
 }
 
 /// Encoding only runs while a session has a video track attached.
@@ -181,7 +219,7 @@ async fn audio_frame_writer(mut rx: mpsc::Receiver<AudioFrame>) {
         if !is_audio_enabled() {
             continue;
         }
-        let Some(track) = AUDIO_SINK.read().await.clone() else { continue };
+        let Some(track) = AUDIO_SINK.read().clone() else { continue };
         let sample = Sample { data, duration: AUDIO_FRAME_DURATION, ..Default::default() };
         if let Err(e) = track.write_sample(&sample).await {
             warn!("error writing audio sample: {}", e);
@@ -196,7 +234,7 @@ pub async fn start_native_video_with_cli(cli: &crate::cli::Cli) -> anyhow::Resul
     let video_config = VideoConfig::from_cli(&cli.video, cli.quality);
 
     let audio_enabled = crate::config::get_config_manager().get().await.audio_enabled;
-    set_audio_enabled(audio_enabled);
+    AUDIO_ENABLED.store(audio_enabled, Ordering::Relaxed);
 
     let audio_config = Some(AudioConfig::from_cli(&cli.audio));
     let _ = PIPELINE_CONFIG.set((video_config.clone(), audio_config.clone()));
@@ -220,11 +258,44 @@ async fn start_pipeline(
     {
         video_config.profile = Some(profile.as_gst_str().to_owned());
     }
+    let is_h264 = matches!(video_config.encoder, crate::cli::VideoEncoder::H264);
     let manager = PipelineManager::new(video_config, audio_config)?;
-
+    let runtime = tokio::runtime::Handle::current();
+    let mut gate = FrameGate::default();
+    let mut next_recovery: Option<Instant> = None;
+    let mut last_frame: Option<Instant> = None;
     manager.set_video_callback(move |data, pts_us| {
-        if let Some(tx) = VIDEO_FRAME_TX.get() {
-            let _ = tx.try_send((data, pts_us));
+        let Some(tx) = VIDEO_FRAME_TX.get() else { return };
+        // The encoder is paused while nobody watches; that is not a stall.
+        let now = Instant::now();
+        if let Some(gap) = last_frame.replace(now).map(|last| now - last)
+            && gap < ENCODER_PAUSE
+        {
+            VIDEO_FRAME_INTERVAL_SECONDS.observe(gap.as_secs_f64());
+        }
+        // Only H.264 keyframes are recognised; other codecs are never held back.
+        if !gate.admit(|| !is_h264 || contains_h264_idr(&data)) {
+            VIDEO_FRAMES_DROPPED_TOTAL.inc();
+            return;
+        }
+        if tx.try_send((data, pts_us)).is_err() {
+            VIDEO_FRAMES_DROPPED_TOTAL.inc();
+            if gate.frame_dropped() && is_h264 {
+                // A keyframe is the largest frame there is: asking for one on
+                // every drop would keep a slow link overloaded for good.
+                let wait = next_recovery
+                    .map(|at| at.saturating_duration_since(Instant::now()))
+                    .unwrap_or_default();
+                next_recovery = Some(Instant::now() + wait + KEYFRAME_RECOVERY_INTERVAL);
+                warn!(
+                    wait_ms = wait.as_millis() as u64,
+                    "WebRTC writer is behind, dropped an encoded frame; requesting a keyframe"
+                );
+                runtime.spawn(async move {
+                    tokio::time::sleep(wait).await;
+                    force_new_viewer_keyframe().await;
+                });
+            }
         }
     });
 
@@ -239,12 +310,13 @@ async fn start_pipeline(
         let state_tx_clone = state_tx.clone();
         manager.set_state_callback(move |state| {
             let _ = state_tx_clone.send(state);
-        });
+        })?;
     }
 
     manager.start()?;
     // A restarted pipeline comes up paused; resume it if a viewer is attached.
-    manager.set_encoding_active(VIDEO_SINK.read().await.is_some());
+    manager.set_encoding_active(VIDEO_SINK.read().is_some());
+    manager.set_audio_active(is_audio_enabled() && AUDIO_SINK.read().is_some());
 
     *PIPELINE_MANAGER.lock().await = Some(manager);
     Ok(())
@@ -389,6 +461,42 @@ impl LiveCheck {
         }
     }
 
+    /// Reports the lost signal. The pipeline's caps keep the last format, so
+    /// without this the state stays "ready" and viewers see a black picture
+    /// with no hint that the source stopped sending. Checked every tick, as a
+    /// pipeline rebuilt without a signal reports its stale caps as ready again.
+    async fn signal_lost(&self) {
+        let current = get_video_state().await;
+        if current.error.as_deref() == Some(NO_SIGNAL) {
+            return;
+        }
+        warn!(
+            width = current.width,
+            height = current.height,
+            "HDMI receiver has no signal; the source is off, asleep or sending elsewhere"
+        );
+        send_video_state(VideoInputState {
+            ready: false,
+            error: Some(NO_SIGNAL.to_owned()),
+            width: 0,
+            height: 0,
+            frame_per_second: 0.0,
+        });
+    }
+
+    /// Reports the capture format again once frames flow after a lost signal.
+    /// The encoder's caps only notify on a change, so a signal that returns
+    /// in the same mode would otherwise stay reported as lost.
+    async fn signal_back(&self) {
+        if get_video_state().await.error.as_deref() != Some(NO_SIGNAL) {
+            return;
+        }
+        let state = PIPELINE_MANAGER.lock().await.as_ref().and_then(PipelineManager::capture_state);
+        let Some(state) = state else { return };
+        info!(width = state.width, height = state.height, "HDMI signal is back");
+        send_video_state(state);
+    }
+
     /// Returns why the running pipeline must be rebuilt, if it must.
     async fn check(&mut self, device: &str) -> Option<String> {
         let (frames, caps) = {
@@ -413,6 +521,7 @@ impl LiveCheck {
             self.last_frames = frames;
             self.last_progress = Instant::now();
             self.stall_restarts = 0;
+            self.signal_back().await;
             return None;
         }
         let signal = match probe {
@@ -422,6 +531,7 @@ impl LiveCheck {
         // Without a signal there is nothing to capture; wait for it to return.
         if signal.is_some_and(|s| s.timings.is_none()) {
             self.last_progress = Instant::now();
+            self.signal_lost().await;
             return None;
         }
         let limit = STALL_LIMIT.max(restart_backoff(self.stall_restarts));
@@ -505,7 +615,7 @@ pub async fn shutdown_video_pipeline() {
     SUPERVISOR_STOPPED.store(true, Ordering::SeqCst);
     stop_pipeline().await;
 
-    *VIDEO_SINK.write().await = None;
+    *VIDEO_SINK.write() = None;
 
     info!("Video pipeline shutdown complete");
 }
@@ -590,7 +700,7 @@ pub async fn get_video_stats() -> anyhow::Result<VideoStats> {
         width: state.width,
         height: state.height,
         fps: state.frame_per_second,
-        has_sink: VIDEO_SINK.read().await.is_some(),
+        has_sink: VIDEO_SINK.read().is_some(),
         pipeline_started: VIDEO_PIPELINE_STARTED.get().is_some(),
     };
     Ok(stats)
@@ -620,43 +730,7 @@ pub async fn handle_video_state_message(video_state: VideoInputState) {
 pub async fn trigger_video_state_update_rpc() {
     let video_state = LAST_VIDEO_STATE.read().await.clone();
     debug!("Triggering video state update: {:?}", video_state);
-
-    if let Some(session_id) = crate::webrtc::get_current_session().await {
-        let mut session = crate::session::Session::new(session_id.clone());
-        if let Some(rpc_channel) = crate::webrtc::get_rpc_channel(&session_id).await {
-            if rpc_channel.ready_state()
-                != webrtc::data_channel::data_channel_state::RTCDataChannelState::Open
-            {
-                return;
-            }
-            session.rpc_channel = Some(rpc_channel);
-        } else {
-            return;
-        }
-
-        let processor = JsonRpcProcessor::new(default_registry());
-        let params = match serde_json_crate::to_value(&video_state) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                warn!("Failed to serialize video state: {}", e);
-                None
-            }
-        };
-        if let Err(e) = processor.send_event("videoInputState", params, &session).await {
-            warn!("Failed to send videoInputState event: {}", e);
-        }
-    }
-}
-
-pub fn video_metrics_snapshot() -> String {
-    let metric_families = prometheus::gather();
-    let mut buf = Vec::new();
-    let encoder = prometheus::TextEncoder::new();
-    if let Err(e) = encoder.encode(&metric_families, &mut buf) {
-        tracing::warn!("Failed to encode metrics: {}", e);
-        return "# ERROR: Failed to encode metrics\n".to_string();
-    }
-    String::from_utf8_lossy(&buf).to_string()
+    crate::api::events::emit(EVENT_VIDEO_INPUT_STATE, video_state).await;
 }
 
 pub async fn write_ctrl_action(action: &str) -> anyhow::Result<()> {

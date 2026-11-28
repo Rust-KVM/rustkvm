@@ -30,7 +30,7 @@ product = "MyKVM USB Emulation Device"
 
 `rustkvm_app --help` lists every runtime flag; each also reads a `RUSTKVM_*` environment
 variable (for example `--mdns-hostname` / `RUSTKVM_MDNS_HOSTNAME`). The firmware starts
-the app from `/etc/init.d/S99rustkvm` without flags, so to change a flag for every unit
+the app from `/etc/init.d/S99rustkvm` with only `--log-file`, so to change a flag for every unit
 change the default in the source instead.
 
 ## Built-in defaults (rebuild the app)

@@ -65,7 +65,7 @@ RustKVM is a KVM-over-IP RK3588 appliance: a Rust backend (device binary) servin
 | Wake-on-LAN     | `rkvm-net::wol`                                                 |
 | Tailscale       | `rkvm-net::tailscale` (CLI shell-out)                           |
 | Local-IP        | `rkvm-net::local_ip` (`if-addrs`)                               |
-| Time sync       | `rkvm-core::time_sync` (best-effort wall-clock sync at startup) |
+| Time sync       | `rkvm-core::time_sync` (HTTP `Date` fallback: steps the clock only when it is more than 3 s off; chrony owns it otherwise) |
 | Protocol types  | `rkvm-proto` (hidrpc framing + JSON-RPC request/response/event) |
 | MQTT            | `app::mqtt` over `rumqttc` (HA discovery, commands, publish)    |
 | MCP             | `app::mcp` (Streamable-HTTP JSON responses at `POST /mcp`; tools wrap RPC methods, `rpc_call` reaches any method) |
@@ -98,7 +98,7 @@ lib.rs                   # module roots (see below)
 │   ├── registry.rs      # RpcRegistry; transport-agnostic `JsonRpcProcessor::dispatch`; per-call counter + latency histogram
 │   ├── registry_builder.rs
 │   ├── handlers/{hid,media,network,system,usb}.rs
-│   ├── events.rs        # broadcast events: usbState, keyboardLedState, failsafeMode, willReboot, networkState
+│   ├── events.rs        # broadcast events: usbState, keyboardLedState, failsafeMode, willReboot, networkState (videoInputState comes from video.rs)
 │   └── types.rs
 ├── web/                 # Salvo router (split by concern)
 │   ├── routes.rs        # protected / public / developer / static
@@ -131,7 +131,7 @@ lib.rs                   # module roots (see below)
 ├── session.rs           # WebRTC session lifecycle (signaling lives in web/socket.rs + web/webrtc_handlers.rs)
 ├── data_channel.rs      # WebRTC routes: rpc, disk, terminal, serial, hidrpc(+variants), upload_*, cdcacm
 ├── tls.rs               # Self-signed certs via rcgen
-├── terminal.rs          # PTY/shell
+├── terminal.rs          # web terminal: /bin/sh on a PTY (`AsyncFd`), one ordered output task per data channel, shell reaped on close
 ├── pipeline.rs          # Video/audio pipeline (zero-copy)
 ├── remote_mount.rs      # Remote filesystem mount
 ├── assets.rs            # rust-embed: ClientAssets (../crates/rkvm-web/dist), BuiltinImages (../assets/images)
@@ -150,6 +150,7 @@ lib.rs                   # module roots (see below)
 ├── observability/       # Prometheus metrics + live log-level reload
 │   ├── metrics.rs       # app_info, video/audio frame counters, RPC call counter + latency histogram
 │   ├── log_buffer.rs    # tracing layer: last 1000 events in a ring buffer; `getRecentLogs` RPC / `get_logs` MCP tool
+│   ├── log_file.rs      # `--log-file`: append-only log rotated to `<name>.1` at 8 MB
 │   ├── diagnostics.rs   # `/diagnostics.json`
 │   ├── health.rs        # aggregated health report (`GET /device/health`, `getHealth` RPC): status ok/degraded + issues
 │   └── mod.rs           # `install_log_reload_handle` + `set_log_filter`
@@ -275,7 +276,7 @@ scripts/gpl-source-bundle.sh # release source tarball (+ Buildroot legal-info wi
 scripts/release-firmware.sh  # sign out/firmware checksums and attach them to the draft release
 os/rk3588/manifest.xml       # FriendlyElec SDK projects pinned to exact commits
 os/rk3588/patches/<project>/ # every local SDK change, applied with git apply after a reset
-os/rk3588/rootfs-overlay/    # S99rustkvm, dhcpcd/network config, dropbear devmode wrapper
+os/rk3588/rootfs-overlay/    # S99rustkvm (app supervisor), sysctl.d (panic on oops), dhcpcd/network config, dropbear devmode wrapper
 ```
 
 Toolchain pins live in `ci/devkit/Dockerfile` (and the nightly in `release.yml`); SDK changes go into `os/rk3588/patches`, never only into a local SDK checkout.
@@ -296,9 +297,10 @@ Build happens in WSL2 behind a Windows jump host and the app is deployed to the 
 ### Start on device
 ```bash
 ssh root@<device_ip>
-killall rustkvm_app 2>/dev/null
-nohup setsid /userdata/rustkvm/bin/rustkvm_app </dev/null >>/userdata/rustkvm/log/rustkvm_app.log 2>&1 &
+/etc/init.d/S99rustkvm restart      # SIGTERM, wait for the clean exit, start again
 ```
+`S99rustkvm` runs the app under a small supervisor loop: a crash (release builds abort on panic) is restarted within a second, so the armed watchdog does not reboot the device; a clean exit (SIGTERM) ends the loop. The app logs to `/userdata/rustkvm/log/rustkvm_app.log` (`--log-file`, rotated to `.1` at 8 MB); its stdout/stderr (panic messages, C library output, supervisor notes) go to `rustkvm_app.out`.
+
 **DO NOT use `fuser -k` or `killall -9`** — watchdog may reboot the device. The only exception is recovering from `Text file busy` on redeploy: `killall -9 rustkvm_app; sleep 2` before scp.
 
 ## Conventions
@@ -311,6 +313,7 @@ nohup setsid /userdata/rustkvm/bin/rustkvm_app </dev/null >>/userdata/rustkvm/lo
 - **Periodic loops**: every `tokio::time::interval` MUST `.set_missed_tick_behavior(MissedTickBehavior::Delay)`. For one-shot delays use `tokio::time::sleep` (NOT `interval(...).tick()` — the first tick is immediate, which silently breaks "fire after N seconds" semantics).
 - **Hot-path allocations**: video/audio frames flow via `bytes::Bytes::from_owner(gst::MappedBuffer)`. Never `.to_vec()` a GStreamer mapped buffer. JSON-RPC dispatch uses `serde_json::from_slice(&data)` on the raw `Bytes` — no UTF-8 → String intermediate.
 - **Singletons**: `CloudManager`, `ConfigManager` are global. ALWAYS use `cloud::manager::get_cloud_manager()` / `config::get_config_manager()`. Never call `::new()` outside the singleton's init.
+- **Log output**: one plain line per event when stdout is not a terminal or `--log-file` is set (pretty and coloured only on a TTY).
 - **Tracing**: structured key-value fields, not free-form prose. `debug!`/`trace!` for hot paths, `info!` for lifecycle. Live log-level reload via `observability::set_log_filter()` (`setDefaultLogLevel` RPC or `RUST_LOG` at startup).
 - **Global state**: `OnceCell`/`OnceLock`. Panic on uninitialized access is intentional.
 - **Comments**: only when the *why* is non-obvious (hidden invariants, hardware quirks, workarounds) and for `unsafe { … }` blocks (`// SAFETY: …`). Section dividers, header banners, and "what this does" comments are forbidden — names should carry the meaning.

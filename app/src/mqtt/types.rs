@@ -93,7 +93,7 @@ pub struct MqttCloudState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MqttSessionsState {
-    pub active_sessions: i32,
+    pub active_sessions: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

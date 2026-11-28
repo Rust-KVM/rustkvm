@@ -263,14 +263,12 @@ pub struct Hid {
     last_user_input: Mutex<Instant>,
 }
 
-impl Default for Hid {
-    fn default() -> Self {
-        Self::new("/dev/hidg0".to_string(), "/dev/hidg1".to_string(), "/dev/hidg2".to_string())
-    }
-}
-
 impl Hid {
-    pub fn new(keyboard_path: String, abs_mouse_path: String, rel_mouse_path: String) -> Self {
+    pub fn new(
+        keyboard_path: String,
+        abs_mouse_path: String,
+        rel_mouse_path: String,
+    ) -> anyhow::Result<Self> {
         let (write_tx, write_rx) = mpsc::sync_channel(HID_WRITE_QUEUE_DEPTH);
         let writer = HidWriter {
             paths: [keyboard_path.clone(), abs_mouse_path, rel_mouse_path],
@@ -281,9 +279,9 @@ impl Hid {
         std::thread::Builder::new()
             .name("hid-writer".to_string())
             .spawn(move || writer.run(write_rx))
-            .expect("failed to spawn hid-writer thread");
+            .map_err(|e| anyhow::anyhow!("cannot start the hid-writer thread: {e}"))?;
 
-        Self {
+        Ok(Self {
             keyboard_path,
             write_tx,
             last_full_warn: Mutex::new(None),
@@ -294,7 +292,7 @@ impl Hid {
             on_keyboard_state_change: RwLock::new(None),
             keys_down: Mutex::new(KeysDownState::default()),
             last_user_input: Mutex::new(Instant::now()),
-        }
+        })
     }
 
     fn enqueue(&self, cmd: HidWriteCmd) -> anyhow::Result<()> {

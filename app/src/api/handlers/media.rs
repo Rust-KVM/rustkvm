@@ -483,7 +483,6 @@ pub struct SetAudioConfigParams {
 
 pub async fn get_audio_config() -> Result<AudioConfig> {
     let cfg = crate::config::get_config_manager().get().await;
-    crate::video::set_audio_enabled(cfg.audio_enabled);
     Ok(AudioConfig { enabled: cfg.audio_enabled })
 }
 
@@ -494,7 +493,7 @@ pub async fn set_audio_config(params: SetAudioConfigParams) -> Result<AudioConfi
             cfg.audio_enabled = enabled;
         })
         .await?;
-    crate::video::set_audio_enabled(enabled);
+    crate::video::set_audio_enabled(enabled).await;
     info!("Audio streaming {} (persisted)", if enabled { "enabled" } else { "disabled" });
     Ok(AudioConfig { enabled })
 }

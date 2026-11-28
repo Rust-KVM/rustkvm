@@ -25,7 +25,6 @@ pub(super) async fn handle_webrtc_session(
     let app_state = global_app_state()
         .ok_or_else(|| StatusError::internal_server_error().brief("AppState not initialized"))?;
 
-    let webrtc_api = webrtc::get_webrtc_api().await;
     let session_config = webrtc::SessionConfig {
         ice_servers: request.ice_servers,
         local_ip: request.ip.and_then(|ip| ip.parse().ok()),
@@ -34,7 +33,7 @@ pub(super) async fn handle_webrtc_session(
     };
 
     let session =
-        webrtc_api.new_session(session_config, Uuid::new_v4().to_string()).await.map_err(|e| {
+        webrtc::new_session(session_config, Uuid::new_v4().to_string()).await.map_err(|e| {
             warn!("Failed to create WebRTC session: {}", e);
             StatusError::internal_server_error().brief(format!("Failed to create session: {e}"))
         })?;
@@ -181,11 +180,7 @@ async fn handle_webrtc_websocket_message(
                 app_state: app_state.clone(),
             };
 
-            let session = match webrtc::get_webrtc_api()
-                .await
-                .new_session(config, connection_id.to_string())
-                .await
-            {
+            let session = match webrtc::new_session(config, connection_id.to_string()).await {
                 Ok(s) => s,
                 Err(e) => {
                     warn!("Failed to create WebRTC session: {}", e);

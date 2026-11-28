@@ -205,13 +205,11 @@ impl CloudWebSocketClient {
 
     async fn create_cloud_webrtc_session(&self, request: WebRTCSessionRequest) -> Result<()> {
         use crate::web::get_global_app_state;
-        use crate::webrtc::{SessionConfig, get_webrtc_api};
+        use crate::webrtc::{SessionConfig, new_session};
 
         info!("Creating cloud WebRTC session");
 
         let app_state = get_global_app_state().clone();
-
-        let webrtc_api = get_webrtc_api().await;
 
         let session_config = SessionConfig {
             ice_servers: Some(request.ice_servers),
@@ -222,11 +220,10 @@ impl CloudWebSocketClient {
 
         let session_id = uuid::Uuid::new_v4().to_string();
 
-        let session =
-            webrtc_api.new_session(session_config, session_id.clone()).await.map_err(|e| {
-                error!("Failed to create cloud WebRTC session: {}", e);
-                anyhow::anyhow!("Failed to create WebRTC session: {}", e)
-            })?;
+        let session = new_session(session_config, session_id.clone()).await.map_err(|e| {
+            error!("Failed to create cloud WebRTC session: {}", e);
+            anyhow::anyhow!("Failed to create WebRTC session: {}", e)
+        })?;
 
         let answer = session.exchange_offer(&request.sd).await.map_err(|e| {
             error!("Failed to exchange SDP offer: {}", e);

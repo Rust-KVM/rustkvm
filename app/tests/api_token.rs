@@ -49,3 +49,13 @@ fn config_without_token_fields_still_deserializes() {
     let config: Config = serde_json::from_value(value).expect("deserialize legacy config");
     assert!(config.api_token_sha256.is_none());
 }
+
+#[test]
+fn secrets_match_only_when_equal() {
+    use rustkvm::config::api_token::secrets_match;
+
+    assert!(secrets_match("3f0c9a52-token", "3f0c9a52-token"));
+    assert!(!secrets_match("3f0c9a52-token", "3f0c9a52-tokem"));
+    assert!(!secrets_match("3f0c9a52", "3f0c9a52-token"));
+    assert!(!secrets_match("", "3f0c9a52-token"));
+}

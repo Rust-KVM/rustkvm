@@ -3,7 +3,7 @@ use rustkvm::cli::Cli;
 use rustkvm::hardware::native::socket as native_ctrl;
 use rustkvm::hardware::usb::storage as virtual_media;
 use rustkvm::hardware::{display, hw, jiggler, tuning, usb};
-use rustkvm::{cloud, config, failsafe, mqtt, network, observability, tls, video, web, webrtc};
+use rustkvm::{cloud, config, failsafe, mqtt, network, observability, tls, video, web};
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, error, info, warn};
@@ -24,13 +24,18 @@ async fn init_mdns(hostname: &str) -> anyhow::Result<()> {
 }
 
 fn init_tracing(cli: &Cli) {
+    use std::io::IsTerminal;
+
+    use rustkvm::observability::log_file::{self, RotatingLog};
+    use tracing_subscriber::Layer;
     use tracing_subscriber::filter::EnvFilter;
+    use tracing_subscriber::fmt::writer::BoxMakeWriter;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
     let log_level = cli.logging.log_level.parse::<Level>().unwrap_or(Level::INFO);
     let default_directive =
-        format!("rustkvm={lvl},rkvm_core={lvl},rkvm_net={lvl},info", lvl = log_level);
+        rustkvm::observability::default_filter_directive(&log_level.to_string().to_lowercase());
     let env_filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new(&default_directive))
         .unwrap_or_else(|_| EnvFilter::new("info"));
@@ -38,28 +43,42 @@ fn init_tracing(cli: &Cli) {
     let (filter, reload_handle) = tracing_subscriber::reload::Layer::new(env_filter);
     rustkvm::observability::install_log_reload_handle(reload_handle);
 
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_ansi(!cli.logging.log_no_color)
-        .with_level(true)
-        .with_target(true)
-        .with_thread_ids(true)
-        .with_thread_names(true)
-        .with_file(true)
-        .with_line_number(true);
+    // Colour and the multi-line pretty format are for a person at a terminal;
+    // a log file gets one plain line per event so it can be grepped.
+    let log_file = cli.logging.log_file.as_ref().and_then(|path| {
+        match RotatingLog::open(path, log_file::DEFAULT_MAX_BYTES) {
+            Ok(log) => Some(log),
+            Err(e) => {
+                eprintln!("cannot open log file {}: {e}; logging to stdout", path.display());
+                None
+            }
+        }
+    });
+    let interactive = log_file.is_none() && std::io::stdout().is_terminal();
+    let writer = match log_file {
+        Some(log) => BoxMakeWriter::new(log),
+        None => BoxMakeWriter::new(std::io::stdout),
+    };
 
-    if cli.logging.log_json {
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(rustkvm::observability::log_buffer::layer())
-            .with(fmt_layer.json())
-            .init();
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_writer(writer)
+        .with_ansi(interactive && !cli.logging.log_no_color);
+    // Source locations only where they are readable: in a file they are the
+    // full registry path for every dependency, and the target already names
+    // the module.
+    let fmt_layer = if cli.logging.log_json {
+        fmt_layer.json().with_file(true).with_line_number(true).boxed()
+    } else if interactive {
+        fmt_layer.pretty().with_file(true).with_line_number(true).boxed()
     } else {
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(rustkvm::observability::log_buffer::layer())
-            .with(fmt_layer.pretty())
-            .init();
-    }
+        fmt_layer.boxed()
+    };
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(rustkvm::observability::log_buffer::layer())
+        .with(fmt_layer)
+        .init();
 }
 
 fn main() -> anyhow::Result<()> {
@@ -116,9 +135,6 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     network::spawn_state_monitor(tokio::time::Duration::from_secs(30));
 
     let path_warnings = config::validate_hardware_paths().await;
-    for w in &path_warnings {
-        warn!("Hardware warning: {}", w);
-    }
     if !path_warnings.is_empty() {
         info!("{} hardware path issues detected (non-fatal)", path_warnings.len());
     }
@@ -137,7 +153,6 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     if let Err(e) = native_ctrl::init_ctrl_socket() {
         warn!("Failed to initialize ctrl socket: {}", e);
     }
-    webrtc::init_webrtc_api().await?;
 
     hw::log_previous_kernel_crashes();
     let _usb = usb::init_usb();
@@ -151,28 +166,6 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         warn!("Failed to start native video pipeline: {}", e);
     } else {
         info!("Native video pipeline started successfully");
-
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            loop {
-                interval.tick().await;
-                if let Ok(stats) = video::get_video_stats().await {
-                    info!(
-                        ready = stats.ready,
-                        width = stats.width,
-                        height = stats.height,
-                        fps = stats.fps,
-                        has_sink = stats.has_sink,
-                        "video stats"
-                    );
-                }
-                let metrics = video::video_metrics_snapshot();
-                if !metrics.trim().is_empty() {
-                    tracing::debug!("Prometheus metrics:\n{}", metrics);
-                }
-            }
-        });
     }
 
     video::spawn_video_supervisor();

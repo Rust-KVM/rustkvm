@@ -55,8 +55,7 @@ async fn handle_socket_offer(
         app_state: state.clone(),
     };
 
-    let session = match webrtc::get_webrtc_api().await.new_session(config, session_id.clone()).await
-    {
+    let session = match webrtc::new_session(config, session_id.clone()).await {
         Ok(s) => s,
         Err(e) => {
             warn!("[sid={}] Failed to create WebRTC session: {}", socket.id, e);

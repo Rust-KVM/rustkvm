@@ -93,6 +93,9 @@ impl WebRtcReadHandler for WebRtcBridge {
             st.in_flight = true;
             st.buf.clear();
         }
+        // Every exit below, errors included, must free the slot: a read that
+        // left it taken made each later read fail as "concurrent".
+        let _in_flight = InFlightGuard;
 
         let req = DiskReadRequest { start, end };
         let text = serde_json::to_string(&req).context("serialize DiskReadRequest")?;
@@ -100,28 +103,22 @@ impl WebRtcReadHandler for WebRtcBridge {
         trace!("webrtc disk request sent: {}", text);
 
         let deadline = Instant::now() + READ_TIMEOUT;
-        let mut out = Vec::with_capacity(need);
-        {
-            let mut st = TRANSPORT.state.lock();
-            while st.buf.len() < need {
-                let now = Instant::now();
-                if now >= deadline {
-                    st.in_flight = false;
-                    return Err(anyhow!("timeout waiting for webrtc disk data"));
-                }
-                let remain = deadline.saturating_duration_since(now);
-                let waited = TRANSPORT.cv.wait_for(&mut st, remain);
-                if waited.timed_out() {
-                    st.in_flight = false;
-                    return Err(anyhow!("timeout waiting for webrtc disk data"));
-                }
+        let mut st = TRANSPORT.state.lock();
+        while st.buf.len() < need {
+            let remain = deadline.saturating_duration_since(Instant::now());
+            if remain.is_zero() || TRANSPORT.cv.wait_for(&mut st, remain).timed_out() {
+                return Err(anyhow!("timeout waiting for webrtc disk data"));
             }
-            out.extend_from_slice(&st.buf[..need]);
-            st.buf.drain(..need);
-            st.in_flight = false;
         }
+        Ok(st.buf.drain(..need).collect())
+    }
+}
 
-        Ok(out)
+struct InFlightGuard;
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        TRANSPORT.state.lock().in_flight = false;
     }
 }
 

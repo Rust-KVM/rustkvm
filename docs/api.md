@@ -109,7 +109,11 @@ Common methods by area:
 ### Events
 
 Over the WebRTC `rpc` data channel the device also pushes JSON-RPC notifications:
-`usbState`, `keyboardLedState`, `failsafeMode`, `willReboot` and `networkState`.
+`usbState`, `keyboardLedState`, `failsafeMode`, `willReboot`, `networkState` and
+`videoInputState`. `videoInputState` carries `{ ready, error?, width, height, fps }`;
+`error` is `"no signal"` while the HDMI receiver detects no signal (the host is off,
+asleep or sending its picture elsewhere), and the state returns to `ready` once frames
+flow again. Event names and that value are constants in `rkvm-proto::jsonrpc`.
 
 ### Health report
 
